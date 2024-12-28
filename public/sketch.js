@@ -50,6 +50,8 @@ function draw() {
     background(200);
     lights()
 
+    if (!level || !level[0]) return
+
     // Draw ground
 
     const gridWidth = level[0].length * TILE_SIZE; // Width of the ground
