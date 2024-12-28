@@ -45,7 +45,7 @@ const level = [
 
 let bullets = []; // Store all bullets
 
-const AI_TANK_COUNT = 50; // Number of AI tanks
+const AI_TANK_COUNT = 2; // Number of AI tanks
 Object.assign(players, initializeAITanks(AI_TANK_COUNT));
 
 for (let i = 0; i < AI_TANK_COUNT; i++) {
