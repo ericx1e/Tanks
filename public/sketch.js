@@ -5,14 +5,15 @@ let level = [];
 let explosions = [];
 let woodTexture;
 
-let tileSize = 100;
-
 let camX;
 let camY;
 let camZ;
 
+let isFogOfWar = false;
+
 function preload() {
     woodTexture = loadImage('assets/wood-texture.jpg'); // Load texture for walls
+    font = loadFont('assets/Roboto-Regular.ttf'); // Load the font
 }
 
 socket.on('updatePlayers', (serverPlayers) => {
@@ -42,8 +43,19 @@ socket.on('explosion', (data) => {
 function setup() {
     createCanvas(800, 600, WEBGL);
 
+    nameInput = createInput("Player");
+    nameInput.position(10, height + 20); // Position it at the bottom-left
+    nameInput.style("width", "150px");
+    nameInput.input(() => {
+        playerName = nameInput.value(); // Update local player name
+        socket.emit("setName", playerName); // Send name to the server
+    });
+
+
     // Receive the updated players object from the server
     frameRate(60);
+    fogLayer = createGraphics(width, height);
+    // fogLayer.clear();
 }
 
 function draw() {
@@ -103,11 +115,20 @@ function draw() {
     drawExplosions();
 
 
-    // Handle movement
-    handleMovement();
+    const maxDistance = TILE_SIZE * 5; // Vision range
+    const resolution = PI / 150; // Fine angular step for smoother vision
+    const visiblePoints = calculateVision(myTank.x, myTank.y, level, maxDistance, resolution);
+
+    if (isFogOfWar) {
+        drawFogOfWar(myTank.x, myTank.y, visiblePoints);
+    }
 
     // socket.emit('playerMove', myTank); // Send updated position to server
 }
+
+setInterval(handleMovement, 1000 / 60)
+
+// handleMovement();
 
 function drawTank(tank, isSelf) {
     push();
@@ -192,10 +213,21 @@ function drawTank(tank, isSelf) {
     pop();
     pop();
 
-    // push()
-    // translate(barrelPos.x, barrelPos.y, barrelPos.z);
-    // sphere(10)
-    // pop()
+    // Draw nametag
+    if (!tank.isAI) {
+        push();
+        translate(tank.x, tank.y, PLAYER_SIZE * 2.5); // Position above the tank
+        // rotateX(-HALF_PI);
+        rotateX(atan2(tank.y - camY, camZ))
+        textAlign(CENTER, CENTER);
+        textSize(16);
+        fill(255);
+        stroke(0);
+        strokeWeight(1);
+        textFont(font);
+        text(tank.name || "Player", 0, 0); // Show the name, default to "Player"
+        pop();
+    }
 }
 
 function drawWalls() {
@@ -263,7 +295,6 @@ function handleMovement() {
         turretAngle: turretAngle,
     });
 }
-
 
 function handleTankMovement() {
     let dx = 0;

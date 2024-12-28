@@ -33,7 +33,7 @@ function updateAITanks(players, level, players, bullets) {
 
 // Update a single AI tank
 function updateAITank(tank, level, players, bullets) {
-    const shootingRange = TILE_SIZE * 3.5; // Range for shooting players
+    const shootingRange = PLAYER_SIZE * 20; // Range for shooting players
     const turretSpeed = 0.05; // Speed of turret rotation
     const fireCooldown = 80; // Frames between shots
 
@@ -160,20 +160,43 @@ function fireBullet(tank, bullets, level) {
 //     return isCollidingWithWall(endX, endY, PLAYER_SIZE, level); // Returns true if a wall is detected
 // }
 
-function detectObstacleAlongRay(startX, startY, angle, range, level) {
-    const steps = Math.ceil(range / TILE_SIZE); // Break the ray into steps
-    const stepSize = TILE_SIZE / steps;
+function detectObstacleAlongRay(playerX, playerY, angle, maxDistance, level) {
+    let x = playerX;
+    let y = playerY;
 
-    for (let i = 1; i <= steps; i++) {
-        const x = startX + Math.cos(angle) * stepSize * i;
-        const y = startY + Math.sin(angle) * stepSize * i;
+    const stepSize = 1
 
-        if (isCollidingWithWall(x, y, BULLET_SIZE, level)) {
-            return true; // Obstacle detected
+    const dx = Math.cos(angle);
+    const dy = Math.sin(angle);
+
+    for (let i = 0; i < maxDistance / stepSize; i++) {
+        x += dx * stepSize;
+        y += dy * stepSize;
+
+        const raySize = TILE_SIZE / 100
+
+        // Calculate the bounding box coordinates of the current ray position
+        const colStart = Math.floor((x - raySize) / TILE_SIZE);
+        const colEnd = Math.floor((x + raySize) / TILE_SIZE);
+        const rowStart = Math.floor((y - raySize) / TILE_SIZE);
+        const rowEnd = Math.floor((y + raySize) / TILE_SIZE);
+
+        // Check multiple tiles in the level grid
+        for (let row = rowStart; row <= rowEnd; row++) {
+            for (let col = colStart; col <= colEnd; col++) {
+                if (level[row] && level[row][col] > 0) {
+
+                    if (level[row] && level[row][col] > 0) {
+                        // Ray hits a wall
+                        return true
+                    }
+                }
+            }
         }
     }
 
-    return false; // Path is clear
+    // Ray reached max distance without hitting a wall
+    return false;
 }
 
 // Detect nearby bullets

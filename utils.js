@@ -56,6 +56,10 @@ function isWall(col, row, level) {
 // Smoothly interpolate an angle
 function lerpAngle(current, target, t) {
     let diff = ((target - current + Math.PI) % (2 * Math.PI)) - Math.PI;
+
+    if (diff < -Math.PI) {
+        diff += 2 * Math.PI;
+    }
     return current + diff * t;
 }
 
@@ -78,6 +82,53 @@ function getRandomNonWallPosition(level) {
     }
 }
 
+function generateOpenMaze(rows, cols, tileSize = 50, wallChance = 0.2, corridorWidth = 2) {
+    /**
+     * Generate a maze with more open areas and corridors of at least `corridorWidth` tiles wide.
+     */
+    // Initialize the maze with walls
+    const maze = Array.from({ length: rows }, () =>
+        Array.from({ length: cols }, () => Math.random() < wallChance ? 4 : 0)
+    );
+
+    // Ensure corridors are wider by carving out blocks of empty spaces
+    for (let i = 0; i < rows; i += corridorWidth) {
+        for (let j = 0; j < cols; j += corridorWidth) {
+            if (Math.random() > wallChance) {
+                for (let di = 0; di < corridorWidth; di++) {
+                    for (let dj = 0; dj < corridorWidth; dj++) {
+                        const ni = i + di;
+                        const nj = j + dj;
+                        if (ni >= 0 && ni < rows && nj >= 0 && nj < cols) {
+                            maze[ni][nj] = 0;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Surround the maze with walls
+    for (let row = 0; row < rows; row++) {
+        maze[row][0] = 4;
+        maze[row][cols - 1] = 4;
+    }
+    for (let col = 0; col < cols; col++) {
+        maze[0][col] = 4;
+        maze[rows - 1][col] = 4;
+    }
+
+    // Add some height variation for the walls
+    for (let i = 0; i < rows; i++) {
+        for (let j = 0; j < cols; j++) {
+            if (maze[i][j] === 4) {
+                maze[i][j] = Math.floor(Math.random() * 4) + 1; // Wall heights between 1 and 4
+            }
+        }
+    }
+
+    return maze;
+}
 
 module.exports = {
     isCollidingWithWall,
