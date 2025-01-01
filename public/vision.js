@@ -1,3 +1,5 @@
+let isFogOfWar = true;
+
 function castRay(playerX, playerY, angle, maxDistance, level) {
     let x = playerX;
     let y = playerY;
@@ -46,9 +48,25 @@ function calculateVision(playerX, playerY, level, maxDistance, resolution) {
     return visiblePoints;
 }
 
+
+function calculateLimitedVision(playerX, playerY, startAngle, angleRange, level, maxDistance, resolution) {
+    const visiblePoints = [];
+    for (let angle = startAngle - angleRange / 2; angle < startAngle + angleRange; angle += resolution) {
+        const rayEnd = castRay(playerX, playerY, angle, maxDistance, level);
+        visiblePoints.push(rayEnd);
+    }
+    // for (let angle = 0; angle < TWO_PI; angle += resolution) {
+    //     const rayEnd = castRay(playerX, playerY, angle, PLAYER_SIZE, level);
+    //     visiblePoints.push(rayEnd);
+    // }
+    return visiblePoints;
+}
+
 function drawFogOfWar(playerX, playerY, visiblePoints) {
     push()
-    translate(playerX, playerY, 101)
+    // resetMatrix();
+    translate(playerX, playerY, WALL_HEIGHT + 1)
+
     // Clear the fog layer
     // fogLayer = createGraphics(width, height);
     fogLayer.blendMode(BLEND)

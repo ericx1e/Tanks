@@ -6,9 +6,10 @@ const { v4: uuidv4 } = require('uuid'); // Generates unique lobby codes
 const app = express();
 const server = http.createServer(app);
 
-const { initializeAITanks, updateAITanks } = require('./bots.js');
+const { initializeAITanks, updateAITanks, setIO } = require('./bots.js');
 const { TILE_SIZE, BULLET_SIZE, BULLET_SPEED, PLAYER_SIZE, MAX_SPEED, ACCELERATION, FRICTION } = require('./public/constants.js');
 const { isCollidingWithWall, isCollidingWithPlayer, isWall, lerpAngle, getRandomNonWallPosition } = require('./utils.js');
+const { loadLevel, levels } = require('./levels.js');
 
 app.use(cors({ origin: true }));
 app.use(express.static('public'));
@@ -20,113 +21,158 @@ const io = require('socket.io')(server, {
     }
 });
 
-const players = {}; // Store player states
+setIO(io);
+
+
 const lobbies = {};
+const socketToLobby = {}; // Map socket IDs to their respective lobby codes
+const socketToNames = {};
+const transitionTimers = {};
 
-// const level = [
-//     [4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4],
-//     [4, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 4],
-//     [4, 0, 4, 0, 4, 0, 0, 0, 0, 4, 0, 0, 0, 4, 4, 0, 4, 0, 4, 0, 4, 0, 0, 0, 4],
-//     [4, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 4, 0, 4],
-//     [4, 4, 0, 4, 4, 0, 4, 0, 4, 0, 4, 0, 4, 4, 4, 0, 0, 0, 4, 4, 4, 0, 4, 0, 4],
-//     [4, 0, 0, 0, 4, 0, 0, 0, 4, 0, 4, 0, 0, 0, 4, 0, 4, 0, 4, 0, 0, 0, 0, 0, 4],
-//     [4, 4, 4, 0, 4, 0, 4, 0, 4, 0, 0, 0, 4, 4, 4, 0, 0, 0, 4, 0, 4, 4, 4, 0, 4],
-//     [4, 0, 0, 0, 0, 0, 0, 0, 4, 0, 4, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 4, 0, 4],
-//     [4, 0, 4, 0, 4, 0, 4, 0, 4, 0, 4, 0, 4, 4, 4, 0, 4, 4, 4, 0, 4, 0, 4, 0, 4],
-//     [4, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 4],
-//     [4, 4, 4, 0, 4, 0, 4, 0, 4, 0, 4, 4, 4, 0, 4, 0, 4, 0, 4, 0, 4, 0, 4, 4, 4],
-//     [4, 0, 0, 0, 0, 0, 4, 0, 4, 0, 0, 0, 4, 0, 0, 0, 4, 0, 4, 0, 0, 0, 0, 0, 4],
-//     [4, 0, 4, 4, 4, 0, 4, 0, 4, 0, 4, 0, 4, 0, 4, 0, 4, 0, 4, 4, 4, 0, 4, 0, 4],
-//     [4, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 4],
-//     [4, 4, 4, 4, 4, 0, 4, 4, 4, 4, 4, 4, 4, 0, 4, 4, 4, 0, 4, 4, 4, 4, 4, 4, 4],
-//     [4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 4],
-//     [4, 4, 4, 0, 4, 0, 4, 0, 4, 0, 4, 0, 4, 4, 4, 0, 4, 0, 4, 4, 4, 0, 4, 4, 4],
-//     [4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4],
-//     [4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4]
-// ];
-
-const level = [
-    [3, 1, 3, 2, 2, 4, 4, 2, 3, 4, 4, 3, 3, 4, 3, 2, 1, 3, 2, 1, 4, 1, 4, 1, 3, 1, 4, 3, 1, 1],
-    [3, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3],
-    [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 4],
-    [3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 3, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 1],
-    [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 2],
-    [4, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 1, 4],
-    [4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4],
-    [3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
-    [3, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 3, 3, 0, 0, 0, 0, 0, 0, 0, 2, 4, 0, 0, 0, 0, 0, 0, 2],
-    [1, 3, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 3, 0, 0, 0, 0, 2, 3],
-    [3, 2, 0, 0, 0, 1, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4],
-    [1, 2, 0, 0, 3, 0, 0, 0, 0, 0, 1, 3, 3, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 3, 0, 0, 0, 0, 0, 1],
-    [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 3],
-    [4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 4],
-    [1, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 1, 0, 2],
-    [4, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 3, 0, 0, 0, 0, 0, 0, 3, 0, 0, 3],
-    [3, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3],
-    [3, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 3, 3, 0, 0, 0, 0, 0, 0, 0, 2, 4, 0, 0, 0, 0, 0, 0, 2],
-    [1, 3, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 3, 0, 0, 0, 0, 2, 3],
-    [3, 2, 0, 0, 0, 1, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4],
-    [1, 2, 0, 0, 3, 0, 0, 0, 0, 0, 1, 4, 3, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 3, 0, 0, 0, 0, 0, 1],
-    [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 3],
-    [4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 4],
-    [1, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 2],
-    [4, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 3, 0, 0, 0, 0, 0, 0, 3, 0, 0, 3],
-    [3, 1, 3, 2, 2, 4, 4, 2, 3, 4, 4, 3, 3, 4, 3, 2, 1, 3, 2, 1, 4, 1, 4, 1, 3, 1, 4, 3, 1, 1],
-];
-
-
-// const level = [
-//     [1, 1, 1, 1, 1],
-//     [1, 0, 0, 0, 1],
-//     [1, 0, 0, 0, 1],
-//     [1, 0, 0, 0, 1],
-//     [1, 1, 1, 1, 1],
-// ]
-
-let bullets = []; // Store all bullets
-
-const AI_TANK_COUNT = 40; // Number of AI tanks
-Object.assign(players, initializeAITanks(AI_TANK_COUNT));
-
-for (let i = 0; i < AI_TANK_COUNT; i++) {
-    const { x, y } = getRandomNonWallPosition(level);
-    players[`AI_${i}`] = {
-        id: `AI_${i}`,
-        x: x,
-        y: y,
-        angle: Math.random() * 2 * Math.PI, // Random initial angle
-        turretAngle: 0,
-        targetDirection: Math.random() * 2 * Math.PI, // Initial direction
-        movementTimer: 0, // Timer for moving in a direction
-        isDriving: true, // Start with driving
-        rotationalVelocity: 0, // Smooth turning speed
-        isAI: true,
+function createLobby() {
+    const lobbyCode = uuidv4().slice(0, 2).toUpperCase();
+    lobbies[lobbyCode] = {
+        players: {},
+        level: [[]],
+        levelNumber: -1,
+        bullets: [],
+        spawn: {},
     };
+    return lobbyCode;
+}
+
+function createLevel(lobbyCode, levelNumber) {
+    lobby = lobbies[lobbyCode];
+    if (!lobby) return;
+
+    // for (const [id, player] of Object.entries(lobby.players)) {
+    //     if (player.isAI) {
+    //         delete lobby.players[id];
+    //     }
+    // }
+
+    const { players: newPlayers, level, spawn } = loadLevel(levelNumber)
+
+    // Object.assign(newPlayers, lobby.players)
+    // console.log(newPlayers)
+
+    lobbies[lobbyCode] = {
+        players: newPlayers,
+        level: level,
+        levelNumber: levelNumber,
+        bullets: [],
+        spawn: spawn,
+    };
+
+    // io.to(lobbyCode).emit('updateLevel', level)
+}
+
+function startTransition(lobbyCode) {
+    const lobby = lobbies[lobbyCode];
+    lobby.gameState = "transition";
+    if (!lobby) return;
+
+    transitionTimers[lobbyCode] = 3; // Duration in seconds
+    const intervalId = setInterval(() => {
+        transitionTimers[lobbyCode]--;
+        io.to(lobbyCode).emit('transitionTimer', { secondsLeft: transitionTimers[lobbyCode] });
+
+        if (transitionTimers[lobbyCode] <= 0) {
+            clearInterval(intervalId);
+            createLevel(lobbyCode, (lobby.levelNumber + 1) % (levels.length));
+            io.to(lobbyCode).emit('nextLevel');
+
+            lobby.gameState = "playing";
+            transitionTimers[lobbyCode] = null;
+        }
+    }, 1000);
 }
 
 
 // When a player connects
 io.on('connection', (socket) => {
     console.log(`Player connected: ${socket.id}`);
-    const { x, y } = getRandomNonWallPosition(level);
-    players[socket.id] = {
-        id: socket.id,
-        x: x,
-        y: y,
-        vx: 0, // Horizontal velocity
-        vy: 0, // Vertical velocity
-        angle: 0, // Tank rotation
-        turretAngle: 0, // Turret rotation
-    };
-    // level = surroundLevelWithWalls(level); // Surround level with walls
-    socket.emit('updateLevel', level);
 
-    // Send updated player list to all clients
-    io.emit('updatePlayers', players);
+    function getLobby() {
+        const lobbyCode = socketToLobby[socket.id];
+        if (!lobbyCode) return null;
+        return lobbies[lobbyCode];
+    }
+
+    function createPlayer() {
+        // const { x, y } = getRandomNonWallPosition(level);
+        const lobby = getLobby()
+
+        socket.emit('updateLevel', { level: lobby.level, levelNumber: lobby.levelNumber });
+
+        let name = "Player"
+
+        if (socketToNames[socket.id]) {
+            name = socketToNames[socket.id]
+        }
+
+        return {
+            id: socket.id,
+            x: lobby.spawn.x,
+            y: lobby.spawn.y,
+            vx: 0,
+            vy: 0,
+            angle: 0,
+            turretAngle: 0,
+            max_speed: MAX_SPEED,
+            name: name,
+        };
+    }
+
+    socket.on('createLobby', () => {
+        if (socketToLobby[socket.id]) {
+            return;
+        }
+
+        const lobbyCode = createLobby(); // TODO: Create lobby screen, and handle spawning when game starts
+        console.log("created lobby", lobbyCode);
+        socketToLobby[socket.id] = lobbyCode;
+        socket.join(lobbyCode);
+        socket.emit('lobbyCreated', { lobbyCode });
+        console.log(`Lobby ${lobbyCode} created by ${socket.id}`);
+
+        // Start game logic
+        createLevel(lobbyCode, 0)
+        const lobby = lobbies[lobbyCode]
+        lobby.players[socket.id] = createPlayer();
+    });
+
+    socket.on('joinLobby', (lobbyCode) => {
+        if (socketToLobby[socket.id]) {
+            return;
+        }
+
+        const lobby = lobbies[lobbyCode];
+        if (lobby) {
+            if (lobby.levelNumber > 0) {
+                socket.emit('error', { message: 'Game in progress' });
+                return;
+            }
+            socketToLobby[socket.id] = lobbyCode;
+            socket.emit('lobbyJoined', { lobbyCode });
+            io.to(lobbyCode).emit('updatePlayers', lobby.players);
+            socket.join(lobbyCode);
+            console.log(`${socket.id} joined lobby ${lobbyCode}`);
+
+            lobby.players[socket.id] = createPlayer();
+        } else {
+            socket.emit('error', { message: 'Lobby not found' });
+        }
+    });
 
     socket.on('playerInput', (input) => {
-        const player = players[socket.id];
+        const lobby = getLobby();
+        if (!lobby) return;
+        const players = lobby.players
+        const player = players[socket.id]
         if (!player) return;
+        if (player.isDead) return;
+        const level = lobby.level
 
         // Update velocity based on input
         if (input.keys.w) player.vy -= ACCELERATION;
@@ -139,8 +185,13 @@ io.on('connection', (socket) => {
         player.vy *= (1 - FRICTION);
 
         // Clamp velocity to max speed
-        player.vx = Math.max(-MAX_SPEED, Math.min(MAX_SPEED, player.vx));
-        player.vy = Math.max(-MAX_SPEED, Math.min(MAX_SPEED, player.vy));
+        // player.vx = Math.max(-player.max_speed, Math.min(player.max_speed, player.vx));
+        // player.vy = Math.max(-player.max_speed, Math.min(player.max_speed, player.vy));
+        const magnitude = Math.sqrt(player.vx * player.vx + player.vy * player.vy);
+        if (magnitude > player.max_speed) {
+            player.vx = player.vx / magnitude * player.max_speed;
+            player.vy = player.vy / magnitude * player.max_speed;
+        }
 
         // Calculate the desired angle based on velocity
         const desiredAngle = Math.atan2(player.vy, player.vx);
@@ -169,42 +220,37 @@ io.on('connection', (socket) => {
         // Update the turret angle
         player.turretAngle = input.turretAngle;
 
-        io.emit('updatePlayers', players);
+        const lobbyCode = socketToLobby[socket];
+        io.to(lobbyCode).emit('updatePlayers', players);
     });
 
     socket.on("setName", (name) => {
-        const player = players[socket.id];
-        if (player) {
-            player.name = name.substring(0, 16); // Set the player's name with a max length
-            io.emit("updatePlayers", players); // Broadcast updated players
-        }
+        const lobby = getLobby();
+        if (!lobby) return;
+        const players = lobby.players
+        const player = players[socket.id]
+        if (!player) return;
+
+        player.name = name.substring(0, 16); // Set the player's name with a max length
+        socketToNames[socket.id] = name
+
+        // console.log(socketToNames)
+
+        const lobbyCode = socketToLobby[socket.id];
+        io.to(lobbyCode).emit('updatePlayers', players);
     });
-
-    // Handle player movement
-    socket.on('playerTankMove', (data) => {
-        const player = players[socket.id];
-        if (player) {
-            // Predict new position
-            const newX = player.x + (data.dx || 0); // Default dx, dy to 0 if undefined
-            const newY = player.y + (data.dy || 0);
-
-            // Check for collisions
-            if (!isCollidingWithWall(newX, player.y, PLAYER_SIZE, level)) {
-                player.x = newX; // Update X position if no collision
-            }
-            if (!isCollidingWithWall(player.x, newY, PLAYER_SIZE, level)) {
-                player.y = newY; // Update Y position if no collision
-            }
-
-            player.angle += data.angleChange; // Update angle
-            player.turretAngle = data.turretAngle || player.turretAngle; // Update turret angle
-        }
-    });
-
 
     // Handle firing bullets
     socket.on('fireBullet', (bulletData) => {
-        const player = players[socket.id];
+        const lobbyCode = socketToLobby[socket.id];
+        if (!lobbyCode) return;
+        const lobby = lobbies[lobbyCode];
+        if (!lobby) return;
+        const player = lobby.players[socket.id];
+        if (!player) return;
+        if (player.isDead) return;
+        const bullets = lobby.bullets;
+        const level = lobby.level
 
         const playerBulletCount = bullets.filter(bullet => bullet.owner === player.id).length;
 
@@ -241,17 +287,48 @@ io.on('connection', (socket) => {
             speed: BULLET_SPEED,
             bounces: 1
         });
+
+        io.to(lobbyCode).emit('explosion', {
+            x: bulletX,
+            y: bulletY,
+            z: PLAYER_SIZE * 1.4 - BULLET_SIZE,
+            size: BULLET_SIZE / 2,
+        });
+    });
+
+    socket.on('createPlayer', () => {
+        const lobby = getLobby()
+        lobby.players[socket.id] = createPlayer()
     });
 
     // Handle player disconnection
     socket.on('disconnect', () => {
         console.log(`Player disconnected: ${socket.id}`);
-        delete players[socket.id];
+        const lobbyCode = socketToLobby[socket.id];
+        if (lobbyCode) {
+            const lobby = lobbies[lobbyCode];
+            delete lobby.players[socket.id];
+            delete socketToLobby[socket.id];
+            io.to(lobbyCode).emit('updatePlayers', lobby.players);
+
+            // Optionally remove the lobby if empty
+            if (Object.keys(lobby.players).length === 0) {
+                delete lobbies[lobbyCode];
+                console.log(`Lobby ${lobbyCode} deleted as it is empty.`);
+            }
+        }
+        if (socketToNames[socket]) {
+            delete socketToNames[socket]
+        }
     });
 });
 
-function updateBullets() {
+function updateBullets(lobby, lobbyCode) {
     const bulletsToRemove = new Set();
+    const bullets = lobby.bullets
+    const players = lobby.players
+    const level = lobby.level
+    if (!level) return;
 
     bullets.forEach((bullet, i) => {
         // Predict the new position of the bullet
@@ -308,7 +385,7 @@ function updateBullets() {
             if (bullet.bounces > 0) {
                 bullet.bounces--;
             } else {
-                io.emit('explosion', {
+                io.to(lobbyCode).emit('explosion', {
                     x: bullet.x,
                     y: bullet.y,
                     z: PLAYER_SIZE * 1.4 - BULLET_SIZE,
@@ -352,7 +429,7 @@ function updateBullets() {
 
                 bulletsToRemove.add(i); // Remove bullet
 
-                io.emit('explosion', {
+                io.to(lobbyCode).emit('explosion', {
                     x: player.x,
                     y: player.y,
                     z: PLAYER_SIZE,
@@ -360,14 +437,17 @@ function updateBullets() {
                     dSize: 2
                 });
 
-                const { x, y } = getRandomNonWallPosition(level)
-                player.x = x;
-                player.y = y;
-                player.vx = 0;
-                player.vy = 0;
 
-                // Broadcast player health
-                io.emit('updatePlayers', players);
+                // Tank dies / takes damage
+                if (lobby.levelNumber != 0 || player.isAI) // No player damage in lobby
+                    player.isDead = true;
+
+                // Teleport to random location
+                // const { x, y } = getRandomNonWallPosition(level)
+                // player.x = x;
+                // player.y = y;
+                // player.vx = 0;
+                // player.vy = 0;
 
                 // Exit early to avoid further processing of this bullet
                 break;
@@ -375,15 +455,42 @@ function updateBullets() {
         }
     });
 
-    bullets = bullets.filter((_, index) => !bulletsToRemove.has(index));
-    io.emit('updateBullets', bullets);
+    lobby.bullets = bullets.filter((_, index) => !bulletsToRemove.has(index));
 }
 
-// Run bullet updates 60 times per second
+// Run lobby updates 60 times per second
 setInterval(() => {
-    updateBullets();
-    updateAITanks(players, level, players, bullets);
-    io.emit('updatePlayers', players);
+    for (const [lobbyCode, lobby] of Object.entries(lobbies)) {
+        if (lobby.gameState == "transition") continue;
+
+        updateBullets(lobby, lobbyCode);
+        if (lobby.level && updateAITanks(lobbyCode, lobby.players, lobby.level, lobby.bullets)) {
+            // createLevel(lobbyCode, lobby.levelNumber + 1);
+            io.to(lobbyCode).emit("levelComplete");
+            startTransition(lobbyCode);
+            // lobby.gameState = "transition";
+        }
+        io.to(lobbyCode).emit('updatePlayers', lobby.players);
+        io.to(lobbyCode).emit('updateBullets', lobby.bullets);
+
+        let allDead = true;
+        let numPlayers = 0;
+        for (const [_, player] of Object.entries(lobby.players)) {
+            if (!player.isAI) {
+                numPlayers++;
+                if (!player.isDead) {
+                    allDead = false;
+                }
+            }
+        }
+
+        if (numPlayers > 0 && allDead) {
+            console.log(lobby.players)
+            io.to(lobbyCode).emit("gameOver");
+            lobby.levelNumber = -1
+            startTransition(lobbyCode);
+        }
+    }
 }, 1000 / 60);
 
 const PORT = process.env.PORT || 3000;

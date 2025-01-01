@@ -34,6 +34,7 @@ function isCollidingWithWall(x, y, size, level) {
 
 // Check if a bullet collides with a player's bounding box
 function isCollidingWithPlayer(bulletX, bulletY, player) {
+    if (player.isDead) return;
     const halfSize = PLAYER_SIZE + BULLET_SIZE;
 
     // Check if the bullet is within the player's bounding box
