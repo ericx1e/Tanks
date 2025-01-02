@@ -175,12 +175,22 @@ function draw() {
         return;
     }
 
+    let targetTank = myTank;
+    if (myTank && myTank.isDead) {
+        // Find the first living player to spectate
+        targetTank = Object.values(players).find(player => !player.isDead && !player.isAI);
+        if (!targetTank) {
+            // If no living players, stop camera movement or use a default position
+            targetTank = { x: 0, y: 0 };
+        }
+    }
+
     // Set up camera
-    camX = myTank.x;
-    camY = myTank.y + 200; // ORIGINAL: + 200
+    camX = targetTank.x;
+    camY = targetTank.y + 200; // ORIGINAL: + 200
     camZ = 700; // ORIGINAL: 700
-    let targetX = myTank.x;
-    let targetY = myTank.y;
+    let targetX = targetTank.x;
+    let targetY = targetTank.y;
     let targetZ = 0;
 
     let offsetX = 0;
@@ -212,10 +222,11 @@ function draw() {
     if (isFogOfWar) {
         const maxDistance = TILE_SIZE * 5; // Vision range
         const resolution = PI / 150; // Fine angular step for smoother vision
-        const visiblePoints = calculateVision(myTank.x, myTank.y, level, maxDistance, resolution);
+        // const visiblePoints = calculateVision(targetTank.x, targetTank.y, level, maxDistance, resolution);
+        const visiblePoints = calculateSharedVision(players, level, maxDistance, resolution);
         // const visiblePoints = calculateLimitedVision(myTank.x, myTank.y, myTank.turretAngle, Math.PI / 4, level, maxDistance, resolution);
 
-        drawFogOfWar(myTank.x, myTank.y, visiblePoints);
+        drawSharedFogOfWar(targetTank.x, targetTank.y, visiblePoints);
     }
 
     // drawUI();

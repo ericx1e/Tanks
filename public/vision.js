@@ -39,6 +39,20 @@ function castRay(playerX, playerY, angle, maxDistance, level) {
     return { x, y };
 }
 
+function calculateSharedVision(players, level, maxDistance, resolution) {
+    const sharedVision = [];
+
+    for (let id in players) {
+        const tank = players[id];
+        if (!tank.isDead && !tank.isAI) { // Only consider living allied tanks
+            const tankVision = calculateVision(tank.x, tank.y, level, maxDistance, resolution);
+            sharedVision.push(tankVision);
+        }
+    }
+
+    return sharedVision; // Return a 2D array of visible points
+}
+
 function calculateVision(playerX, playerY, level, maxDistance, resolution) {
     const visiblePoints = [];
     for (let angle = 0; angle < TWO_PI; angle += resolution) {
@@ -95,4 +109,38 @@ function drawFogOfWar(playerX, playerY, visiblePoints) {
     noStroke();
     plane(width, height);
     pop()
+}
+
+function drawSharedFogOfWar(playerX, playerY, sharedVisiblePoints) {
+    push();
+    translate(playerX, playerY, WALL_HEIGHT + 1); // Position the fog above the ground
+
+    // Clear the fog layer
+    fogLayer.blendMode(BLEND);
+    fogLayer.clear();
+
+    // Draw fog over the entire map
+    fogLayer.background(0);
+    fogLayer.noStroke();
+    fogLayer.blendMode(REMOVE);
+
+    // Draw the visible areas for all points in the shared vision
+    sharedVisiblePoints.forEach(visiblePoints => {
+        fogLayer.beginShape();
+        fogLayer.fill(255, 255, 255);
+
+        visiblePoints.forEach(point => {
+            const screenX = point.x - playerX + fogLayer.width / 2;
+            const screenY = point.y - playerY + fogLayer.height / 2;
+            fogLayer.vertex(screenX, screenY);
+        });
+
+        fogLayer.endShape(CLOSE);
+    });
+
+    // Draw the fog layer over the 3D scene
+    texture(fogLayer);
+    noStroke();
+    plane(width, height);
+    pop();
 }
