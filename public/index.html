@@ -26,8 +26,8 @@
     <!-- <h2 id="lobby-info">Lobby: N/A</h2> -->
   </div>
     <script>
-        // const socket = io.connect('localhost:3000');
-        const socket = io.connect('https://multiplayer-tanks-3fa3c942a132.herokuapp.com/');
+        const socket = io.connect('localhost:3000');
+        // const socket = io.connect('https://multiplayer-tanks-3fa3c942a132.herokuapp.com/');
 
         document.getElementById('create-lobby').addEventListener('click', () => {
           socket.emit('createLobby');
@@ -46,6 +46,15 @@
                 socket.emit('setName', name);
             }
         });
+
+        // document.addEventListener('mousedown', (e) => {
+        //     e.preventDefault(); // Prevents text selection when clicking
+        // });
+
+        document.addEventListener('selectstart', (e) => {
+            e.preventDefault(); // Prevents text selection during drag
+        });
+
     </script>
     <script src="/sketch.js" type="text/javascript"></script>
 </body>

@@ -1,51 +1,76 @@
 const { initializeAITank } = require('./bots.js');
 const { TILE_SIZE } = require('./public/constants.js');
-const { getRandomNonWallPosition } = require('./utils.js');
+const { getRandomNonWallPosition, generateOpenMaze } = require('./utils.js');
 const fs = require('fs');
 // const readline = require('readline');
 
-const levels = []
 
-fs.readFile('./levels.txt', 'utf8', (err, data) => {
-    if (err) throw err;
+function readLevels(path) {
+    let levels = []
 
-    let lines = data.split('\n'); // Split into individual lines
+    fs.readFile(path, 'utf8', (err, data) => {
+        if (err) throw err;
 
-    let level = []
-    for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
-        if (line) {
-            const row = []
-            for (let j = 0; j < line.length; j++) {
-                if (isNaN(parseInt(line[j]))) {
-                    row.push('A'.charCodeAt(0) - line[j].charCodeAt(0) - 1);
-                } else {
-                    row.push(parseInt(line[j]));
+        let lines = data.split('\n'); // Split into individual lines
+        let level = []
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+            if (line) {
+                const row = []
+                for (let j = 0; j < line.length; j++) {
+                    if (isNaN(parseInt(line[j]))) {
+                        row.push('A'.charCodeAt(0) - line[j].charCodeAt(0) - 1);
+                    } else {
+                        row.push(parseInt(line[j]));
+                    }
                 }
+                level.push(row)
+            } else {
+                levels.push(level)
+                level = []
             }
-            level.push(row)
-        } else {
-            levels.push(level)
-            level = []
         }
+
+        levels.push(level)
+    })
+
+    return levels
+}
+
+const campaignLevels = readLevels('./campaignLevels.txt');
+const lobbyLevel = readLevels('./lobbyLevel.txt');
+const arenaLevel = readLevels('./arenaLevel.txt')
+
+function loadLevel(levelNumber, mode, numPlayers) {
+    let level
+    switch (mode) {
+        case 'lobby':
+            level = lobbyLevel[levelNumber];
+            break;
+        case 'campaign':
+            // console.log(campaignLevels)
+            level = campaignLevels[levelNumber];
+            break;
+        case 'arena':
+            // level = arenaLevel[levelNumber];
+            let size = Math.floor(Math.sqrt(numPlayers))
+            level = generateOpenMaze(10 * size, 10 * size)
+            break;
+        case 'survival':
+            let size1 = Math.floor(Math.sqrt(numPlayers));
+            level = generateOpenMaze(8 * size1, 8 * size1);
+            break;
     }
 
-    levels.push(level)
-    level = []
-
-    // console.log(levels)
-})
-
-
-function loadLevel(levelNumber) {
-    if (levelNumber < 0 || levelNumber >= levels.length) {
+    if (levelNumber < 0 || levelNumber >= campaignLevels.length) {
         return { players: {}, level: [[]], spawn: { x: 0, y: 0 } };
     }
 
     const spawn = { x: 0, y: 0 }
     const players = {}
-    const level = levels[levelNumber];
     let tankCount = 0;
+    let buttonNumber = 0;
+    let buttonTypes = ['Campaign', 'Arena', 'Survival']
     for (let r = 0; r < level.length; r++) {
         for (let c = 0; c < level[0].length; c++) {
             const id = tankCount;
@@ -60,7 +85,7 @@ function loadLevel(levelNumber) {
                     spawn.y = y;
                 } else if (tier == 25) {
                     // Button tank
-                    players[`AI_${tankCount++}`] = initializeAITank(id, x, y, 'button');
+                    players[`AI_${tankCount++}`] = initializeAITank(id, x, y, 'button', buttonTypes[buttonNumber++]);
                 }
                 else {
                     players[`AI_${tankCount++}`] = initializeAITank(id, x, y, tier);
@@ -71,9 +96,20 @@ function loadLevel(levelNumber) {
     }
 
     return { players, level, spawn }
+
+}
+
+function getNumLevels(mode) {
+    switch (mode) {
+        case 'campaign':
+            return campaignLevels.length;
+        default:
+            return 1;
+    }
 }
 
 module.exports = {
     loadLevel,
-    levels
+    getNumLevels,
+    // campaignLevels
 }

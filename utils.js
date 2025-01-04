@@ -83,7 +83,7 @@ function getRandomNonWallPosition(level) {
     }
 }
 
-function generateOpenMaze(rows, cols, tileSize = 50, wallChance = 0.2, corridorWidth = 2) {
+function generateOpenMaze(rows, cols, wallChance = 0.4, corridorWidth = 2) {
     /**
      * Generate a maze with more open areas and corridors of at least `corridorWidth` tiles wide.
      */
@@ -123,7 +123,8 @@ function generateOpenMaze(rows, cols, tileSize = 50, wallChance = 0.2, corridorW
     for (let i = 0; i < rows; i++) {
         for (let j = 0; j < cols; j++) {
             if (maze[i][j] === 4) {
-                maze[i][j] = Math.floor(Math.random() * 4) + 1; // Wall heights between 1 and 4
+                // maze[i][j] = Math.floor(Math.random() * 4) + 1; // Wall heights between 1 and 4
+                maze[i][j] = 1
             }
         }
     }
@@ -137,4 +138,5 @@ module.exports = {
     isWall,
     lerpAngle,
     getRandomNonWallPosition,
+    generateOpenMaze,
 };

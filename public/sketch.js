@@ -1,11 +1,15 @@
 let players = {};
 let myTank = null;
 let bullets = [];
+let lasers = [];
 let level = [];
 let levelNumber = -1;
 let explosions = [];
 let trails = [];
 let woodTexture;
+let drops = []; // Store active drops
+// let drops = [{ x: 200, y: 200, buff: { type: 'speed' } }]; // test drop
+let buffs = [];
 
 let camX;
 let camY;
@@ -19,6 +23,7 @@ let lobbyCode = null;
 let gameState = "playing"; // Other states: "transition", "waiting"
 let transitionTimer = 0;
 let transitionMessage = '';
+let gameMode = 'lobby';
 
 function preload() {
     woodTexture = loadImage('assets/wood-texture.jpg'); // Load texture for walls
@@ -51,6 +56,10 @@ socket.on('updateBullets', (serverBullets) => {
     bullets = serverBullets;
 });
 
+socket.on('updateLasers', (serverLasers) => {
+    lasers = serverLasers;
+});
+
 socket.on('updateLevel', (data) => {
     level = data.level; // Store the level received from the server
     levelNumber = data.levelNumber;
@@ -69,8 +78,17 @@ socket.on('explosion', (data) => {
     // });
 });
 
+socket.on('victory', () => {
+    transitionMessage = "Victory!"
+})
+
 socket.on('levelComplete', () => {
     transitionMessage = "Level Complete!";
+})
+
+socket.on('gameMode', (mode) => {
+    gameMode = mode;
+    transitionMessage = `Starting ${mode}!`;
 })
 
 socket.on('gameOver', () => {
@@ -86,6 +104,26 @@ socket.on('nextLevel', () => {
     socket.emit('createPlayer')
     gameState = "playing";
     transitionTimeLeft = null;
+});
+
+socket.on('arenaMode', () => {
+
+});
+
+socket.on('updateDrops', (serverDrops) => {
+    drops = serverDrops;
+});
+
+socket.on('laserFired', (laserData) => {
+    const { x, y, angle, range, width } = laserData;
+
+    // Draw the laser on the canvas
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(angle);
+    ctx.fillStyle = 'rgba(255, 0, 0, 0.5)';
+    ctx.fillRect(0, -width / 2, range, width);
+    ctx.restore();
 });
 
 
@@ -135,7 +173,7 @@ function draw() {
     translate(gridWidth / 2, gridHeight / 2, -25); // Center ground at (0, 0)
     noStroke();
     plane(gridWidth, gridHeight); // Ground dimensions
-    if (levelNumber == 0) {
+    if (gameMode === 'lobby') {
         push()
         translate(0, 0, 1)
         textSize(TILE_SIZE);
@@ -150,6 +188,8 @@ function draw() {
 
     // Draw walls
     drawWalls();
+
+    drawDrops();
 
     // Draw all tanks
     for (let id in players) {
@@ -176,18 +216,20 @@ function draw() {
     }
 
     let targetTank = myTank;
+    let allDead = false;
     if (myTank && myTank.isDead) {
         // Find the first living player to spectate
         targetTank = Object.values(players).find(player => !player.isDead && !player.isAI);
         if (!targetTank) {
             // If no living players, stop camera movement or use a default position
-            targetTank = { x: 0, y: 0 };
+            allDead = true;
+            targetTank = myTank;
         }
     }
 
     // Set up camera
     camX = targetTank.x;
-    camY = targetTank.y + 200; // ORIGINAL: + 200
+    camY = targetTank.y + 200;
     camZ = 700; // ORIGINAL: 700
     let targetX = targetTank.x;
     let targetY = targetTank.y;
@@ -215,18 +257,27 @@ function draw() {
     // Draw bullets
     drawBullets();
 
+    drawLasers();
+
     drawExplosions();
 
     drawTrails();
 
-    if (isFogOfWar) {
-        const maxDistance = TILE_SIZE * 5; // Vision range
-        const resolution = PI / 150; // Fine angular step for smoother vision
+    if (isFogOfWar && !allDead) {
+        const resolution = PI / 150;
         // const visiblePoints = calculateVision(targetTank.x, targetTank.y, level, maxDistance, resolution);
-        const visiblePoints = calculateSharedVision(players, level, maxDistance, resolution);
+
+        if (gameMode == 'arena') {
+            const maxDistance = TILE_SIZE * 7;
+            const visiblePoints = calculateVision(targetTank.x, targetTank.y, level, maxDistance, resolution);
+            drawFogOfWar(targetTank.x, targetTank.y, visiblePoints);
+        } else {
+            const maxDistance = TILE_SIZE * 5;
+            const visiblePoints = calculateSharedVision(players, level, maxDistance, resolution);
+            drawSharedFogOfWar(targetTank.x, targetTank.y, visiblePoints);
+        }
         // const visiblePoints = calculateLimitedVision(myTank.x, myTank.y, myTank.turretAngle, Math.PI / 4, level, maxDistance, resolution);
 
-        drawSharedFogOfWar(targetTank.x, targetTank.y, visiblePoints);
     }
 
     // drawUI();
@@ -310,7 +361,6 @@ function drawTank(tank, isSelf) {
     pop();
 
     if (!tank.isDead) {
-        // if (Math.abs(tank.vx) > 0.1 || Math.abs(tank.vy) > 0.1) {
         for (let i = 0; i < 2; i++) { // Add two particles per frame
             trails.push({
                 x: tank.x - random(-PLAYER_SIZE / 2, PLAYER_SIZE / 2),
@@ -322,7 +372,15 @@ function drawTank(tank, isSelf) {
             });
         }
     }
-    // }
+
+    if (tank.shield) {
+        push();
+        translate(tank.x, tank.y, PLAYER_SIZE);
+        fill(50, 100, 255, 100);
+        noStroke();
+        sphere(PLAYER_SIZE * 1.5);
+        pop()
+    }
 
 
     // Draw nametag
@@ -417,44 +475,14 @@ function drawWalls() {
                 // Move to position and render wall
                 translate(wallX, wallY, height / 2);
                 fill(120, 80, 40); // Wall color
+                stroke(0); // Outline color
+                strokeWeight(1);
                 box(TILE_SIZE, TILE_SIZE, wallHeight * WALL_HEIGHT); // Wall dimensions
                 pop();
             }
         }
     }
 }
-
-// Render explosions
-
-// function drawExplosions() {
-//     for (let i = explosions.length - 1; i >= 0; i--) {
-//         const explosion = explosions[i];
-
-//         // Emit light from the explosion
-//         push();
-//         translate(explosion.x, explosion.y, explosion.z);
-
-//         // Simulate explosion light
-//         const lightIntensity = explosion.alpha / 255 * 150; // Scale light intensity with alpha
-//         pointLight(255, 150, 0, explosion.x, explosion.y, explosion.z + explosion.size); // Orange light
-//         ambientLight(lightIntensity, lightIntensity / 2, 0); // Add ambient light
-
-//         // Draw the explosion sphere
-//         noStroke();
-//         fill(255, explosion.alpha, 0, explosion.alpha); // Orange with fading alpha
-//         sphere(explosion.size); // Expanding sphere
-//         pop();
-
-//         // Update explosion properties
-//         explosion.size += explosion.dSize; // Increase size
-//         explosion.alpha -= Math.ceil(explosion.alpha / 4); // Fade out
-
-//         // Remove explosion when fully faded
-//         if (explosion.alpha <= 0) {
-//             explosions.splice(i, 1);
-//         }
-//     }
-// }
 
 function drawExplosions() {
     for (let i = explosions.length - 1; i >= 0; i--) {
@@ -556,8 +584,6 @@ function createExplosion(x, y, z, size) {
     });
 }
 
-
-
 function drawTrails() {
     for (let i = trails.length - 1; i >= 0; i--) {
         const trail = trails[i];
@@ -579,6 +605,72 @@ function drawTrails() {
             trails.splice(i, 1);
         }
     }
+}
+
+function drawDrops() {
+    drops.forEach((drop) => {
+        const { x, y, buff } = drop;
+
+        push();
+        translate(x, y, WALL_HEIGHT / 2);
+        const angle = frameCount / 45;
+        rotateZ(angle);
+
+        noStroke();
+        push();
+        const size = TILE_SIZE / 4;
+        const cameraPos = createVector(camX, camY, camZ); // Camera position
+        const barrelX = x;
+        const barrelY = y;
+        const barrelZ = WALL_HEIGHT / 2; // Height of the barrel
+        const barrelPos = createVector(barrelX, barrelY, barrelZ);
+        let viewDirection = p5.Vector.sub(cameraPos, barrelPos).normalize(); // Direction from bullet to camera
+        // Offset the outline behind the bullet
+        let offset = viewDirection.mult(-4);
+        rotateZ(-angle);
+        translate(offset.x, offset.y, offset.z); // Apply the offset
+        rotateZ(angle);
+
+        fill(0); // Semi-transparent black for the outline
+        cylinder(size + 1, size / 2);
+        pop();
+
+        fill(255, 255, 0); // Yellow
+        let dropText
+        switch (buff) {
+            case 'speed':
+                dropText = 'speed'
+                break;
+            case 'fireRate':
+                dropText = 'fire rate'
+                break;
+            case 'shield':
+                dropText = 'shield'
+                break;
+            case 'bulletSpeed':
+                dropText = 'bullet speed'
+                break;
+            case 'multiShot':
+                dropText = 'multi shot'
+                break;
+        }
+        cylinder(size, size / 2);
+        push();
+        translate(0, size / 4 + 1, 0);
+        rotateX(-HALF_PI);
+        textSize(size);
+        textFont(font);
+        textAlign(CENTER, CENTER);
+        fill(0);
+        text(dropText, 0, 0);
+        translate(0, 0, -size / 2 - 2);
+        rotateY(PI);
+        text(dropText, 0, 0);
+        // TODO: Custom icons
+        pop();
+
+        pop();
+    });
 }
 
 function drawUI() {
@@ -689,5 +781,17 @@ function drawBullets() {
             dSize: BULLET_SIZE / 15,
             alpha: 108, // Initial opacity
         })
+    });
+}
+
+function drawLasers() {
+    lasers.forEach(laser => {
+        if (laser.isActive) {
+            stroke(laser.color[0], laser.color[1], laser.color[2]);
+        } else {
+            stroke(150);
+        }
+        strokeWeight(3); // Adjust thickness
+        line(laser.x1, laser.y1, laser.x2, laser.y2);
     });
 }
