@@ -529,8 +529,8 @@ function updateBullets(lobby, lobbyCode) {
                     if (player.isAI && player.tier === 'button') {
                         // player.isDead = true;
                         changeMode(lobbyCode, player.name.toLowerCase());
-                        // lobby.levelNumber = -1;
-                        lobby.levelNumber = 12; // Start from level
+                        lobby.levelNumber = -1;
+                        // lobby.levelNumber = 12; // Start from level
                         startTransition(lobbyCode);
                         // switch (player.name) {
                         //     case 'Campaign':
