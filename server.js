@@ -57,6 +57,36 @@ function createLevel(lobbyCode, levelNumber) {
     // Object.assign(newPlayers, lobby.players)
     // console.log(newPlayers)
 
+    for (const [id, player] of Object.entries(lobby.players)) {
+        if (!player.isAI) {
+            player.isDead = false;
+            let spawnX = spawn.x;
+            let spawnY = spawn.y;
+
+            if (lobby.mode === 'arena' || lobby.mode === 'survival') {
+                randomSpawn = getRandomNonWallPosition(level);
+                spawnX = randomSpawn.x;
+                spawnY = randomSpawn.y;
+            }
+
+            player.x = spawnX;
+            player.y = spawnY;
+            newPlayers[id] = player;
+
+            if (lobby.mode == 'survival') {
+                player.buffs = {
+                    speed: 0,
+                    fireRate: 0,
+                    shield: 0,
+                    bulletSpeed: 0,
+                    bulletBounces: 1,
+                    multiShot: 0,
+                    currentFireCooldown: 0,
+                };
+            }
+        }
+    }
+
     lobbies[lobbyCode] = {
         players: newPlayers,
         level: level,
@@ -73,6 +103,7 @@ function createLevel(lobbyCode, levelNumber) {
     };
 
     // io.to(lobbyCode).emit('updateLevel', level)
+    io.to(lobbyCode).emit('updateLevel', { level: level, levelNumber: levelNumber });
 }
 
 function startTransition(lobbyCode) {
@@ -148,7 +179,9 @@ io.on('connection', (socket) => {
             turretAngle: 0,
             max_speed: MAX_SPEED,
             name: name,
-            buffs: { shield: 1 }
+            bulletSpeed: 1.2 * BULLET_SPEED,
+            bulletBounces: 1,
+            // buffs: { shield: 1 }
         };
     }
 
@@ -282,11 +315,17 @@ io.on('connection', (socket) => {
         const bullets = lobby.bullets;
         const level = lobby.level
 
-        const playerBulletCount = bullets.filter(bullet => bullet.owner === player.id).length;
+        if (lobby.mode == 'survival') {
+            if (player.currentFireCooldown > 0) {
+                return;
+            }
+        } else {
+            const playerBulletCount = bullets.filter(bullet => bullet.owner === player.id).length;
 
-        // Enforce the 6-bullet limit
-        if (playerBulletCount >= 6) {
-            return; // Do not fire if the player has 6 active bullets
+            // Enforce the 6-bullet limit
+            if (playerBulletCount >= 6) {
+                return; // Do not fire if the player has 6 active bullets
+            }
         }
 
         const dx = 1.1 * Math.cos(player.turretAngle) * (PLAYER_SIZE + 2 * BULLET_SIZE) + player.vx;
@@ -308,14 +347,16 @@ io.on('connection', (socket) => {
             return;
         }
 
+        player.currentFireCooldown = player.fireCooldown;
+
         bullets.push({
             id: bullets.length,
             owner: socket.id,
             x: bulletX,
             y: bulletY,
             angle: bulletData.angle,
-            speed: 1.2 * BULLET_SPEED,
-            bounces: 1
+            speed: player.bulletSpeed,
+            bounces: player.bulletBounces,
         });
 
         io.to(lobbyCode).emit('explosion', {
@@ -440,7 +481,7 @@ function updateBullets(lobby, lobbyCode) {
                 if (distance < 2 * BULLET_SIZE) {
                     bulletsToRemove.add(i); // Mark both bullets for removal
                     bulletsToRemove.add(j);
-                    io.emit('explosion', {
+                    io.to(lobbyCode).emit('explosion', {
                         x: (bullet.x + otherBullet.x) / 2,
                         y: (bullet.y + otherBullet.y) / 2,
                         z: PLAYER_SIZE * 1.4 - BULLET_SIZE,
@@ -465,7 +506,7 @@ function updateBullets(lobby, lobbyCode) {
                     dSize: 2
                 });
 
-                if (lobby.mode !== 'lobby' || player.isAI) // No player damage in lobby
+                if (lobby.mode !== 'lobby' || player.isAI) {// No player damage in lobby
 
                     // Apply damage to the player
                     if (player.shield) {
@@ -473,7 +514,8 @@ function updateBullets(lobby, lobbyCode) {
                     } else {
                         player.isDead = true;
                     }
-                // player.isDead = true;
+                    // player.isDead = true;
+                }
 
                 if (lobby.mode === 'survival') {
                     lobby.tankKills++;
@@ -487,7 +529,8 @@ function updateBullets(lobby, lobbyCode) {
                     if (player.isAI && player.tier === 'button') {
                         // player.isDead = true;
                         changeMode(lobbyCode, player.name.toLowerCase());
-                        lobby.levelNumber = -1;
+                        // lobby.levelNumber = -1;
+                        lobby.levelNumber = 12; // Start from level
                         startTransition(lobbyCode);
                         // switch (player.name) {
                         //     case 'Campaign':
@@ -518,12 +561,12 @@ function updatePlayerStats(player) {
     if (!player.buffs) return;
 
     // Base stats
-    player.max_speed = MAX_SPEED;
+    player.max_speed = 0.7 * MAX_SPEED;
     player.fireRateMultiplier = 1;
     // player.shield = false;
     player.bulletSpeedMultiplier = 1;
     player.multiShot = 1;
-
+    player.bulletBounces = 0;
     // Apply buffs
     if (player.buffs.speed > 0) {
         player.max_speed *= 1 + 0.1 * player.buffs.speed; // Example: 10% speed boost per buff
@@ -547,6 +590,14 @@ function updatePlayerStats(player) {
     if (player.buffs.multiShot > 0) {
         player.multiShot += player.buffs.multiShot; // Add extra bullets based on multi-shot buffs
     }
+
+    if (player.buffs.bulletBounces > 0) {
+        player.bulletBounces = player.buffs.bulletBounces;
+    }
+
+    player.bulletSpeed = 0.7 * BULLET_SPEED * player.bulletSpeedMultiplier
+    player.fireCooldown = 60 * player.fireRateMultiplier;
+    player.currentFireCooldown--;
 }
 
 
@@ -557,11 +608,24 @@ function spawnSurvivalBots(lobbyCode) {
     const level = lobby.level;
     const players = lobby.players;
 
-    const { x, y } = getRandomNonWallPosition(level);
+    while (true) {
+        ({ x, y } = getRandomNonWallPosition(level))
+        let done = true
+        for (const playerId in lobby.players) {
+            const player = lobby.players[playerId];
+            if (!player.isAI && isCollidingWithPlayer(x, y, player, TILE_SIZE * 3)) {
+                done = false;
+                break;
+            }
+        }
+        if (done) {
+            break;
+        }
+    }
 
     const botId = `AI_${Object.keys(players).length}`;
     // console.log(lobby.spawnTier);
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 5; i++) {
         lobby.players[botId] = initializeAITank(botId, x, y, Math.floor(Math.random() * lobby.spawnTier));
     }
 
@@ -575,13 +639,10 @@ function spawnDrop(lobbyCode, x, y) {
     // Define possible buffs
     const buffs = [
         'speed',
-        // 'bulletSpeed',
+        'fireRate',
+        'bulletSpeed',
+        // 'bulletBounces',
         'shield',
-        // { type: 'speed', value: 1.2 },
-        // { type: 'fireRate', value: 0.8 },
-        // { type: 'shield', value: 1 },
-        // { type: 'bulletSpeed', value: 1.5 },
-        // { type: 'multiShot', value: 2 }
     ];
 
     // Randomly select a buff
@@ -637,7 +698,7 @@ function handlePlayerPickup(lobbyCode, playerId) {
             io.to(lobbyCode).emit('updatePlayerBuffs', { playerId: player.id, buffs: player.buffs });
 
 
-            lobby.drops.splice(i, 1); // Remove the drop
+            // lobby.drops.splice(i, 1); // Remove the drop
 
             // Notify the client about the pickup
             // io.to(lobbyCode).emit('pickup', { playerId, buff: drop.buff });
@@ -697,7 +758,10 @@ setInterval(() => {
             updateAITanks(lobby, lobbyCode, lobby.players, lobby.level, lobby.bullets)
 
             for (const playerId in lobby.players) {
-                handlePlayerPickup(lobbyCode, playerId);
+                const player = lobby.players[playerId]
+                if (!player.isAI) {
+                    handlePlayerPickup(lobbyCode, playerId);
+                }
                 updatePlayerStats(lobby.players[playerId]);
             }
         }
@@ -749,13 +813,13 @@ setInterval(() => {
 
             lobby.arenaProgress++;
 
-            if (lobby.arenaProgress % 5 == 0) {
-                lobby.spawnTier = Math.min(lobby.spawnTier + 1, 4);
+            if (lobby.arenaProgress % 10 == 0) {
+                lobby.spawnTier = Math.min(lobby.spawnTier + 1, 6);
 
             }
         }
     }
-}, 1000);
+}, 10000);
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {

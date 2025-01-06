@@ -58,7 +58,7 @@ function loadLevel(levelNumber, mode, numPlayers) {
             break;
         case 'survival':
             let size1 = Math.floor(Math.sqrt(numPlayers));
-            level = generateOpenMaze(8 * size1, 8 * size1);
+            level = generateOpenMaze(15 * size1, 15 * size1);
             break;
     }
 

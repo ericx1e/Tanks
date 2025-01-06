@@ -101,7 +101,7 @@ socket.on('transitionTimer', (data) => {
 });
 
 socket.on('nextLevel', () => {
-    socket.emit('createPlayer')
+    // socket.emit('createPlayer')
     gameState = "playing";
     transitionTimeLeft = null;
 });
@@ -266,8 +266,11 @@ function draw() {
     if (isFogOfWar && !allDead) {
         const resolution = PI / 150;
         // const visiblePoints = calculateVision(targetTank.x, targetTank.y, level, maxDistance, resolution);
-
-        if (gameMode == 'arena') {
+        if (gameMode == 'lobby') {
+            const maxDistance = TILE_SIZE * 100;
+            const visiblePoints = calculateVision(targetTank.x, targetTank.y, level, maxDistance, resolution);
+            drawFogOfWar(targetTank.x, targetTank.y, visiblePoints);
+        } else if (gameMode == 'arena') {
             const maxDistance = TILE_SIZE * 7;
             const visiblePoints = calculateVision(targetTank.x, targetTank.y, level, maxDistance, resolution);
             drawFogOfWar(targetTank.x, targetTank.y, visiblePoints);
@@ -636,24 +639,24 @@ function drawDrops() {
         pop();
 
         fill(255, 255, 0); // Yellow
-        let dropText
-        switch (buff) {
-            case 'speed':
-                dropText = 'speed'
-                break;
-            case 'fireRate':
-                dropText = 'fire rate'
-                break;
-            case 'shield':
-                dropText = 'shield'
-                break;
-            case 'bulletSpeed':
-                dropText = 'bullet speed'
-                break;
-            case 'multiShot':
-                dropText = 'multi shot'
-                break;
-        }
+        let dropText = buff;
+        // switch (buff) {
+        //     case 'speed':
+        //         dropText = 'speed'
+        //         break;
+        //     case 'fireRate':
+        //         dropText = 'fire rate'
+        //         break;
+        //     case 'shield':
+        //         dropText = 'shield'
+        //         break;
+        //     case 'bulletSpeed':
+        //         dropText = 'bullet speed'
+        //         break;
+        //     case 'multiShot':
+        //         dropText = 'multi shot'
+        //         break;
+        // }
         cylinder(size, size / 2);
         push();
         translate(0, size / 4 + 1, 0);
@@ -786,12 +789,40 @@ function drawBullets() {
 
 function drawLasers() {
     lasers.forEach(laser => {
+        push();
+        const dx = laser.x2 - laser.x1;
+        const dy = laser.y2 - laser.y1;
+        const len = Math.sqrt(dx * dx + dy * dy);
+        const angle = atan2(dy, dx) + PI / 2;
+        translate((laser.x1 + laser.x2) / 2, (laser.y1 + laser.y2) / 2, PLAYER_SIZE * 1.4 - BULLET_SIZE);
+        rotateZ(angle)
+        let r = PLAYER_SIZE / 2
         if (laser.isActive) {
-            stroke(laser.color[0], laser.color[1], laser.color[2]);
+            // stroke(laser.color[0], laser.color[1], laser.color[2]);
+            fill(255, 50, 0);
+            if (frameCount % 5 == 0) {
+                createExplosion(laser.x1 + random(-r, r), laser.y1 + random(-r, r), PLAYER_SIZE * 1.4 - BULLET_SIZE + random(-r, r), BULLET_SIZE);
+                createExplosion(laser.x2 + random(-r, r), laser.y2 + random(-r, r), PLAYER_SIZE * 1.4 - BULLET_SIZE + random(-r, r), BULLET_SIZE);
+            }
         } else {
-            stroke(150);
+            // stroke(150);
+            fill(150);
+
+            if (frameCount % 10 == 0) {
+                trails.push({
+                    x: laser.x1 + random(-r, r),
+                    y: laser.y1 + random(-r, r),
+                    z: PLAYER_SIZE * 1.4 - BULLET_SIZE + random(-r, r), // Initial explosion height
+                    size: BULLET_SIZE, // Initial explosion size
+                    dSize: BULLET_SIZE / 10,
+                    alpha: 108, // Initial opacity
+                })
+            }
         }
-        strokeWeight(3); // Adjust thickness
-        line(laser.x1, laser.y1, laser.x2, laser.y2);
+        // strokeWeight(3); // Adjust thickness
+        noStroke();
+        // line(laser.x1, laser.y1, laser.x2, laser.y2);
+        cylinder(2, len)
+        pop();
     });
 }

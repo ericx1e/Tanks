@@ -126,6 +126,8 @@ function updateAITank(lobby, lobbyCode, tank, level, players, bullets) {
             turretSpeed = 0.24;
             break;
         case 5:
+            speed = 0.5 * AI_TANK_SPEED;
+            shootingRange = PLAYER_SIZE * 40;
             fireCooldown = 200;
             break;
         case 'button':
@@ -206,30 +208,30 @@ function handleAITurret(lobby, lobbyCode, tank, level, players, bullets, shootin
         }
     }
 
-    if (tank.tier === 5) { // Laser Bot logic
-        if (tank.isFiringLaser) {
-            // Handle laser duration
-            tank.laserDuration--;
-            const isActive = tank.laserDuration < 20;
-            fireLaser(lobby, tank, players, level, isActive);
+    // if (tank.tier === 5) { // Laser Bot logic
+    //     if (tank.isFiringLaser) {
+    //         // Handle laser duration
+    //         tank.laserDuration--;
+    //         const isActive = tank.laserDuration < 20;
+    //         fireLaser(lobby, tank, players, level, isActive);
 
-            if (tank.laserDuration <= 0) {
-                tank.isFiringLaser = false;
-                tank.fireCooldown = fireCooldown; // Reset the cooldown
-            }
-            return; // Skip other firing logic while laser is active
-        }
+    //         if (tank.laserDuration <= 0) {
+    //             tank.isFiringLaser = false;
+    //             tank.fireCooldown = fireCooldown; // Reset the cooldown
+    //         }
+    //         return; // Skip other firing logic while laser is active
+    //     }
 
-        // Charge up for laser if cooldown is ready
-        if (tank.fireCooldown > 0) {
-            tank.fireCooldown--;
-        } else if (playerInSight) {
-            tank.isFiringLaser = true;
-            tank.laserDuration = 100; // Reset laser duration
-            tank.turretAngle = playerInSight.angle;
-        }
-        return; // Start firing laser, skip other firing behaviors
-    }
+    //     // Charge up for laser if cooldown is ready
+    //     if (tank.fireCooldown > 0) {
+    //         tank.fireCooldown--;
+    //     } else if (playerInSight) {
+    //         tank.isFiringLaser = true;
+    //         tank.laserDuration = 100; // Reset laser duration
+    //         tank.turretAngle = playerInSight.angle;
+    //     }
+    //     return; // Start firing laser, skip other firing behaviors
+    // }
 
     if (playerInSight) {
         // Lock onto the player and fire
@@ -237,9 +239,6 @@ function handleAITurret(lobby, lobbyCode, tank, level, players, bullets, shootin
         // const dx = playerInSight.player.x - tank.x;
         // const dy = playerInSight.player.y - tank.y;
         // const distance = Math.sqrt(dx * dx + dy * dy);
-
-        tank.turretAngle = lerpAngle(tank.turretAngle, playerInSight.angle, 0.1);
-        tank.turretRotationalVelocity = 0;
 
         // if (!detectBotInPath(tank.x, tank.y, tank.turretAngle, distance, players, tank.id)) {
         if (tank.tier === 3) {
@@ -254,40 +253,47 @@ function handleAITurret(lobby, lobbyCode, tank, level, players, bullets, shootin
                     tank.burstTimer -= 1; // Decrement burst timer
                 }
             }
-        } else if (tank.fireCooldown <= 0) {
-            fireBullet(lobbyCode, tank, bullets, level); // Single shot for other tiers
-            tank.fireCooldown = fireCooldown; // Reset cooldown
-        }
-
-        if (tank.tier === 5) {
+        } else if (tank.tier === 5) {
             if (tank.isFiringLaser) {
                 // Handle laser duration
                 tank.laserDuration--;
-                const isActive = tank.laserDuration < 20;
+                const isActive = tank.laserDuration < 15;
                 fireLaser(lobby, tank, players, level, isActive);
 
                 if (tank.laserDuration <= 0) {
                     tank.isFiringLaser = false;
                     tank.fireCooldown = fireCooldown; // Reset the cooldown
                 }
+                tank.turretAngle = lerpAngle(tank.turretAngle, playerInSight.angle, 0.05);
+                tank.turretRotationalVelocity = 0;
                 return; // Skip other firing logic while laser is active
             }
 
             // Charge up for laser if cooldown is ready
             if (tank.fireCooldown > 0) {
-                tank.fireCooldown--;
+                // tank.fireCooldown--;
             } else {
                 tank.isFiringLaser = true;
                 tank.laserDuration = 100; // Reset laser duration
                 // tank.turretAngle = playerInSight.angle;
                 // return;
             }
+        } else if (tank.fireCooldown <= 0) {
+            fireBullet(lobbyCode, tank, bullets, level); // Single shot for other tiers
+            tank.fireCooldown = fireCooldown; // Reset cooldown
         }
+        tank.turretAngle = lerpAngle(tank.turretAngle, playerInSight.angle, 0.1);
+        tank.turretRotationalVelocity = 0;
     } else {
         // Rotate turret randomly if no player is in sight
         tank.fireCooldown = fireCooldown / 2
         tank.turretAngle += tank.turretRotationalVelocity;
         tank.turnTimer -= 1;
+
+        if (tank.tier === 5) {
+            tank.isFiringLaser = false;
+            tank.laserDuration = 100;
+        }
 
         // If movement timer expires or obstacle detected, pick a new direction
         if (tank.turnTimer <= 0) {
@@ -390,25 +396,43 @@ function fireLaser(lobby, tank, players, level, isActive) {
             break;
         }
 
+        let done = false;
         for (const id in players) {
             const player = players[id];
-            if (!player.isAI && !player.isDead && isCollidingWithPlayer(x, y, player)) {
+            if (!player.isAI && !player.isDead && isCollidingWithPlayer(x, y, player, 0)) {
                 laserEnd = { x, y }; // Stop at the player
-                if (isActive) {
-                    console.log("hit")
+                if (isActive && tank.laserDuration % 5 == 0) { // Damage ticks every 5 frames
+                    if (lobby.mode !== 'lobby' || player.isAI) // No player damage in lobby
+
+                        // Apply damage to the player
+                        if (player.shield) {
+                            player.shield = false; // Remove shield instead of killing
+                        } else {
+                            player.isDead = true;
+                        }
                 }
                 // HIT
+                done = true;
                 break;
             }
         }
+        if (done) {
+            break;
+        }
     }
 
+
+    const dx = 1.3 * Math.cos(tank.turretAngle) * (PLAYER_SIZE + BULLET_SIZE) + AI_TANK_SPEED * Math.cos(tank.angle);
+    const dy = 1.3 * Math.sin(tank.turretAngle) * (PLAYER_SIZE + BULLET_SIZE) + AI_TANK_SPEED * Math.sin(tank.angle);
+
+    const laserX = tank.x + dx;
+    const laserY = tank.y + dy;
+
     lobby.lasers.push({
-        x1: tank.x,
-        y1: tank.y,
+        x1: laserX,
+        y1: laserY,
         x2: laserEnd.x,
         y2: laserEnd.y,
-        color: [255, 0, 0], // Example color for the laser
         isActive: isActive, // Active state of the laser
         duration: 2, // Frames to display laser
     });
