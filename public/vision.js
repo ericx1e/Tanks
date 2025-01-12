@@ -79,7 +79,7 @@ function calculateLimitedVision(playerX, playerY, startAngle, angleRange, level,
 function drawFogOfWar(playerX, playerY, visiblePoints) {
     push()
     // resetMatrix();
-    translate(playerX, playerY, WALL_HEIGHT + 1)
+    translate(playerX, playerY, WALL_HEIGHT - 25 + 1)
 
     // Clear the fog layer
     // fogLayer = createGraphics(width, height);
@@ -87,7 +87,7 @@ function drawFogOfWar(playerX, playerY, visiblePoints) {
     fogLayer.clear();
 
     // Draw fog over the entire map
-    fogLayer.background(0)
+    fogLayer.background(51)
     fogLayer.noStroke();
     fogLayer.blendMode(REMOVE);
     // fogLayer.fill(0); // Semi-transparent black
@@ -113,21 +113,21 @@ function drawFogOfWar(playerX, playerY, visiblePoints) {
 
 function drawSharedFogOfWar(playerX, playerY, sharedVisiblePoints) {
     push();
-    translate(playerX, playerY, WALL_HEIGHT + 1); // Position the fog above the ground
+    translate(playerX, playerY, WALL_HEIGHT - 25 + 1); // Position the fog above the ground
 
     // Clear the fog layer
     fogLayer.blendMode(BLEND);
     fogLayer.clear();
 
     // Draw fog over the entire map
-    fogLayer.background(0);
+    fogLayer.background(51);
     fogLayer.noStroke();
     fogLayer.blendMode(REMOVE);
 
     // Draw the visible areas for all points in the shared vision
     sharedVisiblePoints.forEach(visiblePoints => {
         fogLayer.beginShape();
-        fogLayer.fill(255, 255, 255);
+        fogLayer.fill(51);
 
         visiblePoints.forEach(point => {
             const screenX = point.x - playerX + fogLayer.width / 2;

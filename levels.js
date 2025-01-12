@@ -41,9 +41,11 @@ const campaignLevels = readLevels('./campaignLevels.txt');
 const lobbyLevel = readLevels('./lobbyLevel.txt');
 const arenaLevel = readLevels('./arenaLevel.txt')
 
-function loadLevel(levelNumber, mode, numPlayers) {
+function loadLevel(lobby, levelNumber) {
     let level
-    switch (mode) {
+    let numPlayers = Object.keys(lobby.players).length; // TODO: exclude AI tanks
+
+    switch (lobby.mode) {
         case 'lobby':
             level = lobbyLevel[levelNumber];
             break;
@@ -70,12 +72,13 @@ function loadLevel(levelNumber, mode, numPlayers) {
     const players = {}
     let tankCount = 0;
     let buttonNumber = 0;
-    let buttonTypes = ['Campaign', 'Arena', 'Survival']
+    let buttonTypes = ['Campaign', lobby.friendlyFire ? 'Friendly Fire: ON' : 'Friendly Fire: OFF', 'Arena', 'Survival']
     for (let r = 0; r < level.length; r++) {
         for (let c = 0; c < level[0].length; c++) {
-            const id = tankCount;
+            const id = `AI_${tankCount}`;
             const elem = level[r][c];
             if (elem < 0) {
+                tankCount++;
                 const tier = -elem - 1;
                 const x = c * TILE_SIZE + TILE_SIZE / 2;
                 const y = r * TILE_SIZE + TILE_SIZE / 2;
@@ -85,10 +88,13 @@ function loadLevel(levelNumber, mode, numPlayers) {
                     spawn.y = y;
                 } else if (tier == 25) {
                     // Button tank
-                    players[`AI_${tankCount++}`] = initializeAITank(id, x, y, 'button', buttonTypes[buttonNumber++]);
+                    players[id] = initializeAITank(id, x, y, 'button', buttonTypes[buttonNumber++]);
+                } else if (tier == 24) {
+                    // Chest
+                    players[id] = initializeAITank(id, x, y, 'chest');
                 }
                 else {
-                    players[`AI_${tankCount++}`] = initializeAITank(id, x, y, tier);
+                    players[id] = initializeAITank(id, x, y, tier);
                     // level[r][c] = 0
                 }
             }

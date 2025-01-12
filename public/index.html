@@ -8,6 +8,11 @@
 </head>
 
 <body>
+    <style>
+        body {
+            background-color: rgb(51,51,51)
+        }
+    </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.11.2/p5.min.js"
         integrity="sha512-1YMgn4j8cIL91s14ByDGmHtBU6+F8bWOMcF47S0cRO3QNm8SKPNexy4s3OCim9fABUtO++nJMtcpWbINWjMSzQ=="
         crossorigin="anonymous" referrerpolicy="no-referrer"></script>
@@ -15,6 +20,7 @@
     <script src="/socket.io/socket.io.js"></script>
     <script src="/constants.js"></script>
     <script src="/vision.js"></script>
+    <script src="/drawDrop.js"></script>
     <div id="lobby-controls">
       <input id="player-name" type="text" placeholder="Player">
       <button id="set-name">Set Name</button>
@@ -26,8 +32,8 @@
     <!-- <h2 id="lobby-info">Lobby: N/A</h2> -->
   </div>
     <script>
-        // const socket = io.connect('localhost:3000');
-        const socket = io.connect('https://multiplayer-tanks-3fa3c942a132.herokuapp.com/');
+        const socket = io.connect('localhost:3000');
+        // const socket = io.connect('https://multiplayer-tanks-3fa3c942a132.herokuapp.com/');
 
         document.getElementById('create-lobby').addEventListener('click', () => {
           socket.emit('createLobby');

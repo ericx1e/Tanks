@@ -10,7 +10,7 @@ function setIO(ioInstance) {
 
 // Initialize AI tanks
 
-const colorList = [[100, 100, 100], [200, 100, 100], [200, 200, 100], [100, 200, 100], [200, 100, 200], [50, 150, 220]]
+const colorList = [[100, 100, 100], [200, 100, 100], [200, 200, 100], [100, 200, 100], [200, 100, 200], [50, 150, 220], [200, 100, 50]]
 
 function initializeAITank(id, x, y, tier, buttonType) {
     let tank = {
@@ -45,12 +45,22 @@ function initializeAITank(id, x, y, tier, buttonType) {
             laserWidth: PLAYER_SIZE / 2, // Laser width
         }
     }
+    if (tier == 6) {
+        tank.buffs = {
+            shield: 1
+        }
+    }
 
     tank.color = colorList[tank.tier]
 
     if (tier === 'button') {
         tank.color = [200, 200, 200]
         tank.name = buttonType
+    }
+
+    if (tier === 'chest') {
+        tank.color = [180, 100, 50]
+        // tank.name = 'Open'
     }
 
     return tank
@@ -86,7 +96,7 @@ function updateAITanks(lobby, lobbyCode, players, level, bullets) {
     let allDead = true;
     for (let id in players) {
         const tank = players[id];
-        if (tank.isAI && !tank.isDead) {
+        if (tank.isAI && !tank.isDead && tank.tier !== 'chest') {
             allDead = false;
             updateAITank(lobby, lobbyCode, tank, level, players, bullets);
         }
@@ -118,7 +128,7 @@ function updateAITank(lobby, lobbyCode, tank, level, players, bullets) {
             // shootingRange = PLAYER_SIZE * 12;
             speed = 1.5 * AI_TANK_SPEED;
             // tank.shotsLeft = 2
-            fireCooldown = 130
+            fireCooldown = 130;
             break;
         case 4:
             speed = 1.5 * AI_TANK_SPEED;
@@ -130,15 +140,29 @@ function updateAITank(lobby, lobbyCode, tank, level, players, bullets) {
             shootingRange = PLAYER_SIZE * 40;
             fireCooldown = 200;
             break;
+        case 6:
+            // shootingRange = PLAYER_SIZE * 12;
+            speed = 1.5 * AI_TANK_SPEED;
+            // tank.shotsLeft = 2
+            fireCooldown = 130;
+            break;
         case 'button':
             speed = 0;
             shootingRange = 0;
             fireCooldown = 1000000;
             break;
+        case 'chest':
+            speed = 0;
+            shootingRange = 0;
+            fireCooldown = 1000000;
+            turretSpeed = 0;
+            return;
+            break;
     }
 
     // Initialize fire cooldown
     if (!tank.fireCooldown) {
+        // tank.fireCooldown = fireCooldown / 2;
         tank.fireCooldown = 0;
     }
 
@@ -241,51 +265,65 @@ function handleAITurret(lobby, lobbyCode, tank, level, players, bullets, shootin
         // const distance = Math.sqrt(dx * dx + dy * dy);
 
         // if (!detectBotInPath(tank.x, tank.y, tank.turretAngle, distance, players, tank.id)) {
-        if (tank.tier === 3) {
-            if (tank.fireCooldown <= 0) {
-                if (tank.shotsLeft == 0) {
-                    tank.shotsLeft = 2; // Start a new burst
+        switch (tank.tier) {
+            case 3:
+                if (tank.fireCooldown <= 0) {
+                    if (tank.shotsLeft == 0) {
+                        tank.shotsLeft = 2; // Start a new burst
+                    }
+
+                    if (!tank.burstTimer || tank.burstTimer <= 0) {
+                        handleBurstFiring(lobbyCode, tank, bullets, level, fireCooldown);
+                    } else {
+                        tank.burstTimer -= 1; // Decrement burst timer
+                    }
+                }
+                break;
+            case 5:
+                if (tank.isFiringLaser) {
+                    // Handle laser duration
+                    tank.laserDuration--;
+                    const isActive = tank.laserDuration < 15;
+                    fireLaser(lobby, tank, players, level, isActive);
+
+                    if (tank.laserDuration <= 0) {
+                        tank.isFiringLaser = false;
+                        tank.fireCooldown = fireCooldown; // Reset the cooldown
+                    }
+                    tank.turretAngle = lerpAngle(tank.turretAngle, playerInSight.angle, 0.05);
+                    tank.turretRotationalVelocity = 0;
+                    return; // Skip other firing logic while laser is active
                 }
 
-                if (!tank.burstTimer || tank.burstTimer <= 0) {
-                    handleBurstFiring(lobbyCode, tank, bullets, level, fireCooldown);
+                // Charge up for laser if cooldown is ready
+                if (tank.fireCooldown > 0) {
+                    // tank.fireCooldown--;
                 } else {
-                    tank.burstTimer -= 1; // Decrement burst timer
+                    tank.isFiringLaser = true;
+                    tank.laserDuration = 100; // Reset laser duration
+                    // tank.turretAngle = playerInSight.angle;
+                    // return;
                 }
-            }
-        } else if (tank.tier === 5) {
-            if (tank.isFiringLaser) {
-                // Handle laser duration
-                tank.laserDuration--;
-                const isActive = tank.laserDuration < 15;
-                fireLaser(lobby, tank, players, level, isActive);
-
-                if (tank.laserDuration <= 0) {
-                    tank.isFiringLaser = false;
-                    tank.fireCooldown = fireCooldown; // Reset the cooldown
+                break;
+            case 6:
+                if (tank.fireCooldown <= 0) {
+                    fireBullet(lobbyCode, tank, tank.turretAngle, bullets, level);
+                    fireBullet(lobbyCode, tank, tank.turretAngle - Math.PI / 11, bullets, level);
+                    fireBullet(lobbyCode, tank, tank.turretAngle + Math.PI / 11, bullets, level);
+                    tank.fireCooldown = fireCooldown; // Reset cooldown
                 }
-                tank.turretAngle = lerpAngle(tank.turretAngle, playerInSight.angle, 0.05);
-                tank.turretRotationalVelocity = 0;
-                return; // Skip other firing logic while laser is active
-            }
-
-            // Charge up for laser if cooldown is ready
-            if (tank.fireCooldown > 0) {
-                // tank.fireCooldown--;
-            } else {
-                tank.isFiringLaser = true;
-                tank.laserDuration = 100; // Reset laser duration
-                // tank.turretAngle = playerInSight.angle;
-                // return;
-            }
-        } else if (tank.fireCooldown <= 0) {
-            fireBullet(lobbyCode, tank, bullets, level); // Single shot for other tiers
-            tank.fireCooldown = fireCooldown; // Reset cooldown
+                break;
+            default:
+                if (tank.fireCooldown <= 0) {
+                    fireBullet(lobbyCode, tank, tank.turretAngle, bullets, level); // Single shot for other tiers
+                    tank.fireCooldown = fireCooldown; // Reset cooldown
+                }
+                break;
         }
         tank.turretAngle = lerpAngle(tank.turretAngle, playerInSight.angle, 0.1);
         tank.turretRotationalVelocity = 0;
     } else {
-        // Rotate turret randomly if no player is in sight
+        // Rotate turret randomly if no player is in sight)
         tank.fireCooldown = fireCooldown / 2
         tank.turretAngle += tank.turretRotationalVelocity;
         tank.turnTimer -= 1;
@@ -306,13 +344,15 @@ function handleAITurret(lobby, lobbyCode, tank, level, players, bullets, shootin
     // Decrease cooldown timer
     if (tank.fireCooldown > 0) {
         tank.fireCooldown -= 1;
+        if (tank.tier == 4) {
+        }
     }
 }
 
-function fireBullet(lobbyCode, tank, bullets, level) {
+function fireBullet(lobbyCode, tank, angle, bullets, level) {
     player = tank
-    const dx = 1.3 * Math.cos(player.turretAngle) * (PLAYER_SIZE + BULLET_SIZE) + AI_TANK_SPEED * Math.cos(player.angle);
-    const dy = 1.3 * Math.sin(player.turretAngle) * (PLAYER_SIZE + BULLET_SIZE) + AI_TANK_SPEED * Math.sin(player.angle);
+    const dx = 1.3 * Math.cos(angle) * (PLAYER_SIZE + BULLET_SIZE) + AI_TANK_SPEED * Math.cos(player.angle);
+    const dy = 1.3 * Math.sin(angle) * (PLAYER_SIZE + BULLET_SIZE) + AI_TANK_SPEED * Math.sin(player.angle);
 
     const bulletX = player.x + dx;
     const bulletY = player.y + dy;
@@ -339,22 +379,10 @@ function fireBullet(lobbyCode, tank, bullets, level) {
                 owner: player.id,
                 x: bulletX,
                 y: bulletY,
-                angle: player.turretAngle,
+                angle: angle,
                 speed: 1.7 * BULLET_SPEED,
                 bounces: 0
             }
-            break;
-        case 3:
-            newBullet = {
-                id: bullets.length,
-                owner: player.id,
-                x: bulletX,
-                y: bulletY,
-                angle: player.turretAngle,
-                speed: BULLET_SPEED,
-                bounces: 1
-            }
-            // Fire 3 shots rapidly
             break;
         default:
             newBullet = {
@@ -362,7 +390,7 @@ function fireBullet(lobbyCode, tank, bullets, level) {
                 owner: player.id,
                 x: bulletX,
                 y: bulletY,
-                angle: player.turretAngle,
+                angle: angle,
                 speed: BULLET_SPEED,
                 bounces: 1
             }
@@ -422,8 +450,8 @@ function fireLaser(lobby, tank, players, level, isActive) {
     }
 
 
-    const dx = 1.3 * Math.cos(tank.turretAngle) * (PLAYER_SIZE + BULLET_SIZE) + AI_TANK_SPEED * Math.cos(tank.angle);
-    const dy = 1.3 * Math.sin(tank.turretAngle) * (PLAYER_SIZE + BULLET_SIZE) + AI_TANK_SPEED * Math.sin(tank.angle);
+    const dx = 1.3 * Math.cos(tank.turretAngle) * (PLAYER_SIZE + BULLET_SIZE) + 0.5 * AI_TANK_SPEED * Math.cos(tank.angle);
+    const dy = 1.3 * Math.sin(tank.turretAngle) * (PLAYER_SIZE + BULLET_SIZE) + 0.5 * AI_TANK_SPEED * Math.sin(tank.angle);
 
     const laserX = tank.x + dx;
     const laserY = tank.y + dy;
@@ -451,8 +479,7 @@ function fireLaser(lobby, tank, players, level, isActive) {
 // Tier 3 tank-specific logic
 function handleBurstFiring(lobbyCode, tank, bullets, level, fireCooldown) {
     if (tank.shotsLeft > 0) {
-        // console.log("pew", tank.shotsLeft)
-        fireBullet(lobbyCode, tank, bullets, level);
+        fireBullet(lobbyCode, tank, tank.turretAngle, bullets, level);
         tank.shotsLeft -= 1;
 
         if (tank.shotsLeft > 0) {

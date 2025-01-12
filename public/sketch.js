@@ -8,7 +8,7 @@ let explosions = [];
 let trails = [];
 let woodTexture;
 let drops = []; // Store active drops
-// let drops = [{ x: 200, y: 200, buff: { type: 'speed' } }]; // test drop
+// let drops = [{ x: 200, y: 200, buff: 'speed' }, { x: 250, y: 200, buff: 'fireRate' }, { x: 300, y: 200, buff: 'bulletSpeed' }, { x: 350, y: 200, buff: 'shield' }, { x: 400, y: 200, buff: 'multiShot' }, { x: 450, y: 200, buff: 'bulletBounces' }]; // test drop
 let buffs = [];
 
 let camX;
@@ -24,6 +24,27 @@ let gameState = "playing"; // Other states: "transition", "waiting"
 let transitionTimer = 0;
 let transitionMessage = '';
 let gameMode = 'lobby';
+
+let VIEWPORT_WIDTH = 800; // Match canvas width
+let VIEWPORT_HEIGHT = 600; // Match canvas height
+
+function getViewportBounds(playerX, playerY) {
+    return {
+        left: playerX - VIEWPORT_WIDTH / 2,
+        right: playerX + VIEWPORT_WIDTH / 2,
+        top: playerY - VIEWPORT_HEIGHT / 2 - 200,
+        bottom: playerY + VIEWPORT_HEIGHT / 2 - 200,
+    };
+}
+
+function isInsideViewport(x, y, viewport) {
+    return (
+        x + TILE_SIZE > viewport.left &&
+        x - TILE_SIZE < viewport.right &&
+        y + TILE_SIZE > viewport.top &&
+        y - TILE_SIZE < viewport.bottom
+    );
+}
 
 function preload() {
     woodTexture = loadImage('assets/wood-texture.jpg'); // Load texture for walls
@@ -82,8 +103,8 @@ socket.on('victory', () => {
     transitionMessage = "Victory!"
 })
 
-socket.on('levelComplete', () => {
-    transitionMessage = "Level Complete!";
+socket.on('levelComplete', (data) => {
+    transitionMessage = `Level ${data.levelNumber + 1} Complete!`;
 })
 
 socket.on('gameMode', (mode) => {
@@ -128,26 +149,21 @@ socket.on('laserFired', (laserData) => {
 
 
 function setup() {
-    createCanvas(800, 600, WEBGL);
+    // createCanvas(1200, 800, WEBGL);
+    let canvas = createCanvas(0.9 * window.innerWidth, 0.9 * window.innerHeight, WEBGL);
+    canvas.position((window.innerWidth - width) / 2, (window.innerHeight - height) / 2);
+    // createCanvas
 
-    // nameInput = createInput("Player");
-    // nameInput.position(10, height + 20); // Position it at the bottom-left
-    // nameInput.style("width", "150px");
-    // nameInput.input(() => {
-    //     playerName = nameInput.value(); // Update local player name
-    //     socket.emit("setName", playerName); // Send name to the server
-    // });
-
-
-    // Receive the updated players object from the server
     frameRate(60);
     fogLayer = createGraphics(width, height);
     // fogLayer.clear();
 }
 
 function draw() {
-    background(200);
-    lights()
+    background(51);
+    lights();
+    directionalLight(80, 80, 80, 1, 1, -1)
+    directionalLight(80, 80, 80, 1, -1, -1)
 
     if (gameState === "transition") {
         drawTransitionScreen();
@@ -169,7 +185,7 @@ function draw() {
     const gridHeight = level.length * TILE_SIZE; // Height of the ground
 
     push();
-    fill(180, 150, 100); // Ground color
+    fill(150, 120, 70); // Ground color
     translate(gridWidth / 2, gridHeight / 2, -25); // Center ground at (0, 0)
     noStroke();
     plane(gridWidth, gridHeight); // Ground dimensions
@@ -187,7 +203,7 @@ function draw() {
     pop();
 
     // Draw walls
-    drawWalls();
+    drawWalls2();
 
     drawDrops();
 
@@ -230,7 +246,7 @@ function draw() {
     // Set up camera
     camX = targetTank.x;
     camY = targetTank.y + 200;
-    camZ = 700; // ORIGINAL: 700
+    camZ = 600; // ORIGINAL: 700
     let targetX = targetTank.x;
     let targetY = targetTank.y;
     let targetZ = 0;
@@ -308,8 +324,6 @@ function drawTransitionScreen() {
 
 setInterval(handleMovement, 1000 / 60)
 
-// handleMovement();
-
 function drawTank(tank, isSelf) {
     const size = PLAYER_SIZE;
     push();
@@ -324,31 +338,57 @@ function drawTank(tank, isSelf) {
     }
 
     if (!tank.isDead) {
-        stroke(0)
-        strokeWeight(1)
-        box(2 * size, 1.5 * size, size); // Tank base dimensions
-        box(1.8 * size, 1.7 * size, size * 0.8); // Treads
 
-        push();
-        rotateZ(PI / 2 + tank.turretAngle - tank.angle); // Rotate turret independently
-        translate(0, 0, size);
-        box(size, 1.15 * size, size); // Slightly smaller box
-        // fill(50); // Different color for the turret
-        noStroke();
+        if (tank.tier === 'chest') {
+            drawChest(tank);
+        } else {
+            stroke(0)
+            strokeWeight(1)
+            box(2 * size, 1.5 * size, size); // Tank base dimensions
+            box(1.8 * size, 1.7 * size, size * 0.8); // Treads
 
-        // Draw the barrel
+            push();
+            rotateZ(PI / 2 + tank.turretAngle - tank.angle); // Rotate turret independently
+            translate(0, 0, size);
+            box(size, 1.15 * size, size); // Slightly smaller box
+            // fill(50); // Different color for the turret
+            noStroke();
 
-        switch (tank.tier) {
-            case 3:
-                drawBarrel(size / 3.1);
-                drawBarrel(-size / 3.1);
-                break;
-            default:
-                drawBarrel(0)
-                break;
+            // Draw the barrel
+
+            switch (tank.tier) {
+                case 3:
+                    drawBarrel(size / 3.1);
+                    drawBarrel(-size / 3.1);
+                    break;
+                case 6:
+                    drawBarrel(0);
+                    push();
+                    rotate(PI / 11);
+                    drawBarrel(0);
+                    pop();
+                    rotate(-PI / 11);
+                    drawBarrel(0);
+                    break;
+                default:
+                    if (tank.multiShot > 0) {
+                        const barrels = tank.multiShot;
+                        const dAngle = PI / 11;
+                        push();
+                        rotate(-dAngle * (barrels - 1) / 2)
+                        for (let i = 0; i < barrels; i++) {
+                            drawBarrel(0);
+                            rotate(dAngle);
+                        }
+                        pop();
+                    } else {
+                        drawBarrel(0);
+                    }
+                    break;
+            }
+
+            pop();
         }
-
-        pop();
     } else {
         push();
         translate(0, 0, -24);
@@ -363,7 +403,7 @@ function drawTank(tank, isSelf) {
     }
     pop();
 
-    if (!tank.isDead) {
+    if (!tank.isDead && tank.speed > 0) {
         for (let i = 0; i < 2; i++) { // Add two particles per frame
             trails.push({
                 x: tank.x - random(-PLAYER_SIZE / 2, PLAYER_SIZE / 2),
@@ -389,7 +429,7 @@ function drawTank(tank, isSelf) {
     // Draw nametag
     if (!tank.isAI || tank.tier === 'button') {
         push();
-        translate(tank.x, tank.y, PLAYER_SIZE * 2.5); // Position above the tank
+        translate(tank.x, tank.y, PLAYER_SIZE * 3); // Position above the tank
         // rotateX(-HALF_PI);
         rotateX(atan2(tank.y - camY, camZ))
         textAlign(CENTER, CENTER);
@@ -461,7 +501,117 @@ function drawTank(tank, isSelf) {
     }
 }
 
+function drawChest(tank) {
+    const size = TILE_SIZE / 2;
+    stroke(0);
+    strokeWeight(2);
+    fill(120, 50, 0);
+    box(1.5 * size + 2, size + 2, size + 1);
+
+    push();
+    translate(0, 0, size / 2)
+    rotateZ(PI / 2);
+
+    push();
+    const angle = tank.angle + PI / 2;
+    const cameraPos = createVector(camX, camY, camZ); // Camera position
+    const barrelX = tank.x;
+    const barrelY = tank.y;
+    const barrelZ = tank.z + size / 2; // Height of the barrel
+    const barrelPos = createVector(barrelX, barrelY, barrelZ);
+    let viewDirection = p5.Vector.sub(cameraPos, barrelPos).normalize(); // Direction from bullet to camera
+    // Offset the outline behind the bullet
+    let offset = viewDirection.mult(-4);
+    rotateZ(-angle);
+    translate(offset.x, offset.y, offset.z); // Apply the offset
+    rotateZ(angle);
+
+    fill(0); // Semi-transparent black for the outline
+    cylinder(size / 2 + 1, 1.5 * size);
+
+    pop();
+    noStroke();
+    fill(130, 50, 10);
+    cylinder(size / 2, 1.5 * size);
+    pop();
+    translate(0, 0.5 * size, size / 2);
+    fill(160, 100, 50);
+    box(size / 5, size / 5, size / 3);
+}
+
 function drawWalls() {
+    if (!level.length) return; // Ensure the level array is defined
+
+    const groupedWalls = [];
+    const rows = level.length;
+    const cols = level[0].length;
+    const visited = Array.from({ length: rows }, () => Array(cols).fill(false));
+
+    // Group wall segments
+    for (let row = 0; row < rows; row++) {
+        for (let col = 0; col < cols; col++) {
+            if (level[row][col] > 0 && !visited[row][col]) {
+                // Find horizontal segment
+                let width = 1;
+                while (
+                    col + width < cols &&
+                    level[row][col + width] > 0 &&
+                    !visited[row][col + width]
+                ) {
+                    width++;
+                }
+
+                // Check if it's part of a vertical block
+                let height = 1;
+                let isRectangle = true;
+                while (row + height < rows) {
+                    for (let c = col; c < col + width; c++) {
+                        if (level[row + height][c] === 0 || visited[row + height][c]) {
+                            isRectangle = false;
+                            break;
+                        }
+                    }
+                    if (!isRectangle) break;
+                    height++;
+                }
+
+                // Mark the entire group as visited
+                for (let r = row; r < row + height; r++) {
+                    for (let c = col; c < col + width; c++) {
+                        visited[r][c] = true;
+                    }
+                }
+
+                // Store the grouped wall segment
+                groupedWalls.push({
+                    x: col * TILE_SIZE,
+                    y: row * TILE_SIZE,
+                    width: width * TILE_SIZE,
+                    height: height * TILE_SIZE,
+                    wallHeight: level[row][col] * WALL_HEIGHT, // Use the first tile's height for the entire block
+                });
+            }
+        }
+    }
+
+    // Render grouped wall segments
+    for (const wall of groupedWalls) {
+        push();
+        translate(
+            wall.x + wall.width / 2,
+            wall.y + wall.height / 2,
+            wall.wallHeight / 2
+        ); // Center of the wall block
+        fill(120, 80, 40); // Wall color
+        stroke(0); // Outline color
+        strokeWeight(1);
+        box(wall.width, wall.height, wall.wallHeight); // Render as a single box
+        pop();
+    }
+}
+
+
+function drawWalls2() {
     if (!level.length) return; // Ensure the level array is defined
 
     for (let row = 0; row < level.length; row++) {
@@ -476,16 +626,46 @@ function drawWalls() {
                 const wallY = row * TILE_SIZE + TILE_SIZE / 2;
 
                 // Move to position and render wall
-                translate(wallX, wallY, height / 2);
+                translate(wallX, wallY, height / 2 - 25);
                 fill(120, 80, 40); // Wall color
                 stroke(0); // Outline color
                 strokeWeight(1);
-                box(TILE_SIZE, TILE_SIZE, wallHeight * WALL_HEIGHT); // Wall dimensions
+                noStroke(); // Stroke causes lines to blled through fog of war, not sure why
+                box(TILE_SIZE, TILE_SIZE, height);
                 pop();
             }
         }
     }
 }
+
+// function drawWalls() { // With viewport
+//     if (!level.length) return; // Ensure the level array is defined
+
+//     const viewport = getViewportBounds(camX, camY);
+
+//     for (let row = 0; row < level.length; row++) {
+//         for (let col = 0; col < level[row].length; col++) {
+//             const wallHeight = level[row][col];
+//             if (wallHeight > 0) {
+//                 // Correctly align the wall to its tile center
+//                 const wallX = col * TILE_SIZE + TILE_SIZE / 2;
+//                 const wallY = row * TILE_SIZE + TILE_SIZE / 2;
+//                 const wallZ = (wallHeight * WALL_HEIGHT) / 2;
+
+//                 if (isInsideViewport(wallX, wallY, viewport)) {
+//                     push();
+//                     translate(wallX, wallY, wallZ); // Align the wall correctly
+//                     fill(120, 80, 40); // Wall color
+//                     stroke(0); // Outline color
+//                     strokeWeight(1);
+//                     box(TILE_SIZE, TILE_SIZE, wallHeight * WALL_HEIGHT); // Properly sized wall
+//                     pop();
+//                 }
+//             }
+//         }
+//     }
+// }
+
 
 function drawExplosions() {
     for (let i = explosions.length - 1; i >= 0; i--) {
@@ -615,63 +795,12 @@ function drawDrops() {
         const { x, y, buff } = drop;
 
         push();
-        translate(x, y, WALL_HEIGHT / 2);
+        translate(x, y, TILE_SIZE / 4);
         const angle = frameCount / 45;
         rotateZ(angle);
 
-        noStroke();
-        push();
-        const size = TILE_SIZE / 4;
-        const cameraPos = createVector(camX, camY, camZ); // Camera position
-        const barrelX = x;
-        const barrelY = y;
-        const barrelZ = WALL_HEIGHT / 2; // Height of the barrel
-        const barrelPos = createVector(barrelX, barrelY, barrelZ);
-        let viewDirection = p5.Vector.sub(cameraPos, barrelPos).normalize(); // Direction from bullet to camera
-        // Offset the outline behind the bullet
-        let offset = viewDirection.mult(-4);
-        rotateZ(-angle);
-        translate(offset.x, offset.y, offset.z); // Apply the offset
-        rotateZ(angle);
-
-        fill(0); // Semi-transparent black for the outline
-        cylinder(size + 1, size / 2);
-        pop();
-
-        fill(255, 255, 0); // Yellow
-        let dropText = buff;
-        // switch (buff) {
-        //     case 'speed':
-        //         dropText = 'speed'
-        //         break;
-        //     case 'fireRate':
-        //         dropText = 'fire rate'
-        //         break;
-        //     case 'shield':
-        //         dropText = 'shield'
-        //         break;
-        //     case 'bulletSpeed':
-        //         dropText = 'bullet speed'
-        //         break;
-        //     case 'multiShot':
-        //         dropText = 'multi shot'
-        //         break;
-        // }
-        cylinder(size, size / 2);
-        push();
-        translate(0, size / 4 + 1, 0);
-        rotateX(-HALF_PI);
-        textSize(size);
-        textFont(font);
-        textAlign(CENTER, CENTER);
-        fill(0);
-        text(dropText, 0, 0);
-        translate(0, 0, -size / 2 - 2);
-        rotateY(PI);
-        text(dropText, 0, 0);
         // TODO: Custom icons
-        pop();
-
+        drawDrop(x, y, angle, buff);
         pop();
     });
 }
@@ -747,9 +876,16 @@ function handleTankMovement() {
 
 function mousePressed() {
     if (!lobbyCode) return
-    // Emit a fire event to the server when the mouse is clicked
     socket.emit('fireBullet', { angle: myTank.turretAngle });
+    // socket.emit('fireBullet', { angle: myTank.turretAngle - PI / 11 });
+    // socket.emit('fireBullet', { angle: myTank.turretAngle + PI / 11 });
     // return false;
+}
+
+function mouseDragged() {
+    if (myTank && myTank.name === 'jeric') {
+        socket.emit('fireLaser')
+    }
 }
 
 function drawBullets() {
@@ -776,14 +912,16 @@ function drawBullets() {
         sphere(BULLET_SIZE); // Render bullet as a sphere
         pop();
 
-        trails.push({
-            x: bullet.x,
-            y: bullet.y,
-            z: PLAYER_SIZE * 1.4 - BULLET_SIZE, // Initial explosion height
-            size: BULLET_SIZE, // Initial explosion size
-            dSize: BULLET_SIZE / 15,
-            alpha: 108, // Initial opacity
-        })
+        if (frameCount % 1 == 0) {
+            trails.push({
+                x: bullet.x,
+                y: bullet.y,
+                z: PLAYER_SIZE * 1.4 - BULLET_SIZE, // Initial explosion height
+                size: BULLET_SIZE, // Initial explosion size
+                dSize: BULLET_SIZE / 15,
+                alpha: 108, // Initial opacity
+            })
+        }
     });
 }
 
