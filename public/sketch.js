@@ -421,7 +421,7 @@ function drawTank(tank, isSelf) {
         translate(tank.x, tank.y, PLAYER_SIZE);
         fill(50, 100, 255, 100);
         noStroke();
-        sphere(PLAYER_SIZE * 1.5);
+        sphere(PLAYER_SIZE * 1.6);
         pop()
     }
 
@@ -429,7 +429,7 @@ function drawTank(tank, isSelf) {
     // Draw nametag
     if (!tank.isAI || tank.tier === 'button') {
         push();
-        translate(tank.x, tank.y, PLAYER_SIZE * 3); // Position above the tank
+        translate(tank.x, tank.y, PLAYER_SIZE * 2.5); // Position above the tank
         // rotateX(-HALF_PI);
         rotateX(atan2(tank.y - camY, camZ))
         textAlign(CENTER, CENTER);
@@ -904,8 +904,16 @@ function drawBullets() {
         const offset = viewDirection.mult(-2); // Move slightly behind the bullet
         translate(offset.x, offset.y, offset.z); // Apply the offset
 
-        fill(0); // Semi-transparent black for the outline
+
+        fill(0);
         sphere(BULLET_SIZE + 1); // Slightly larger sphere for the outline
+
+        if (bullet.owner && players[bullet.owner] && players[bullet.owner].isAI) {
+            fill(255, 0, 0, 100);
+            translate(offset.x, offset.y, offset.z); // Red outline for enemy bullets
+            sphere(BULLET_SIZE + 2); // Slightly larger sphere for the outline
+        }
+
         pop();
         // Draw bullet
         fill(150);

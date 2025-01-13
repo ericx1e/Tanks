@@ -56,7 +56,7 @@ function createLevel(lobbyCode, levelNumber) {
     let { players: newPlayers, level, spawn } = loadLevel(lobby, levelNumber)
 
     if (lobby.mode === 'campaign') {
-        for (let i = 0; i < Math.random() * 3 - 1; i++) {
+        for (let i = 0; i < Math.random() * 4 - 1; i++) {
             randomSpawn = getRandomNonWallPosition(level);
             const botId = `AI_${newPlayers.length}`;
             newPlayers[botId] = initializeAITank(botId, randomSpawn.x, randomSpawn.y, 'chest');
@@ -638,7 +638,7 @@ function updateBullets(lobby, lobbyCode) {
                 if (lobby.mode !== 'lobby' || player.isAI) {// No player damage in lobby
                     const owner = lobby.players[bullet.owner];
 
-                    if (!owner || lobby.friendlyFire || (player.isAI || owner.isAI))
+                    if (!owner || lobby.friendlyFire || lobby.mode === 'arena' || (player.isAI || owner.isAI))
                         // Apply damage to the player
                         if (player.shield) {
                             player.shield = false; // Remove shield instead of killing
@@ -655,7 +655,7 @@ function updateBullets(lobby, lobbyCode) {
                 if (lobby.mode === 'survival') {
                     if (player.tier !== 'chest') {
                         lobby.tankKills++;
-                        if (lobby.tankKills % 1 === 0) {
+                        if (lobby.tankKills % 5 === 0) {
                             spawnDrop(lobbyCode, player.x, player.y);
                         }
                     }
@@ -669,7 +669,7 @@ function updateBullets(lobby, lobbyCode) {
                             // player.isDead = true;
                             changeMode(lobbyCode, buttonId);
                             lobby.levelNumber = -1;
-                            // lobby.levelNumber = 11; // Start from level
+                            // lobby.levelNumber = 13; // Start from level
                             startTransition(lobbyCode);
                         }
                         if (buttonId === 'friendly fire: off') {
