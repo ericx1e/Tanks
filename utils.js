@@ -83,16 +83,43 @@ function getRandomNonWallPosition(level) {
     }
 }
 
-function generateOpenMaze(rows, cols, wallChance = 0.4, corridorWidth = 2) {
-    /**
-     * Generate a maze with more open areas and corridors of at least `corridorWidth` tiles wide.
-     */
-    // Initialize the maze with walls
+function getSpreadOutPosition(level, existingPlayers, minDistance) {
+    let randomSpawn;
+    let attempts = 0;
+    const maxAttempts = 100;
+
+    do {
+        randomSpawn = getRandomNonWallPosition(level);
+        const spawnX = randomSpawn.x;
+        const spawnY = randomSpawn.y;
+
+        // Check if this position is sufficiently far from all existing tanks
+        const isFarEnough = Object.values(existingPlayers).every(player => {
+            const dx = player.x - spawnX;
+            const dy = player.y - spawnY;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            return distance >= minDistance;
+        });
+
+        if (isFarEnough) {
+            return randomSpawn; // Valid spawn position found
+        }
+
+        attempts++;
+    } while (attempts < maxAttempts);
+
+    // If a valid position isn't found after maxAttempts, fallback
+    console.warn("Couldn't find a spread-out spawn position. Using fallback.");
+    return randomSpawn;
+}
+
+
+function generateOpenMaze(rows, cols, wallChance = 0.4, corridorWidth = 2, chestChance = 0.1) {
     const maze = Array.from({ length: rows }, () =>
         Array.from({ length: cols }, () => Math.random() < wallChance ? 4 : 0)
     );
 
-    // Ensure corridors are wider by carving out blocks of empty spaces
+    // Ensure corridors are wider
     for (let i = 0; i < rows; i += corridorWidth) {
         for (let j = 0; j < cols; j += corridorWidth) {
             if (Math.random() > wallChance) {
@@ -119,13 +146,90 @@ function generateOpenMaze(rows, cols, wallChance = 0.4, corridorWidth = 2) {
         maze[rows - 1][col] = 4;
     }
 
-    // Add some height variation for the walls
+    // Add height variation for walls
     for (let i = 0; i < rows; i++) {
         for (let j = 0; j < cols; j++) {
             if (maze[i][j] === 4) {
-                // maze[i][j] = Math.floor(Math.random() * 4) + 1; // Wall heights between 1 and 4
-                maze[i][j] = 1
+                maze[i][j] = 1; // Fixed wall height
             }
+        }
+    }
+
+    // Find largest connected open area
+    const visited = Array.from({ length: rows }, () => Array(cols).fill(false));
+    let largestRegion = [];
+    let largestSize = 0;
+
+    function floodFill(x, y) {
+        const queue = [{ x, y }];
+        const region = [];
+        visited[x][y] = true;
+        let size = 0;
+
+        while (queue.length > 0) {
+            const { x: cx, y: cy } = queue.shift();
+            region.push({ x: cx, y: cy });
+            size++;
+
+            const directions = [
+                { dx: 1, dy: 0 },
+                { dx: -1, dy: 0 },
+                { dx: 0, dy: 1 },
+                { dx: 0, dy: -1 },
+            ];
+
+            for (const { dx, dy } of directions) {
+                const nx = cx + dx;
+                const ny = cy + dy;
+
+                if (
+                    nx >= 0 &&
+                    ny >= 0 &&
+                    nx < rows &&
+                    ny < cols &&
+                    maze[nx][ny] === 0 &&
+                    !visited[nx][ny]
+                ) {
+                    queue.push({ x: nx, y: ny });
+                    visited[nx][ny] = true;
+                }
+            }
+        }
+
+        return { size, region };
+    }
+
+    // Find all regions and determine the largest
+    for (let i = 0; i < rows; i++) {
+        for (let j = 0; j < cols; j++) {
+            if (maze[i][j] === 0 && !visited[i][j]) {
+                const { size, region } = floodFill(i, j);
+                if (size > largestSize) {
+                    largestSize = size;
+                    largestRegion = region;
+                }
+            }
+        }
+    }
+
+    // Convert small regions into walls
+    const largestRegionSet = new Set(
+        largestRegion.map(({ x, y }) => `${x},${y}`)
+    );
+
+    for (let i = 0; i < rows; i++) {
+        for (let j = 0; j < cols; j++) {
+            const key = `${i},${j}`;
+            if (maze[i][j] === 0 && !largestRegionSet.has(key)) {
+                maze[i][j] = 1; // Convert disconnected areas to walls
+            }
+        }
+    }
+
+    // Spawn chests in the largest region
+    for (const { x, y } of largestRegion) {
+        if (Math.random() < chestChance) {
+            maze[x][y] = -25; // Mark the position of the chest
         }
     }
 
@@ -138,5 +242,6 @@ module.exports = {
     isWall,
     lerpAngle,
     getRandomNonWallPosition,
+    getSpreadOutPosition,
     generateOpenMaze,
 };

@@ -8,7 +8,7 @@ const server = http.createServer(app);
 
 const { initializeAITank, updateAITanks, setIO } = require('./bots.js');
 const { TILE_SIZE, BULLET_SIZE, BULLET_SPEED, PLAYER_SIZE, MAX_SPEED, ACCELERATION, FRICTION } = require('./public/constants.js');
-const { isCollidingWithWall, isCollidingWithPlayer, isWall, lerpAngle, getRandomNonWallPosition } = require('./utils.js');
+const { isCollidingWithWall, isCollidingWithPlayer, isWall, lerpAngle, getRandomNonWallPosition, getSpreadOutPosition } = require('./utils.js');
 const { loadLevel, getNumLevels } = require('./levels.js');
 
 app.use(cors({ origin: true }));
@@ -55,14 +55,6 @@ function createLevel(lobbyCode, levelNumber) {
 
     let { players: newPlayers, level, spawn } = loadLevel(lobby, levelNumber)
 
-    if (lobby.mode === 'campaign') {
-        for (let i = 0; i < Math.random() * 4 - 1; i++) {
-            randomSpawn = getRandomNonWallPosition(level);
-            const botId = `AI_${newPlayers.length}`;
-            newPlayers[botId] = initializeAITank(botId, randomSpawn.x, randomSpawn.y, 'chest');
-        }
-    }
-
     // Object.assign(newPlayers, lobby.players)
     // console.log(newPlayers)
 
@@ -77,7 +69,7 @@ function createLevel(lobbyCode, levelNumber) {
             let spawnY = spawn.y;
 
             if (lobby.mode === 'arena' || lobby.mode === 'survival') {
-                randomSpawn = getRandomNonWallPosition(level);
+                randomSpawn = getSpreadOutPosition(level, newPlayers, 12 * TILE_SIZE);
                 spawnX = randomSpawn.x;
                 spawnY = randomSpawn.y;
             }
@@ -85,10 +77,14 @@ function createLevel(lobbyCode, levelNumber) {
             player.x = spawnX;
             player.y = spawnY;
             newPlayers[id] = player;
+        }
+    }
 
-            // Reset buffs
-            // if (lobby.mode == 'survival') {
-            // }
+    if (lobby.mode === 'campaign') {
+        for (let i = 0; i < Math.random() * 4 - 1; i++) {
+            randomSpawn = getRandomNonWallPosition(level);
+            const botId = `AI_${Object.keys(newPlayers).length}`;
+            newPlayers[botId] = initializeAITank(botId, randomSpawn.x, randomSpawn.y, 'chest');
         }
     }
 
@@ -774,10 +770,18 @@ function updatePlayerStats(lobby, player) {
     player.bulletBounces = 0;
 
     switch (lobby.mode) {
+        case 'campaign':
+            player.visionDistance = 5 * TILE_SIZE
+            break;
         case 'survival':
+            player.visionDistance = 5 * TILE_SIZE
             player.max_speed = 0.7 * MAX_SPEED;
             break;
+        case 'arena':
+            player.visionDistance = 7 * TILE_SIZE
+            break;
         default:
+            player.visionDistance = 100 * TILE_SIZE
             player.max_speed = MAX_SPEED;
             player.maxBullets = 6;
             player.bulletBounces = 1;
@@ -840,7 +844,7 @@ function spawnSurvivalBots(lobbyCode, n) {
         let done = true
         for (const playerId in lobby.players) {
             const player = lobby.players[playerId];
-            if (!player.isAI && isCollidingWithPlayer(x, y, player, TILE_SIZE * 3)) {
+            if (!player.isAI && isCollidingWithPlayer(x, y, player, TILE_SIZE * 7)) {
                 done = false;
                 break;
             }
@@ -965,6 +969,15 @@ setInterval(() => {
 
         io.to(lobbyCode).emit('updateLasers', lobby.lasers);
 
+
+        for (const playerId in lobby.players) {
+            const player = lobby.players[playerId]
+            if (!player.isAI) {
+                handlePlayerPickup(lobbyCode, playerId);
+            }
+            updatePlayerStats(lobby, player);
+        }
+
         if (lobby.mode == 'lobby' || lobby.mode == 'campaign') {
             if (lobby.level && updateAITanks(lobby, lobbyCode, lobby.players, lobby.level, lobby.bullets)) {
                 // createLevel(lobbyCode, lobby.levelNumber + 1);
@@ -979,15 +992,6 @@ setInterval(() => {
                 startTransition(lobbyCode);
                 // lobby.gameState = "transition";
             }
-
-            for (const playerId in lobby.players) {
-                const player = lobby.players[playerId]
-                if (!player.isAI) {
-                    handlePlayerPickup(lobbyCode, playerId);
-                }
-                updatePlayerStats(lobby, player);
-            }
-
         }
 
         if (lobby.mode == 'survival') {

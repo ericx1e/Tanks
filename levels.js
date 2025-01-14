@@ -43,7 +43,7 @@ const arenaLevel = readLevels('./arenaLevel.txt')
 
 function loadLevel(lobby, levelNumber) {
     let level
-    let numPlayers = Object.keys(lobby.players).length; // TODO: exclude AI tanks
+    const numPlayers = Object.values(lobby.players).reduce((count, player) => count + (!player.isAI ? 1 : 0), 0);
 
     switch (lobby.mode) {
         case 'lobby':
@@ -55,12 +55,13 @@ function loadLevel(lobby, levelNumber) {
             break;
         case 'arena':
             // level = arenaLevel[levelNumber];
-            let size = Math.floor(Math.sqrt(numPlayers))
-            level = generateOpenMaze(10 * size, 10 * size)
+            let size = Math.sqrt(numPlayers)
+            level = generateOpenMaze(Math.floor(30 * size), Math.floor(30 * size), 0.4, 2, 0.02);
+
             break;
         case 'survival':
-            let size1 = Math.floor(Math.sqrt(numPlayers));
-            level = generateOpenMaze(15 * size1, 15 * size1);
+            let size1 = Math.sqrt(numPlayers);
+            level = generateOpenMaze(Math.floor(30 * size1), Math.floor(30 * size1), 0.4, 2, 0.02);
             break;
     }
 
@@ -77,11 +78,10 @@ function loadLevel(lobby, levelNumber) {
         for (let c = 0; c < level[0].length; c++) {
             const id = `AI_${tankCount}`;
             const elem = level[r][c];
+            const x = c * TILE_SIZE + TILE_SIZE / 2;
+            const y = r * TILE_SIZE + TILE_SIZE / 2;
             if (elem < 0) {
-                tankCount++;
                 const tier = -elem - 1;
-                const x = c * TILE_SIZE + TILE_SIZE / 2;
-                const y = r * TILE_SIZE + TILE_SIZE / 2;
                 if (tier == 18) { // S
                     // Special spawn marker, not tank
                     spawn.x = x;
@@ -97,6 +97,11 @@ function loadLevel(lobby, levelNumber) {
                     players[id] = initializeAITank(id, x, y, tier);
                     // level[r][c] = 0
                 }
+                tankCount++;
+            }
+            if (elem === 'C') {
+                players[id] = initializeAITank(id, x, y, 'chest');
+                tankCount++;
             }
         }
     }

@@ -47,8 +47,8 @@ function isInsideViewport(x, y, viewport) {
 }
 
 function preload() {
-    woodTexture = loadImage('assets/wood-texture.jpg'); // Load texture for walls
-    font = loadFont('assets/Roboto-Regular.ttf'); // Load the font
+    woodTexture = loadImage('public/assets/wood-texture.jpg'); // Load texture for walls
+    font = loadFont('public/assets/Roboto-Regular.ttf'); // Load the font
 }
 
 socket.on('lobbyCreated', (data) => {
@@ -284,15 +284,15 @@ function draw() {
         // const visiblePoints = calculateVision(targetTank.x, targetTank.y, level, maxDistance, resolution);
         if (gameMode == 'lobby') {
             const maxDistance = TILE_SIZE * 100;
-            const visiblePoints = calculateVision(targetTank.x, targetTank.y, level, maxDistance, resolution);
+            const visiblePoints = calculateVision(targetTank.x, targetTank.y, level, targetTank.visionDistance, resolution);
             drawFogOfWar(targetTank.x, targetTank.y, visiblePoints);
         } else if (gameMode == 'arena') {
             const maxDistance = TILE_SIZE * 7;
-            const visiblePoints = calculateVision(targetTank.x, targetTank.y, level, maxDistance, resolution);
+            const visiblePoints = calculateVision(targetTank.x, targetTank.y, level, targetTank.visionDistance, resolution);
             drawFogOfWar(targetTank.x, targetTank.y, visiblePoints);
         } else {
             const maxDistance = TILE_SIZE * 5;
-            const visiblePoints = calculateSharedVision(players, level, maxDistance, resolution);
+            const visiblePoints = calculateSharedVision(players, level, resolution);
             drawSharedFogOfWar(targetTank.x, targetTank.y, visiblePoints);
         }
         // const visiblePoints = calculateLimitedVision(myTank.x, myTank.y, myTank.turretAngle, Math.PI / 4, level, maxDistance, resolution);

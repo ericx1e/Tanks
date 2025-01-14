@@ -39,13 +39,13 @@ function castRay(playerX, playerY, angle, maxDistance, level) {
     return { x, y };
 }
 
-function calculateSharedVision(players, level, maxDistance, resolution) {
+function calculateSharedVision(players, level, resolution) {
     const sharedVision = [];
 
     for (let id in players) {
         const tank = players[id];
         if (!tank.isDead && !tank.isAI) { // Only consider living allied tanks
-            const tankVision = calculateVision(tank.x, tank.y, level, maxDistance, resolution);
+            const tankVision = calculateVision(tank.x, tank.y, level, tank.visionDistance, resolution);
             sharedVision.push(tankVision);
         }
     }

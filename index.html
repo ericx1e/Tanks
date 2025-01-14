@@ -18,9 +18,9 @@
         crossorigin="anonymous" referrerpolicy="no-referrer"></script>
     <!-- <script src="p5.js"></script> -->
     <script src="/socket.io/socket.io.js"></script>
-    <script src="/constants.js"></script>
-    <script src="/vision.js"></script>
-    <script src="/drawDrop.js"></script>
+    <script src="public/constants.js"></script>
+    <script src="public/vision.js"></script>
+    <script src="public/drawDrop.js"></script>
     <div id="lobby-controls">
       <input id="player-name" type="text" placeholder="Player">
       <button id="set-name">Set Name</button>
@@ -32,8 +32,8 @@
     <!-- <h2 id="lobby-info">Lobby: N/A</h2> -->
   </div>
     <script>
-        // const socket = io.connect('localhost:3000');
-        const socket = io.connect('https://multiplayer-tanks-3fa3c942a132.herokuapp.com/');
+        const socket = io.connect('localhost:3000');
+        // const socket = io.connect('https://multiplayer-tanks-3fa3c942a132.herokuapp.com/');
 
         document.getElementById('create-lobby').addEventListener('click', () => {
           socket.emit('createLobby');
@@ -62,7 +62,7 @@
         });
 
     </script>
-    <script src="/sketch.js" type="text/javascript"></script>
+    <script src="public/sketch.js" type="text/javascript"></script>
 </body>
 
 </html>
