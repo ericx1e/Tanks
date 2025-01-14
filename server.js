@@ -772,6 +772,9 @@ function updatePlayerStats(lobby, player) {
     switch (lobby.mode) {
         case 'campaign':
             player.visionDistance = 5 * TILE_SIZE
+            player.max_speed = MAX_SPEED;
+            player.maxBullets = 6;
+            player.bulletBounces = 1;
             break;
         case 'survival':
             player.visionDistance = 5 * TILE_SIZE
@@ -784,7 +787,7 @@ function updatePlayerStats(lobby, player) {
             player.visionDistance = 100 * TILE_SIZE
             player.max_speed = MAX_SPEED;
             player.maxBullets = 6;
-            player.bulletBounces = 1;
+            // player.bulletBounces = 0;
             break;
     }
 
