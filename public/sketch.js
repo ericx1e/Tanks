@@ -47,8 +47,8 @@ function isInsideViewport(x, y, viewport) {
 }
 
 function preload() {
-    woodTexture = loadImage('public/assets/wood-texture.jpg'); // Load texture for walls
-    font = loadFont('public/assets/Roboto-Regular.ttf'); // Load the font
+    // woodTexture = loadImage('public/assets/wood-texture.jpg'); // Load texture for walls
+    font = loadFont('/assets/Roboto-Regular.ttf'); // Load the font
 }
 
 socket.on('lobbyCreated', (data) => {
