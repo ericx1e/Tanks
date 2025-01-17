@@ -28,6 +28,9 @@ let gameMode = 'lobby';
 let VIEWPORT_WIDTH = 800; // Match canvas width
 let VIEWPORT_HEIGHT = 600; // Match canvas height
 
+let ping = 0;
+let pingHistory = [];
+
 function getViewportBounds(playerX, playerY) {
     return {
         left: playerX - VIEWPORT_WIDTH / 2,
@@ -50,6 +53,21 @@ function preload() {
     // woodTexture = loadImage('public/assets/wood-texture.jpg'); // Load texture for walls
     font = loadFont('/assets/Roboto-Regular.ttf'); // Load the font
 }
+
+function updatePing() {
+    const startTime = Date.now();
+    socket.emit('pingCheck', startTime);
+}
+
+socket.on('pingResponse', (startTime) => {
+    const roundTripTime = Date.now() - startTime;
+    pingHistory.push(roundTripTime);
+    if (pingHistory.length > 10) pingHistory.shift(); // Keep the last 10 pings
+    ping = pingHistory.reduce((a, b) => a + b, 0) / pingHistory.length; // Calculate average
+});
+
+// Update ping every 2 seconds
+setInterval(updatePing, 2000);
 
 socket.on('lobbyCreated', (data) => {
     console.log(`Lobby created! Code: ${data.lobbyCode}`);
@@ -299,7 +317,20 @@ function draw() {
 
     }
 
-    // drawUI();
+    push(); // Save current transformations
+    resetMatrix(); // Reset transformations to screen space
+    // translate(0, 0, 300)
+
+    camera(0, 0, 630, 0, 0, 0)
+    // console.log(mouseX)
+    // Draw the ping in the top-left corner of the screen
+    fill(255); // Set text color
+    textSize(20); // Set text size
+    textAlign(LEFT, TOP); // Align text to the top-left
+    textFont(font);
+    text(`Ping: ${Math.round(ping)} ms`, -width / 2 + width / 7, -height / 2 + width / 11); // Display rounded ping
+
+    pop(); // Restore transformations
 }
 
 function triggerScreenShake(intensity, duration) {
@@ -370,6 +401,16 @@ function drawTank(tank, isSelf) {
                     rotate(-PI / 11);
                     drawBarrel(0);
                     break;
+                case 7:
+                    push();
+                    translate(0, 0, -size / 3.1);
+                    drawBarrel(size / 3.1);
+                    drawBarrel(-size / 3.1);
+                    translate(0, 0, 2 * size / 3.1);
+                    drawBarrel(size / 3.1);
+                    drawBarrel(-size / 3.1);
+                    pop();
+                    break;
                 default:
                     if (tank.multiShot > 0) {
                         const barrels = tank.multiShot;
@@ -416,16 +457,6 @@ function drawTank(tank, isSelf) {
         }
     }
 
-    if (tank.shield) {
-        push();
-        translate(tank.x, tank.y, PLAYER_SIZE);
-        fill(50, 100, 255, 100);
-        noStroke();
-        sphere(PLAYER_SIZE * 1.6);
-        pop()
-    }
-
-
     // Draw nametag
     if (!tank.isAI || tank.tier === 'button') {
         push();
@@ -442,6 +473,21 @@ function drawTank(tank, isSelf) {
         pop();
     }
 
+    if (tank.shield) {
+        push();
+        translate(tank.x, tank.y, PLAYER_SIZE);
+        fill(50, 100, 255, 100);
+        noStroke();
+        sphere(PLAYER_SIZE * 1.6);
+
+        rotateX(atan2(tank.y - camY, camZ))
+        textAlign(CENTER, CENTER);
+        textSize(16);
+        if (tank.buffs && tank.buffs.shield) {
+            text(tank.buffs.shield + 1, PLAYER_SIZE * 1.6 + 20, 0)
+        }
+        pop()
+    }
 
     function drawBarrel(x) {
         push();

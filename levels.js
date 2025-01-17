@@ -91,7 +91,7 @@ function loadLevel(lobby, levelNumber) {
                     players[id] = initializeAITank(id, x, y, 'button', buttonTypes[buttonNumber++]);
                 } else if (tier == 24) {
                     // Chest
-                    players[id] = initializeAITank(id, x, y, 'chest');
+                    players['c' + id] = initializeAITank(id, x, y, 'chest');
                 }
                 else {
                     players[id] = initializeAITank(id, x, y, tier);

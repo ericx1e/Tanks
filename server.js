@@ -38,7 +38,7 @@ function createLobby() {
         lasers: [],
         spawn: {},
         mode: 'lobby',
-        friendlyFire: true,
+        friendlyFire: false,
     };
     return lobbyCode;
 }
@@ -70,6 +70,7 @@ function createLevel(lobbyCode, levelNumber) {
 
             if (lobby.mode === 'arena' || lobby.mode === 'survival') {
                 randomSpawn = getSpreadOutPosition(level, newPlayers, 12 * TILE_SIZE);
+                // randomSpawn = getRandomNonWallPosition(level);
                 spawnX = randomSpawn.x;
                 spawnY = randomSpawn.y;
             }
@@ -193,6 +194,12 @@ io.on('connection', (socket) => {
 
         return player;
     }
+
+    io.on('connection', (socket) => {
+        socket.on('pingCheck', (startTime) => {
+            socket.emit('pingResponse', startTime);
+        });
+    });
 
     socket.on('createLobby', () => {
         if (socketToLobby[socket.id]) {
@@ -838,12 +845,14 @@ function updatePlayerStats(lobby, player) {
 
 function spawnSurvivalBots(lobbyCode, n) {
     const lobby = lobbies[lobbyCode];
-    if (!lobby || lobby.mode !== 'survival') return;
+    console.log(lobby.gameState)
+    if (!lobby || lobby.mode !== 'survival' || lobby.gameState === "transition") return;
 
     const level = lobby.level;
 
     while (true) {
         ({ x, y } = getRandomNonWallPosition(level))
+        console.log(x, y, level)
         let done = true
         for (const playerId in lobby.players) {
             const player = lobby.players[playerId];

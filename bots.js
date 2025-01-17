@@ -10,7 +10,7 @@ function setIO(ioInstance) {
 
 // Initialize AI tanks
 
-const colorList = [[100, 100, 100], [200, 100, 100], [200, 200, 100], [100, 200, 100], [200, 100, 200], [50, 150, 220], [200, 100, 50]]
+const colorList = [[100, 100, 100], [200, 100, 100], [200, 200, 100], [100, 200, 100], [200, 100, 200], [50, 150, 220], [200, 100, 50], [150, 100, 100]]
 
 function initializeAITank(id, x, y, tier, buttonType) {
     let tank = {
@@ -128,12 +128,12 @@ function updateAITank(lobby, lobbyCode, tank, level, players, bullets) {
             // shootingRange = PLAYER_SIZE * 12;
             speed = 1.5 * AI_TANK_SPEED;
             // tank.shotsLeft = 2
-            fireCooldown = 130;
+            fireCooldown = 120;
             break;
         case 4:
             speed = 1.5 * AI_TANK_SPEED;
             fireCooldown = 70;
-            turretSpeed = 0.24;
+            turretSpeed = 0.30;
             break;
         case 5:
             speed = 0.5 * AI_TANK_SPEED;
@@ -144,7 +144,14 @@ function updateAITank(lobby, lobbyCode, tank, level, players, bullets) {
             // shootingRange = PLAYER_SIZE * 12;
             speed = 1.5 * AI_TANK_SPEED;
             // tank.shotsLeft = 2
-            fireCooldown = 130;
+            fireCooldown = 120;
+            turretSpeed = 0.30;
+            break;
+        case 7:
+            shootingRange = PLAYER_SIZE * 20;
+            speed = 0.75 * AI_TANK_SPEED;
+            fireCooldown = 30;
+            turretSpeed = 0.08;
             break;
         case 'button':
             speed = 0;
