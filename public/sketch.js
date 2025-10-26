@@ -168,7 +168,7 @@ socket.on('laserFired', (laserData) => {
 
 function setup() {
     // createCanvas(1200, 800, WEBGL);
-    let canvas = createCanvas(0.9 * window.innerWidth, 0.9 * window.innerHeight, WEBGL);
+    let canvas = createCanvas(800, 600, WEBGL);
     canvas.position((window.innerWidth - width) / 2, (window.innerHeight - height) / 2);
     // createCanvas
 
