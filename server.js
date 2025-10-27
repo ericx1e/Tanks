@@ -44,7 +44,7 @@ function createLobby() {
 }
 
 function createLevel(lobbyCode, levelNumber) {
-    lobby = lobbies[lobbyCode];
+    const lobby = lobbies[lobbyCode];
     if (!lobby) return;
 
     // for (const [id, player] of Object.entries(lobby.players)) {
@@ -69,7 +69,7 @@ function createLevel(lobbyCode, levelNumber) {
             let spawnY = spawn.y;
 
             if (lobby.mode === 'arena' || lobby.mode === 'survival') {
-                randomSpawn = getSpreadOutPosition(level, newPlayers, 12 * TILE_SIZE);
+                const randomSpawn = getSpreadOutPosition(level, newPlayers, 12 * TILE_SIZE);
                 // randomSpawn = getRandomNonWallPosition(level);
                 spawnX = randomSpawn.x;
                 spawnY = randomSpawn.y;
@@ -112,8 +112,8 @@ function createLevel(lobbyCode, levelNumber) {
 
 function startTransition(lobbyCode) {
     const lobby = lobbies[lobbyCode];
-    lobby.gameState = "transition";
     if (!lobby) return;
+    lobby.gameState = "transition";
 
     transitionTimers[lobbyCode] = 3; // Duration in seconds
     // io.to(lobbyCode).emit('transitionTimer', { secondsLeft: transitionTimers[lobbyCode] }); // Instant transition
@@ -195,16 +195,44 @@ io.on('connection', (socket) => {
         return player;
     }
 
-    io.on('connection', (socket) => {
-        socket.on('pingCheck', (startTime) => {
-            socket.emit('pingResponse', startTime);
-        });
+    function sanitizeName(raw) {
+        if (typeof raw !== 'string') return 'Player';
+        // keep letters, numbers, spaces and basic punctuation; trim and clamp to 16
+        const cleaned = raw.replace(/[^\p{L}\p{N}\s._-]/gu, '').trim().slice(0, 16);
+        return cleaned || 'Player';
+    }
+
+    function setPlayerName(socket, rawName) {
+        const name = sanitizeName(rawName);
+
+        // remember for later player creation
+        socketToNames[socket.id] = name;
+
+        // if already in a lobby and player exists, update & broadcast
+        const lobbyCode = socketToLobby[socket.id];
+        if (lobbyCode) {
+            const lobby = lobbies[lobbyCode];
+            if (lobby && lobby.players && lobby.players[socket.id]) {
+            lobby.players[socket.id].name = name;
+            io.to(lobbyCode).emit('updatePlayers', lobby.players);
+            }
+        }
+
+        return name; // handy if you want the canonical value back
+    }
+
+
+        
+    socket.on('pingCheck', (startTime) => {
+        socket.emit('pingResponse', startTime);
     });
 
-    socket.on('createLobby', () => {
+    socket.on('createLobby', (data = {}) => {
         if (socketToLobby[socket.id]) {
             return;
         }
+        const name = data.name?.trim() || 'Player';
+        setPlayerName(socket, name);
 
         const lobbyCode = createLobby();
         console.log("created lobby", lobbyCode);
@@ -220,10 +248,13 @@ io.on('connection', (socket) => {
         lobby.players[socket.id] = createPlayer();
     });
 
-    socket.on('joinLobby', (lobbyCode) => {
+    socket.on('joinLobby', (data = {}) => {
         if (socketToLobby[socket.id]) {
             return;
         }
+
+        const { code, name } = data;
+        let lobbyCode = code 
 
         const lobby = lobbies[lobbyCode];
         if (lobby) {
@@ -231,6 +262,7 @@ io.on('connection', (socket) => {
                 socket.emit('error', { message: 'Game in progress' });
                 return;
             }
+            if (name) setPlayerName(socket, name.trim());
             socketToLobby[socket.id] = lobbyCode;
             socket.emit('lobbyJoined', { lobbyCode });
             io.to(lobbyCode).emit('updatePlayers', lobby.players);
@@ -435,8 +467,8 @@ io.on('connection', (socket) => {
                 console.log(`Lobby ${lobbyCode} deleted as it is empty.`);
             }
         }
-        if (socketToNames[socket]) {
-            delete socketToNames[socket]
+        if (socketToNames[socket.id]) {
+            delete socketToNames[socket.id];
         }
     });
 });

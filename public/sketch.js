@@ -188,14 +188,67 @@ function draw() {
         return;
     }
 
+    // Start screen
     if (!level || !level[0] || !lobbyCode) {
+        camera(0, 0, 800, 0, 0, 0);
+        background(10, 12, 18, 240); // soft dark overlay
         textFont(font);
         textAlign(CENTER, CENTER);
-        textSize(width / 20);
-        fill(0);
-        text("Create or Join a Lobby", 0, 0);
-        return
+
+        // Title text
+        textSize(width / 14);
+        fill(240);
+        text("TANK ARENA", 0, -height / 5);
+
+        // Subtitle
+        textSize(width / 35);
+        fill(180);
+        text("Create or Join a Lobby", 0, -height / 10);
+
+        // Instruction stack (chips)
+        const chips = [
+            "W / A / S / D — Move",
+            "Mouse — Aim",
+            "Click — Fire",
+        ];
+
+        const chipW = width * 0.45;
+        const chipH = height / 16;
+        const spacing = chipH * 1.2;
+        const startY = height / 12;
+
+        textSize(width / 45);
+        for (let i = 0; i < chips.length; i++) {
+            const y = startY + i * spacing;
+
+            // shadow + chip background
+            noStroke();
+            fill(20, 24, 32, 180);
+            rectMode(CENTER);
+            rect(0, y, chipW, chipH, 12);
+
+            // border
+            noFill();
+            stroke(110, 168, 255, 80);
+            strokeWeight(2);
+            rect(0, y, chipW, chipH, 12);
+
+            // text
+            noStroke();
+            fill(220);
+            text(chips[i], 0, y);
+        }
+
+        // subtle pulse indicator
+        noStroke();
+        const pulse = 180 + 50 * sin(frameCount * 0.05);
+        fill(110, 168, 255, pulse);
+        textSize(width / 50);
+        text("Enter name and create / join lobby", 0, startY + chips.length * spacing + chipH * 1.2);
+
+        return;
     }
+
 
     // Draw ground
 
@@ -922,6 +975,9 @@ function handleTankMovement() {
 
 function mousePressed() {
     if (!lobbyCode) return
+    if (mouseX < 0 || mouseX > width || mouseY < 0 || mouseY > height) {
+        return;
+    }
     socket.emit('fireBullet', { angle: myTank.turretAngle });
     // socket.emit('fireBullet', { angle: myTank.turretAngle - PI / 11 });
     // socket.emit('fireBullet', { angle: myTank.turretAngle + PI / 11 });
