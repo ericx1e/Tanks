@@ -146,11 +146,11 @@ function drawDrop(x, y, angle, buff) {
         default:
             noStroke();
             push();
-            const cameraPos = createVector(camX, camY, camZ); // Camera position
+            const cameraPos = new p5.Vector(camX, camY, camZ);
             const barrelX = x;
             const barrelY = y;
             const barrelZ = WALL_HEIGHT / 2; // Height of the barrel
-            const barrelPos = createVector(barrelX, barrelY, barrelZ);
+            const barrelPos = new p5.Vector(barrelX, barrelY, barrelZ);
             let viewDirection = p5.Vector.sub(cameraPos, barrelPos).normalize(); // Direction from bullet to camera
             // Offset the outline behind the bullet
             let offset = viewDirection.mult(-4);

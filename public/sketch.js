@@ -11,9 +11,7 @@ let drops = []; // Store active drops
 // let drops = [{ x: 200, y: 200, buff: 'speed' }, { x: 250, y: 200, buff: 'fireRate' }, { x: 300, y: 200, buff: 'bulletSpeed' }, { x: 350, y: 200, buff: 'shield' }, { x: 400, y: 200, buff: 'multiShot' }, { x: 450, y: 200, buff: 'bulletBounces' }]; // test drop
 let buffs = [];
 
-let camX;
-let camY;
-let camZ;
+let camX = 0, camY = 0, camZ = 600;
 
 let shakeIntensity = 0;
 let shakeDuration = 0;
@@ -31,6 +29,12 @@ let VIEWPORT_HEIGHT = 600; // Match canvas height
 let ping = 0;
 let pingHistory = [];
 
+let tracks = [];
+let trackState = {};                // per-tank: { prev:{x,y}, accum:number }
+const TRACK_SPACING = PLAYER_SIZE * 0.8;     // increase for wider spacing
+const TRACK_FADE_FRAMES = 120;
+
+
 function getViewportBounds(playerX, playerY) {
     return {
         left: playerX - VIEWPORT_WIDTH / 2,
@@ -47,11 +51,6 @@ function isInsideViewport(x, y, viewport) {
         y + TILE_SIZE > viewport.top &&
         y - TILE_SIZE < viewport.bottom
     );
-}
-
-function preload() {
-    // woodTexture = loadImage('public/assets/wood-texture.jpg'); // Load texture for walls
-    font = loadFont('/assets/Roboto-Regular.ttf'); // Load the font
 }
 
 function updatePing() {
@@ -102,10 +101,15 @@ socket.on('updateLasers', (serverLasers) => {
 socket.on('updateLevel', (data) => {
     level = data.level; // Store the level received from the server
     levelNumber = data.levelNumber;
+    tracks.length = 0;
+    trackState = {};
 });
 
 socket.on('explosion', (data) => {
-    createExplosion(data.x, data.y, data.z, data.size)
+    createExplosion(data.x, data.y, data.z, data.size, data.color)
+    if (data.size > BULLET_SIZE + 1) {
+        triggerScreenShake(data.size / 10, 5);
+    }
     // explosions.push({
     //     x: data.x,
     //     y: data.y,
@@ -157,25 +161,39 @@ socket.on('laserFired', (laserData) => {
     const { x, y, angle, range, width } = laserData;
 
     // Draw the laser on the canvas
-    ctx.save();
+    // ctx.save();
     ctx.translate(x, y);
     ctx.rotate(angle);
     ctx.fillStyle = 'rgba(255, 0, 0, 0.5)';
     ctx.fillRect(0, -width / 2, range, width);
-    ctx.restore();
+    // ctx.restore();
 });
 
 
-function setup() {
+let font
+let fogLayer
+
+async function setup() {
     // createCanvas(1200, 800, WEBGL);
     let canvas = createCanvas(800, 600, WEBGL);
     canvas.position((window.innerWidth - width) / 2, (window.innerHeight - height) / 2);
-    // createCanvas
+
+
+    try {
+        font = await loadFont('assets/Roboto-Regular.ttf');
+        console.log('Font loaded!');
+    } catch (err) {
+        console.error('Font failed to load:', err);
+        font = null;
+    }
 
     frameRate(60);
     fogLayer = createGraphics(width, height);
     // fogLayer.clear();
 }
+
+let menuAngle = 0; // start screen animation phase
+
 
 function draw() {
     background(51);
@@ -188,63 +206,129 @@ function draw() {
         return;
     }
 
-    // Start screen
+    // Start screen// Start screen
     if (!level || !level[0] || !lobbyCode) {
-        camera(0, 0, 800, 0, 0, 0);
-        background(10, 12, 18, 240); // soft dark overlay
+        // Camera + bg
+        // camera(0, 0, 700, 0, 0, 0);
+        background(10, 12, 18);
+
+        // --- 2D overlay (we won't worry about depth) ---
+        push();
+        resetMatrix();                 // switch to screen space
+        translate(0, height / 16);
+
+        // Subtle grid backdrop
+        push();
+        const gridAlpha = 22;
+        stroke(30, 120, 255, gridAlpha);
+        strokeWeight(1);
+        noFill();
+        const gs = 28;                      // grid spacing
+        const cols = ceil(width / gs);
+        const rows = ceil(height / gs);
+        translate(-width / 2, -height / 2 - 2 * gs);
+        for (let i = 0; i <= cols; i++) {
+            line(i * gs, 0, i * gs, height);
+        }
+        for (let j = 0; j <= rows; j++) {
+            line(0, j * gs, width, j * gs);
+        }
+        pop();
+
+        // Radar center position (slightly above center)
+        translate(0, -40);
+
+        // Concentric pulsing rings
+        noFill();
+        for (let i = 1; i <= 4; i++) {
+            const r = 70 * i;
+            const a = 120 + 60 * sin(frameCount * 0.03 + i * 0.7);
+            stroke(110, 168, 255, a);
+            strokeWeight(2);
+            ellipse(0, 0, r * 2, r * 2, 50);
+
+        }
+
+        // Rotating sweep (soft pie slice)
+        push();
+        const sweepA = menuAngle;
+        const sweepW = PI / 6; // width of the sweep
+        noStroke();
+        const sweepAlpha = 36;
+        fill(110, 168, 255, sweepAlpha);
+        beginShape();
+        vertex(0, 0);
+        // edge 1
+        for (let t = 0; t <= 1; t += 0.2) {
+            const a = sweepA - sweepW / 2 + t * sweepW;
+            const rr = 280;
+            vertex(rr * cos(a), rr * sin(a));
+        }
+        endShape(CLOSE);
+        pop();
+
+        // Orbiting dots
+        noStroke();
+        for (let i = 0; i < 6; i++) {
+            const a = 2.5 * menuAngle + (TWO_PI * i / 6);
+            const rr = 140 + 26 * sqrt(i) * sin(frameCount * 0.02 + i);
+            const x = rr * cos(a);
+            const y = rr * sin(a);
+            // glow
+            fill(255, 240, 180, 80);
+            circle(x, y, 16);
+            // core
+            fill(255, 240, 180, 200);
+            circle(x, y, 6);
+        }
+
+        // Title & UI chips
         textFont(font);
         textAlign(CENTER, CENTER);
 
-        // Title text
-        textSize(width / 14);
+        // Title
         fill(240);
-        text("TANK ARENA", 0, -height / 5);
+        noStroke();
+        textSize(width / 14);
+        text("TANK ARENA", 0, -height / 2 + 90);
 
         // Subtitle
-        textSize(width / 35);
         fill(180);
-        text("Create or Join a Lobby", 0, -height / 10);
+        textSize(width / 35);
+        text("Create or Join a Lobby", 0, -height / 2 + 150);
 
-        // Instruction stack (chips)
-        const chips = [
-            "W / A / S / D — Move",
-            "Mouse — Aim",
-            "Click — Fire",
-        ];
-
+        // Chips
+        const chips = ["W / A / S / D — Move", "Mouse — Aim", "Click — Fire"];
         const chipW = width * 0.45;
         const chipH = height / 16;
         const spacing = chipH * 1.2;
-        const startY = height / 12;
+        const startY = -height / 2 + 210;
 
         textSize(width / 45);
         for (let i = 0; i < chips.length; i++) {
             const y = startY + i * spacing;
-
-            // shadow + chip background
-            noStroke();
-            fill(20, 24, 32, 180);
+            // chip bg
+            fill(20, 24, 32);
             rectMode(CENTER);
             rect(0, y, chipW, chipH, 12);
-
-            // border
+            // border pulse
             noFill();
-            stroke(110, 168, 255, 80);
+            stroke(110, 168, 255, 80 + 40 * sin(frameCount * 0.05 + i));
             strokeWeight(2);
             rect(0, y, chipW, chipH, 12);
-
-            // text
+            // label
+            push();
+            translate(0, 0, 1);
             noStroke();
             fill(220);
             text(chips[i], 0, y);
+            pop();
         }
 
-        // subtle pulse indicator
-        noStroke();
-        const pulse = 180 + 50 * sin(frameCount * 0.05);
-        fill(110, 168, 255, pulse);
-        textSize(width / 50);
-        text("Enter name and create / join lobby", 0, startY + chips.length * spacing + chipH * 1.2);
+        pop(); // end overlay
+
+        // animate
+        menuAngle += 0.02;
 
         return;
     }
@@ -257,7 +341,7 @@ function draw() {
 
     push();
     fill(150, 120, 70); // Ground color
-    translate(gridWidth / 2, gridHeight / 2, -25); // Center ground at (0, 0)
+    translate(gridWidth / 2, gridHeight / 2, -2); // Center ground at (0, 0)
     noStroke();
     plane(gridWidth, gridHeight); // Ground dimensions
     if (gameMode === 'lobby') {
@@ -266,12 +350,16 @@ function draw() {
         textSize(TILE_SIZE);
         // rotateX(PI / 2);
         textFont(font);
+        textAlign(CENTER, CENTER);
         fill(255);
         noStroke();
         text(`Lobby ${lobbyCode}`, 0, 0)
         pop()
     }
     pop();
+
+
+    drawTracks();
 
     // Draw walls
     drawWalls2();
@@ -282,6 +370,7 @@ function draw() {
     for (let id in players) {
         const tank = players[id];
         drawTank(tank, id == socket.id);
+        leaveTracksForTank(tank, id);
         if (id == socket.id) {
             myTank = tank;
         }
@@ -317,7 +406,7 @@ function draw() {
     // Set up camera
     camX = targetTank.x;
     camY = targetTank.y + 200;
-    camZ = 600; // ORIGINAL: 700
+    camZ = 600;
     let targetX = targetTank.x;
     let targetY = targetTank.y;
     let targetZ = 0;
@@ -329,7 +418,7 @@ function draw() {
     if (shakeDuration > 0) {
         offsetX = random(-shakeIntensity, shakeIntensity);
         offsetY = random(-shakeIntensity, shakeIntensity);
-        offsetZ = random(-shakeIntensity, shakeIntensity / 2); // Subtle Z-axis shake
+        // offsetZ = random(-shakeIntensity, shakeIntensity / 2); // Subtle Z-axis shake
 
         shakeDuration--;
         if (shakeDuration <= 0) {
@@ -337,7 +426,7 @@ function draw() {
         }
     }
 
-    camera(camX + offsetX, camY + offsetY, camZ + offsetZ, targetX, targetY, targetZ, 0, 1, 0);
+    camera(camX + offsetX, camY + offsetY, camZ + offsetZ, targetX + offsetX, targetY + offsetY, targetZ, 0, 1, 0);
 
     // camera(camX, camY, camZ, targetX, targetY, targetZ, 0, 1, 0);
 
@@ -407,12 +496,99 @@ function drawTransitionScreen() {
 }
 
 setInterval(handleMovement, 1000 / 60)
+function leaveTracksForTank(tank, id) {
+    if (!tank) return;
+
+    // Reset state if dead
+    if (tank.isDead) { delete trackState[id]; return; }
+
+    const s = trackState[id] || { prev: { x: tank.x, y: tank.y }, accum: 0 };
+    const dx = tank.x - s.prev.x;
+    const dy = tank.y - s.prev.y;
+    const stepDist = Math.hypot(dx, dy);
+
+    if (stepDist > 2 * TILE_SIZE) { // detect teleport / large jump
+        s.prev = { x: tank.x, y: tank.y };
+        s.accum = 0;
+        trackState[id] = s;
+        return;
+    }
+
+    // Update accumulator and prev
+    s.accum += stepDist;
+
+    // If we haven't reached spacing, just update prev and bail
+    if (s.accum < TRACK_SPACING) {
+        s.prev = { x: tank.x, y: tank.y };
+        trackState[id] = s;
+        return;
+    }
+
+    // We may need to drop multiple treads if we moved a lot this frame
+    const moveAngle = Math.atan2(dy, dx);
+    const nx = -Math.sin(moveAngle);      // normal (left/right offset)
+    const ny = Math.cos(moveAngle);
+    const treadWidth = Math.max(PLAYER_SIZE * 0.28, 4);
+    const treadSep = (PLAYER_SIZE - 2.1 * treadWidth);                  // half-separation from center
+    const z = 0;                                          // just above ground plane
+
+    // Start from last known position and march forward in TRACK_SPACING steps
+    let px = s.prev.x, py = s.prev.y;
+    let remaining = s.accum;
+
+    while (remaining >= TRACK_SPACING) {
+        // Advance along the path by TRACK_SPACING/2 for a nice center placement
+        const hx = px + Math.cos(moveAngle) * (TRACK_SPACING * 0.5);
+        const hy = py + Math.sin(moveAngle) * (TRACK_SPACING * 0.5);
+
+        // Left/right strips
+        for (const side of [-1, +1]) {
+            const cx = hx + nx * (treadSep * side);
+            const cy = hy + ny * (treadSep * side);
+            tracks.push({
+                x: cx, y: cy, z,
+                angle: moveAngle,
+                len: TRACK_SPACING / 2,            // segment length
+                width: treadWidth,
+                alpha: 160,
+                life: TRACK_FADE_FRAMES,
+            });
+        }
+
+        // March forward one full spacing and continue
+        px += Math.cos(moveAngle) * TRACK_SPACING;
+        py += Math.sin(moveAngle) * TRACK_SPACING;
+        remaining -= TRACK_SPACING;
+    }
+
+    // Save tail state for next frame
+    s.prev = { x: tank.x, y: tank.y };
+    s.accum = remaining;
+    trackState[id] = s;
+}
+
+function drawTracks() {
+    for (let i = tracks.length - 1; i >= 0; i--) {
+        const t = tracks[i];
+        push();
+        translate(t.x, t.y, t.z);
+        rotateZ(t.angle);
+        noStroke();
+        fill(40, 36, 30, t.alpha);
+        box(t.len, t.width, 0.8);
+        pop();
+
+        t.life--;
+        t.alpha = Math.max(0, Math.round(160 * (t.life / TRACK_FADE_FRAMES)));
+        if (t.life <= 0) tracks.splice(i, 1);
+    }
+}
 
 function drawTank(tank, isSelf) {
     const size = PLAYER_SIZE;
     push();
     // Tank base (lower box)
-    translate(tank.x, tank.y, 0); // Position tank
+    translate(tank.x, tank.y, PLAYER_SIZE); // Position tank
     rotateZ(tank.angle); // Rotate tank base
 
     if (tank.isAI) {
@@ -427,7 +603,7 @@ function drawTank(tank, isSelf) {
             drawChest(tank);
         } else {
             stroke(0)
-            strokeWeight(1)
+            strokeWeight(1.5)
             box(2 * size, 1.5 * size, size); // Tank base dimensions
             box(1.8 * size, 1.7 * size, size * 0.8); // Treads
 
@@ -513,7 +689,7 @@ function drawTank(tank, isSelf) {
     // Draw nametag
     if (!tank.isAI || tank.tier === 'button') {
         push();
-        translate(tank.x, tank.y, PLAYER_SIZE * 2.5); // Position above the tank
+        translate(tank.x, tank.y, PLAYER_SIZE * 3.5); // Position above the tank
         // rotateX(-HALF_PI);
         rotateX(atan2(tank.y - camY, camZ))
         textAlign(CENTER, CENTER);
@@ -547,12 +723,12 @@ function drawTank(tank, isSelf) {
         translate(x, -size / 2, 0)
 
         push();
-        const cameraPos = createVector(camX, camY, camZ); // Camera position
+        const cameraPos = new p5.Vector(camX, camY, camZ); // Camera position
         const angle = tank.turretAngle;
         const barrelX = tank.x + (1.5 * size) * Math.cos(angle);
         const barrelY = tank.y + (1.5 * size) * Math.sin(angle);
         const barrelZ = size; // Height of the barrel
-        const barrelPos = createVector(barrelX, barrelY, barrelZ);
+        const barrelPos = new p5.Vector(barrelX, barrelY, barrelZ);
         let viewDirection = p5.Vector.sub(cameraPos, barrelPos).normalize(); // Direction from bullet to camera
         // Offset the outline behind the bullet
         let offset = viewDirection.mult(-2); // Move slightly behind the bullet
@@ -574,7 +750,7 @@ function drawTank(tank, isSelf) {
         const barrelTipX = tank.x + (1.5 * size) * Math.cos(tank.turretAngle);
         const barrelTipY = tank.y - 5 / 4 * size + (1.5 * size) * Math.sin(tank.turretAngle);
         const barrelTipZ = size; // Height of the barrel
-        const barrelTipPos = createVector(barrelTipX, barrelTipY, barrelTipZ);
+        const barrelTipPos = new p5.Vector(barrelTipX, barrelTipY, barrelTipZ);
         viewDirection = p5.Vector.sub(cameraPos, barrelTipPos).normalize(); // Direction from bullet to camera
         // Offset the outline behind the bullet
         offset = viewDirection.mult(-2); // Move slightly behind the bullet
@@ -603,7 +779,7 @@ function drawTank(tank, isSelf) {
 function drawChest(tank) {
     const size = TILE_SIZE / 2;
     stroke(0);
-    strokeWeight(2);
+    strokeWeight(3);
     fill(120, 50, 0);
     box(1.5 * size + 2, size + 2, size + 1);
 
@@ -613,11 +789,11 @@ function drawChest(tank) {
 
     push();
     const angle = tank.angle + PI / 2;
-    const cameraPos = createVector(camX, camY, camZ); // Camera position
+    const cameraPos = new p5.Vector(camX, camY, camZ); // Camera position
     const barrelX = tank.x;
     const barrelY = tank.y;
     const barrelZ = tank.z + size / 2; // Height of the barrel
-    const barrelPos = createVector(barrelX, barrelY, barrelZ);
+    const barrelPos = new p5.Vector(barrelX, barrelY, barrelZ);
     let viewDirection = p5.Vector.sub(cameraPos, barrelPos).normalize(); // Direction from bullet to camera
     // Offset the outline behind the bullet
     let offset = viewDirection.mult(-4);
@@ -651,32 +827,32 @@ function drawWalls() {
         for (let col = 0; col < cols; col++) {
             if (level[row][col] > 0 && !visited[row][col]) {
                 // Find horizontal segment
-                let width = 1;
+                let w = 1;
                 while (
-                    col + width < cols &&
-                    level[row][col + width] > 0 &&
-                    !visited[row][col + width]
+                    col + w < cols &&
+                    level[row][col + w] > 0 &&
+                    !visited[row][col + w]
                 ) {
-                    width++;
+                    w++;
                 }
 
                 // Check if it's part of a vertical block
-                let height = 1;
+                let h = 1;
                 let isRectangle = true;
-                while (row + height < rows) {
-                    for (let c = col; c < col + width; c++) {
-                        if (level[row + height][c] === 0 || visited[row + height][c]) {
+                while (row + h < rows) {
+                    for (let c = col; c < col + w; c++) {
+                        if (level[row + h][c] === 0 || visited[row + h][c]) {
                             isRectangle = false;
                             break;
                         }
                     }
                     if (!isRectangle) break;
-                    height++;
+                    h++;
                 }
 
                 // Mark the entire group as visited
-                for (let r = row; r < row + height; r++) {
-                    for (let c = col; c < col + width; c++) {
+                for (let r = row; r < row + h; r++) {
+                    for (let c = col; c < col + w; c++) {
                         visited[r][c] = true;
                     }
                 }
@@ -685,8 +861,8 @@ function drawWalls() {
                 groupedWalls.push({
                     x: col * TILE_SIZE,
                     y: row * TILE_SIZE,
-                    width: width * TILE_SIZE,
-                    height: height * TILE_SIZE,
+                    width: w * TILE_SIZE,
+                    height: h * TILE_SIZE,
                     wallHeight: level[row][col] * WALL_HEIGHT, // Use the first tile's height for the entire block
                 });
             }
@@ -716,7 +892,7 @@ function drawWalls2() {
     for (let row = 0; row < level.length; row++) {
         for (let col = 0; col < level[row].length; col++) {
             const wallHeight = level[row][col];
-            const height = wallHeight * WALL_HEIGHT;
+            const h = wallHeight * WALL_HEIGHT;
             if (wallHeight > 0) {
                 push();
 
@@ -725,12 +901,12 @@ function drawWalls2() {
                 const wallY = row * TILE_SIZE + TILE_SIZE / 2;
 
                 // Move to position and render wall
-                translate(wallX, wallY, height / 2 - 25);
+                translate(wallX, wallY, h / 2 - 25);
                 fill(120, 80, 40); // Wall color
                 stroke(0); // Outline color
                 strokeWeight(1);
                 noStroke(); // Stroke causes lines to blled through fog of war, not sure why
-                box(TILE_SIZE, TILE_SIZE, height);
+                box(TILE_SIZE, TILE_SIZE, h);
                 pop();
             }
         }
@@ -770,71 +946,148 @@ function drawExplosions() {
     for (let i = explosions.length - 1; i >= 0; i--) {
         const explosion = explosions[i];
 
-        push();
-        translate(explosion.x, explosion.y, explosion.z);
-
-        // Simulate explosion light
-        const lightIntensity = explosion.alpha / 255 * 150 + random(-20, 20);  // Scale light intensity with alpha
-        pointLight(255, 150, 0, explosion.x, explosion.y, explosion.z + explosion.size); // Orange light
-        ambientLight(lightIntensity, lightIntensity / 2, 0); // Add ambient light
-
-        // Draw the main explosion sphere
-        noStroke();
-        const colorShift = map(explosion.alpha, 255, 0, 1, 0); // Shift color from yellow to red
-        fill(255, 150 * colorShift, 0, explosion.alpha); // Transition color
-        sphere(explosion.size); // Expanding sphere
-
-        // Glow effect
-        fill(255, 100, 0, explosion.alpha / 2); // Semi-transparent glow
-        sphere(explosion.size * 1.5); // Larger glow sphere
-
-        // Shockwave
-        push();
-        rotateX(HALF_PI); // Orient the shockwave on the ground plane
-        fill(255, 100, 0, explosion.alpha / 3); // Semi-transparent ring
-        noStroke();
-        ellipse(0, 0, explosion.size * 4, explosion.size * 2); // Expanding ellipse
-        pop();
-
-        // Particle Effects
-        for (let j = 0; j < explosion.particles.length; j++) {
-            const particle = explosion.particles[j];
+        if (explosion.alpha > 0) {
             push();
-            translate(particle.x, particle.y, particle.z);
-            fill(255, random(150, 250), 0, particle.alpha); // Particle color
+            translate(explosion.x, explosion.y, explosion.z);
+
+            // Simulate explosion light
+            // const lightIntensity = explosion.alpha / 255 * 150 + random(-20, 20);  // Scale light intensity with alpha
+            // pointLight(255, 150, 0, explosion.x, explosion.y, explosion.z + explosion.size); // Orange light
+            // ambientLight(lightIntensity, lightIntensity / 2, 0); // Add ambient light
+
+            // Draw the main explosion sphere
             noStroke();
-            sphere(particle.size); // Draw particle
+            const colorShift = map(explosion.alpha, 255, 0, 1, 0); // Shift color from yellow to red
+            fill(255, 150 * colorShift, 0, explosion.alpha); // Transition color
+            sphere(explosion.size); // Expanding sphere
+
+            // Glow effect
+            // fill(255, 100, 0, explosion.alpha / 2); // Semi-transparent glow
+            // sphere(explosion.size * 1.5); // Larger glow sphere
+
+            // Shockwave
+            // push();
+            // rotateX(HALF_PI); // Orient the shockwave on the ground plane
+            // fill(255, 100, 0, explosion.alpha / 3); // Semi-transparent ring
+            // noStroke();
+            // ellipse(0, 0, explosion.size * 4, explosion.size * 2); // Expanding ellipse
+            // pop();
+
+            // Particle Effects
+            for (let j = 0; j < explosion.particles.length; j++) {
+                const particle = explosion.particles[j];
+                push();
+                translate(particle.x, particle.y, particle.z);
+                fill(255, random(150, 250), 0, particle.alpha); // Particle color
+                noStroke();
+                sphere(particle.size); // Draw particle
+                pop();
+
+                // Update particle properties
+                particle.x += particle.vx;
+                particle.y += particle.vy;
+                particle.z += particle.vz;
+                particle.alpha -= 10; // Fade particle
+                particle.size *= 0.9; // Shrink particle
+
+                // Remove faded particles
+                if (particle.alpha <= 0) {
+                    explosion.particles.splice(j, 1);
+                    j--; // Adjust index
+                }
+            }
+
             pop();
 
-            // Update particle properties
-            particle.x += particle.vx;
-            particle.y += particle.vy;
-            particle.z += particle.vz;
-            particle.alpha -= 10; // Fade particle
-            particle.size *= 0.9; // Shrink particle
+            // Update explosion properties
+            explosion.size += explosion.dSize; // Increase size
+            explosion.alpha -= Math.ceil(explosion.alpha / 4); // Fade out
+        }
 
-            // Remove faded particles
-            if (particle.alpha <= 0) {
-                explosion.particles.splice(j, 1);
-                j--; // Adjust index
+        // Debris shards
+        if (explosion.color) {
+            if (typeof explosion.color === 'string') { // passed in id indicating player hit
+                explosion.color = (explosion.color == myTank.id) ? [0, 0, 255] : [255, 0, 0];
+            }
+            if (!explosion._debrisSpawned) {
+                explosion._debrisSpawned = true;
+                const n = 10 + floor(random(6));                 // count
+                const sizeScale = explosion.size ? explosion.size / 10 : 1;      // scale by blast size
+
+                explosion._debris = [];
+                for (let k = 0; k < n; k++) {
+                    const ang = random(TWO_PI);
+                    const spd = random(0.5, 2.5) * sizeScale;      // radial speed
+                    explosion._debris.push({
+                        x: explosion.x, y: explosion.y, z: (explosion.z ?? 0.2),
+                        vx: Math.cos(ang) * spd,
+                        vy: Math.sin(ang) * spd,
+                        vz: random(1.5, 2.5) * spd,                        // upward pop
+                        spinX: random(-0.20, 0.20),
+                        spinY: random(-0.25, 0.25),
+                        s: random(10, 20) * sizeScale,                // shard size
+                        life: 50 + floor(random(20)),                // frames
+                        alpha: 255
+                    });
+                }
+            }
+
+            // Draw debris shards
+            if (explosion._debris && explosion._debris.length) {
+                for (let j = explosion._debris.length - 1; j >= 0; j--) {
+                    const d = explosion._debris[j];
+
+                    // physics
+                    d.vz -= 0.28;                        // gravity
+                    d.x += d.vx; d.y += d.vy; d.z += d.vz;
+
+                    // gentle ground bounce
+                    if (d.z < 0) {
+                        d.z = 0;
+                        d.vz *= -0.25;                     // dampen vertical
+                        d.vx *= 0.82; d.vy *= 0.82;        // friction
+                    }
+
+                    // life/fade
+                    d.life--;
+                    d.s *= 0.96;
+                    d.alpha = Math.max(0, Math.min(255, d.life * 6));
+                    if (d.life <= 0 || d.s < 0.6) { explosion._debris.splice(j, 1); continue; }
+
+                    // draw shard
+                    push();
+                    translate(d.x, d.y, d.z + 0.2);
+                    rotateX(frameCount * d.spinX);
+                    rotateY(frameCount * d.spinY);
+                    if (explosion.color) {
+                        const factor = 1;
+                        fill(explosion.color[0] * factor, explosion.color[1] * factor, explosion.color[2] * factor, d.alpha);
+                    } else {
+                        // ambientMaterial(120, 110, 100, d.alpha);
+                    }
+                    noStroke();
+                    // strokeWeight(1);
+                    // stroke(0);
+                    box(d.s, d.s * 0.7, d.s * 0.35);
+                    pop();
+                }
             }
         }
 
-        pop();
-
-        // Update explosion properties
-        explosion.size += explosion.dSize; // Increase size
-        explosion.alpha -= Math.ceil(explosion.alpha / 4); // Fade out
-
-        // Remove explosion when fully faded
-        if (explosion.alpha <= 0 && explosion.particles.length === 0) {
+        // Remove explosion when fully faded// Remove explosion when fully faded AND no children left
+        if (
+            explosion.alpha <= 0 &&
+            explosion.particles.length === 0 &&
+            (!explosion._debris || explosion._debris.length === 0)
+        ) {
             explosions.splice(i, 1);
         }
+
     }
 }
 
 // Function to create an explosion with particles
-function createExplosion(x, y, z, size) {
+function createExplosion(x, y, z, size, color) {
     // triggerScreenShake(size, 20);
     const particles = [];
     for (let i = 0; i < 20; i++) { // Number of particles
@@ -863,6 +1116,7 @@ function createExplosion(x, y, z, size) {
         dSize: size / 10, // Size increment
         alpha: 255, // Initial opacity
         particles: particles,
+        color: color,
     });
 }
 
@@ -998,8 +1252,8 @@ function drawBullets() {
         // Draw bullet outline
         noStroke();
         push();
-        const cameraPos = createVector(camX, camY, camZ); // Camera position
-        const bulletPos = createVector(bullet.x, bullet.y, PLAYER_SIZE * 1.4 - BULLET_SIZE); // Bullet position
+        const cameraPos = new p5.Vector(camX, camY, camZ); // Camera position
+        const bulletPos = new p5.Vector(bullet.x, bullet.y, PLAYER_SIZE * 1.4 - BULLET_SIZE); // Bullet position
         const viewDirection = p5.Vector.sub(cameraPos, bulletPos).normalize(); // Direction from bullet to camera
 
         // Offset the outline behind the bullet

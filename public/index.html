@@ -40,7 +40,46 @@
         overflow:hidden;
     }
 
-    
+    /* ============ NEW: Top header ============ */
+    .site-header{
+        position:fixed;
+        left:24px; right:24px; top:24px;
+        height:56px;
+        display:flex; align-items:center; justify-content:space-between;
+        padding:10px 14px;
+        background:linear-gradient(180deg, #141923ee, #0f141bee);
+        border:1px solid #20273a;
+        border-radius:16px;
+        backdrop-filter:saturate(130%) blur(10px);
+        box-shadow:0 10px 40px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.05);
+        z-index:20;
+    }
+    .brand{
+        display:flex; align-items:center; gap:10px;
+        color:var(--text); text-decoration:none; font-weight:800; letter-spacing:.02em;
+    }
+    .brand-dot{
+        width:10px; height:10px; border-radius:50%;
+        background:var(--accent-2);
+        box-shadow:0 0 18px rgba(120,245,207,.75), 0 0 2px rgba(120,245,207,1);
+    }
+    .brand:hover{ filter:brightness(1.06); }
+
+    .site-nav{ display:flex; align-items:center; gap:10px; }
+    .nav-link{
+        display:inline-flex; align-items:center; gap:8px;
+        padding:10px 12px; border-radius:12px;
+        text-decoration:none; color:var(--text);
+        border:1px solid #2b3142; background:#0d1117;
+        transition:.15s filter, .15s transform, .15s background, .15s border-color;
+        font-weight:600; letter-spacing:.02em;
+    }
+    .nav-link:hover{ filter:brightness(1.05); }
+    .nav-primary{
+        border-color:#345fb3;
+        background:linear-gradient(180deg, #2a69d0, #214ea6);
+    }
+
     /* Panel */
     #lobby-controls{
         position:fixed; inset:auto 24px 24px auto; /* bottom-right by default */
@@ -56,7 +95,9 @@
     }
 
     @media (max-width:900px){
-        #lobby-controls{ inset: 24px 24px auto 24px; } /* top on mobile */
+        /* NEW: push the panel below the header on mobile */
+        #lobby-controls{ inset: 96px 24px auto 24px; }
+        .site-header{ left:16px; right:16px; top:16px; }
     }
 
     .row{ display:grid; grid-template-columns: 1fr auto; gap:10px; }
@@ -129,6 +170,18 @@
 
     </style>
 
+    <!-- NEW: Header -->
+    <header class="site-header" role="banner" aria-label="Site header">
+      <a class="brand" href="https://tankgame.app" aria-label="Tank Game home">
+        <span class="brand-dot" aria-hidden="true"></span>
+        Tank&nbsp;Game
+      </a>
+      <nav class="site-nav" aria-label="Primary">
+        <a class="nav-link" href="https://erictxie.com">My Website</a>
+        <a class="nav-link nav-primary" href="/wiki/#/overview" target="_blank" rel="noopener">Wiki</a>
+      </nav>
+    </header>
+
     <div id="lobby-controls" role="region" aria-label="Lobby controls">
     <!-- Name -->
     <div class="stack">
@@ -167,11 +220,12 @@
 
     <div id="toast" role="status" aria-live="polite"></div>
 
+
     <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.11.2/p5.min.js"
         integrity="sha512-1YMgn4j8cIL91s14ByDGmHtBU6+F8bWOMcF47S0cRO3QNm8SKPNexy4s3OCim9fABUtO++nJMtcpWbINWjMSzQ=="
         crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-    <!-- <script src="p5.js"></script> -->
-    <script src="/socket.io/socket.io.js"></script>
+    <!-- <script src="p5.js"></script> -->    
+     <script src="/socket.io/socket.io.js"></script>
     <script src="/constants.js"></script>
     <script src="/vision.js"></script>
     <script src="/drawDrop.js"></script>
@@ -240,7 +294,7 @@
             name = (name||'').trim().slice(0,16);
             if(!name){ toast('Enter a name first'); return; }
             localStorage.setItem(NAME_KEY, name);
-            socket.emit('setName', name); // you already emit this in your current inline script :contentReference[oaicite:2]{index=2}
+            socket.emit('setName', name); // you already emit this in your current inline script
             applySavedNameUI(name);
             el('random-name').disabled = true;
             toast('Name saved');
@@ -327,7 +381,7 @@
             }
         });
 
-        // Prevent drag selection while clicking around (you already had this) :contentReference[oaicite:5]{index=5}
+        // Prevent drag selection while clicking around
         document.addEventListener('selectstart', (e)=>e.preventDefault());
 
         socket.on('lobbyCreated', (data) => {

@@ -213,8 +213,8 @@ io.on('connection', (socket) => {
         if (lobbyCode) {
             const lobby = lobbies[lobbyCode];
             if (lobby && lobby.players && lobby.players[socket.id]) {
-            lobby.players[socket.id].name = name;
-            io.to(lobbyCode).emit('updatePlayers', lobby.players);
+                lobby.players[socket.id].name = name;
+                io.to(lobbyCode).emit('updatePlayers', lobby.players);
             }
         }
 
@@ -222,7 +222,7 @@ io.on('connection', (socket) => {
     }
 
 
-        
+
     socket.on('pingCheck', (startTime) => {
         socket.emit('pingResponse', startTime);
     });
@@ -254,7 +254,7 @@ io.on('connection', (socket) => {
         }
 
         const { code, name } = data;
-        let lobbyCode = code 
+        let lobbyCode = code
 
         const lobby = lobbies[lobbyCode];
         if (lobby) {
@@ -502,12 +502,22 @@ function fireLaser(lobby, lobbyCode, tank, players, level, isActive) {
                         } else {
                             player.isDead = true;
 
+
+                            let color = player.id; // indicates human player hit
+                            if (player.isAI) {
+                                color = player.color;
+                            }
+                            if (player.shield) {
+                                color = [50, 100, 255];
+                            }
+
                             io.to(lobbyCode).emit('explosion', {
                                 x: player.x,
                                 y: player.y,
                                 z: PLAYER_SIZE,
-                                size: 10,
-                                dSize: 2
+                                size: 15,
+                                dSize: 2,
+                                color: color,
                             });
 
                             if (lobby.mode === 'lobby') {
@@ -662,12 +672,21 @@ function updateBullets(lobby, lobbyCode) {
             if (/*playerId !== bullet.owner && */isCollidingWithPlayer(nextX, nextY, player)) {
                 bulletsToRemove.add(i); // Remove bullet
 
+                let color = player.id; // indicates human player hit
+                if (player.isAI) {
+                    color = player.color;
+                }
+                if (player.shield) {
+                    color = [50, 100, 255];
+                }
+
                 io.to(lobbyCode).emit('explosion', {
                     x: player.x,
                     y: player.y,
                     z: PLAYER_SIZE,
                     size: 10,
-                    dSize: 2
+                    dSize: 2,
+                    color: color,
                 });
 
                 if (lobby.mode !== 'lobby' || player.isAI) {// No player damage in lobby
