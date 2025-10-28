@@ -1,21 +1,25 @@
 <!DOCTYPE html>
 <html lang="en">
 
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Multiplayer Tanks</title>
-    <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-2188750956198037"
-     crossorigin="anonymous"></script>
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Multiplayer Tanks</title>
+        <script async
+            src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-2188750956198037"
+            crossorigin="anonymous"></script>
 
-    <link rel="apple-touch-icon" sizes="180x180" href="/assets/favicon/apple-touch-icon.png">
-    <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon/favicon-32x32.png">
-    <link rel="icon" type="image/png" sizes="16x16" href="/assets/favicon/favicon-16x16.png">
-    <!-- <link rel="manifest" href="/site.webmanifest"> -->
-</head>
+        <link rel="apple-touch-icon" sizes="180x180"
+            href="/assets/favicon/apple-touch-icon.png">
+        <link rel="icon" type="image/png" sizes="32x32"
+            href="/assets/favicon/favicon-32x32.png">
+        <link rel="icon" type="image/png" sizes="16x16"
+            href="/assets/favicon/favicon-16x16.png">
+        <!-- <link rel="manifest" href="/site.webmanifest"> -->
+    </head>
 
-<body>
-    <style>
+    <body>
+        <style>
     :root{
         --bg:#111318;
         --panel:#161a22;
@@ -168,80 +172,113 @@
     z-index:1; /* sits above background, under start-screen */
     }
 
+    /* Slide/fade the panel out when hidden */
+    #lobby-controls {
+        transition: transform .25s ease, opacity .2s ease, visibility .2s;
+    }
+    #lobby-controls.is-hidden {
+        transform: translateY(16px) scale(.98);
+        opacity: 0;
+        visibility: hidden;
+        pointer-events: none;
+    }
+
+    /* Reopen button (FAB) */
+    #lobby-fab{
+        position:fixed; right:24px; bottom:24px;
+        display:none; align-items:center; gap:10px;
+        padding:12px 14px; border-radius:999px;
+        background:linear-gradient(180deg, #1c2740, #162035);
+        border:1px solid #2a3752; color:var(--text);
+        box-shadow:0 10px 30px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.04);
+        cursor:pointer; z-index:11;
+    }
+    #lobby-fab.show { display:inline-flex; }
+    #lobby-fab .pill {
+        font-family: ui-monospace, Menlo, Consolas, monospace;
+        background:#121826; border:1px dashed #2b3550; color:#cfe0ff;
+        padding:6px 8px; border-radius:10px; letter-spacing:.14em; font-size:12px;
+    }
     </style>
 
-    <!-- NEW: Header -->
-    <header class="site-header" role="banner" aria-label="Site header">
-      <a class="brand" href="https://tankgame.app" aria-label="Tank Game home">
-        <span class="brand-dot" aria-hidden="true"></span>
-        Tank&nbsp;Game
-      </a>
-      <nav class="site-nav" aria-label="Primary">
-        <a class="nav-link" href="https://erictxie.com">My Website</a>
-        <a class="nav-link nav-primary" href="/wiki/#/overview" target="_blank" rel="noopener">Wiki</a>
-      </nav>
-    </header>
+        <header class="site-header" role="banner" aria-label="Site header">
+            <a class="brand" href="https://tankgame.app" aria-label="Tank Game home">
+                <span class="brand-dot" aria-hidden="true"></span>
+                Tank&nbsp;Game
+            </a>
+            <nav class="site-nav" aria-label="Primary">
+                <a class="nav-link" href="https://erictxie.com">My Website</a>
+                <a class="nav-link nav-primary" href="/wiki/#/overview" target="_blank"
+                    rel="noopener">Wiki</a>
+            </nav>
+        </header>
 
-    <div id="lobby-controls" role="region" aria-label="Lobby controls">
-    <!-- Name -->
-    <div class="stack">
-        <label for="player-name">Display name</label>
-        <div class="row">
-        <input id="player-name" type="text" placeholder="Name" maxlength="16" autocomplete="name" />
-        <button id="set-name" class="btn-accent">Save</button>
+        <div id="lobby-controls" role="region" aria-label="Lobby controls">
+            <!-- Name -->
+            <div class="stack">
+                <label for="player-name">Display name</label>
+                <div class="row">
+                    <input id="player-name" type="text" placeholder="Name" maxlength="16"
+                        autocomplete="name" />
+                    <button id="set-name" class="btn-accent">Save</button>
+                </div>
+                <div class="row" style="grid-template-columns:auto auto 1fr; gap:8px">
+                    <button id="random-name" class="btn-ghost">🎲 Random</button>
+                    <button id="edit-name" class="btn-ghost" style="display:none">Edit</button>
+                    <span id="name-status" class="hint"></span>
+                </div>
+            </div>
+
+            <!-- Lobby actions -->
+            <div class="stack">
+                <label for="join-lobby-code">Play with friends</label>
+                <div class="row">
+                    <input id="join-lobby-code" type="text" placeholder="Enter lobby code"
+                        inputmode="latin" autocapitalize="characters" />
+                    <button id="join-lobby" class="btn-accent" disabled>Join</button>
+                </div>
+                <div class="row" style="grid-template-columns:auto 1fr">
+                    <button id="create-lobby">Create new lobby</button>
+                    <span class="hint">Press Enter to submit. Code is not case
+                        sensitive.</span>
+                </div>
+            </div>
+
+            <!-- Current lobby -->
+            <div id="lobby-info" aria-live="polite">
+                <span class="hint">Lobby</span>
+                <span id="lobby-code-badge">----</span>
+                <button id="copy-code" class="btn-ghost">Copy</button>
+            </div>
         </div>
-        <div class="row" style="grid-template-columns:auto auto 1fr; gap:8px">
-        <button id="random-name" class="btn-ghost">🎲 Random</button>
-        <button id="edit-name" class="btn-ghost" style="display:none">Edit</button>
-        <span id="name-status" class="hint"></span>
+
+        <div id="toast" role="status" aria-live="polite"></div>
+        <button id="lobby-fab" aria-label="Open lobby panel">
+            <span>Lobby</span>
+            <span id="lobby-fab-code" class="pill">----</span>
+        </button>
+
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.11.2/p5.min.js"
+            integrity="sha512-1YMgn4j8cIL91s14ByDGmHtBU6+F8bWOMcF47S0cRO3QNm8SKPNexy4s3OCim9fABUtO++nJMtcpWbINWjMSzQ=="
+            crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+        <!-- <script src="p5.js"></script> -->
+        <script src="/socket.io/socket.io.js"></script>
+        <script src="/constants.js"></script>
+        <script src="/vision.js"></script>
+        <script src="/drawDrop.js"></script>
+        <!-- <div id="lobby-controls">
+    <input id="player-name" type="text" placeholder="Player">
+    <button id="set-name">Set Name</button>
+    <button id="create-lobby">Create Lobby</button>
+    <input id="join-lobby-code" type="text" placeholder="Enter Lobby Code">
+    <button id="join-lobby">Join Lobby</button>
+</div> -->
+        <div>
+            <!-- <h2 id="lobby-info">Lobby: N/A</h2> -->
         </div>
-    </div>
-
-    <!-- Lobby actions -->
-    <div class="stack">
-        <label for="join-lobby-code">Play with friends</label>
-        <div class="row">
-        <input id="join-lobby-code" type="text" placeholder="Enter lobby code" inputmode="latin" autocapitalize="characters" />
-        <button id="join-lobby" class="btn-accent" disabled>Join</button>
-        </div>
-        <div class="row" style="grid-template-columns:auto 1fr">
-        <button id="create-lobby">Create new lobby</button>
-        <span class="hint">Press Enter to submit. Code is not case sensitive.</span>
-        </div>
-    </div>
-
-    <!-- Current lobby -->
-    <div id="lobby-info" aria-live="polite">
-        <span class="hint">Lobby</span>
-        <span id="lobby-code-badge">----</span>
-        <button id="copy-code" class="btn-ghost">Copy</button>
-    </div>
-    </div>
-
-    <div id="toast" role="status" aria-live="polite"></div>
-
-
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.11.2/p5.min.js"
-        integrity="sha512-1YMgn4j8cIL91s14ByDGmHtBU6+F8bWOMcF47S0cRO3QNm8SKPNexy4s3OCim9fABUtO++nJMtcpWbINWjMSzQ=="
-        crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-    <!-- <script src="p5.js"></script> -->    
-     <script src="/socket.io/socket.io.js"></script>
-    <script src="/constants.js"></script>
-    <script src="/vision.js"></script>
-    <script src="/drawDrop.js"></script>
-    <!-- <div id="lobby-controls">
-      <input id="player-name" type="text" placeholder="Player">
-      <button id="set-name">Set Name</button>
-      <button id="create-lobby">Create Lobby</button>
-      <input id="join-lobby-code" type="text" placeholder="Enter Lobby Code">
-      <button id="join-lobby">Join Lobby</button>
-  </div> -->
-  <div>
-    <!-- <h2 id="lobby-info">Lobby: N/A</h2> -->
-  </div>
-    <script>
-        // const socket = io.connect('localhost:3000');
-        const socket = io.connect('https://multiplayer-tanks-3fa3c942a132.herokuapp.com/');
+        <script>
+        const socket = io.connect('localhost:3000');
+        // const socket = io.connect('https://multiplayer-tanks-3fa3c942a132.herokuapp.com/');
 
         const el = (id) => document.getElementById(id);
         const toast = (msg) => {
@@ -386,7 +423,9 @@
 
         socket.on('lobbyCreated', (data) => {
             showLobbyCode(data.lobbyCode);
+            updateFabCode(data.lobbyCode);
             el('join-lobby-code').value = data.lobbyCode;
+            hideLobbyPanel();
             setButtonsEnabled(true);
             emitNameIfAny();
             toast('Lobby created');
@@ -394,14 +433,58 @@
 
         socket.on('lobbyJoined', (data) => {
             showLobbyCode(data.lobbyCode);
+            updateFabCode(data.lobbyCode);
             setButtonsEnabled(true);
+            hideLobbyPanel();
             emitNameIfAny();
             toast('Joined lobby');
         });
 
+        socket.on('disconnect', () => {
+            showLobbyPanel();
+        });
+
         socket.on('error', (err) => { toast(err?.message || 'Something went wrong'); });
+        const panel = el('lobby-controls');
+        const fab = el('lobby-fab');
+        const fabCode = el('lobby-fab-code');
+
+        function showLobbyPanel() {
+            panel.classList.remove('is-hidden');
+            fab.classList.remove('show');
+            panel.setAttribute('aria-hidden','false');
+        }
+
+        function hideLobbyPanel() {
+            panel.classList.add('is-hidden');
+            fab.classList.add('show');
+            panel.setAttribute('aria-hidden','true');
+        }
+
+        function updateFabCode(code){
+            if (!code) return;
+            fabCode.textContent = code;
+        }
+        fab.addEventListener('click', showLobbyPanel);
+
+
+        document.addEventListener('click', (e) => {
+            const panel = el('lobby-controls');
+            const fab = el('lobby-fab');
+
+            // Ignore clicks on the panel or FAB itself
+            if (panel.contains(e.target) || fab.contains(e.target)) return;
+
+            // If panel is open and user clicks outside, close it
+            if (!panel.classList.contains('is-hidden')) {
+                hideLobbyPanel();
+            }
+        });
+
+
+
         </script>
-    <script src="/sketch.js" type="text/javascript"></script>
-</body>
+        <script src="/sketch.js" type="text/javascript"></script>
+    </body>
 
 </html>

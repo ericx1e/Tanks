@@ -186,7 +186,8 @@ io.on('connection', (socket) => {
             // bulletSpeed: 1.2 * BULLET_SPEED,
             // bulletBounces: 1,
             isAI: false,
-            // buffs: { shield: 1 }
+            // buffs: { shield: 1 },
+            // shield: true,
         };
 
         resetBuffs(player);
@@ -673,11 +674,13 @@ function updateBullets(lobby, lobbyCode) {
                 bulletsToRemove.add(i); // Remove bullet
 
                 let color = player.id; // indicates human player hit
+                let effect = null;
                 if (player.isAI) {
                     color = player.color;
                 }
                 if (player.shield) {
                     color = [50, 100, 255];
+                    effect = 'shield';
                 }
 
                 io.to(lobbyCode).emit('explosion', {
@@ -687,6 +690,7 @@ function updateBullets(lobby, lobbyCode) {
                     size: 10,
                     dSize: 2,
                     color: color,
+                    effect: effect,
                 });
 
                 if (lobby.mode !== 'lobby' || player.isAI) {// No player damage in lobby

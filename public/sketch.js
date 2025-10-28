@@ -106,7 +106,7 @@ socket.on('updateLevel', (data) => {
 });
 
 socket.on('explosion', (data) => {
-    createExplosion(data.x, data.y, data.z, data.size, data.color)
+    createExplosion(data.x, data.y, data.z, data.size, data.color, data.effect)
     if (data.size > BULLET_SIZE + 1) {
         triggerScreenShake(data.size / 10, 5);
     }
@@ -942,9 +942,159 @@ function drawWalls2() {
 // }
 
 
+SHIELD_COLOR = [50, 100, 255]
+
 function drawExplosions() {
     for (let i = explosions.length - 1; i >= 0; i--) {
         const explosion = explosions[i];
+
+        if (explosion.effect === 'shield') {
+            // Lazy init once
+            if (!explosion._shieldInit) {
+                explosion._shieldInit = true;
+
+                // Ring params
+                explosion._ringR = explosion.size * 0.9;
+                explosion._ringMaxR = explosion.size * 6.0;
+                explosion._ringThick = Math.max(1.2, explosion.size * 0.12);
+                explosion._ringSpeed = 3.2;
+
+                // Lifetime separate from normal alpha
+                explosion._alpha = 255;
+                explosion._life = 22;
+
+                // Electric arcs sitting on the ring
+                explosion._arcs = [];
+                const arcCount = 20;
+                for (let a = 0; a < arcCount; a++) {
+                    const ang = random(TWO_PI);
+                    explosion._arcs.push({
+                        ang,
+                        len: random(explosion.size * 0.8, explosion.size * 1.4),
+                        wid: random(explosion.size * 0.12, explosion.size * 0.22),
+                        z: 0.2,
+                        spin: random(-0.06, 0.06),
+                        life: explosion._life - floor(random(6))
+                    });
+                }
+                // Blue “glass” debris
+                explosion._debris = [];
+                const n = 14 + floor(random(4));
+                for (let k = 0; k < n; k++) {
+                    const ang = random(TWO_PI);
+                    const baseSpd = random(0.6, 1.6) * (explosion.size / 5);
+                    explosion._debris.push({
+                        x: 0, y: 0, z: 0.2,            // <— LOCAL offsets (not world)
+                        vx: Math.cos(ang) * baseSpd,
+                        vy: Math.sin(ang) * baseSpd,
+                        vz: random(1.0, 2.2) * (explosion.size / 10),
+                        spinX: random(-0.22, 0.22),
+                        spinY: random(-0.28, 0.28),
+                        s: random(6, 12) * (explosion.size / 10),
+                        life: 14 + floor(random(30)),
+                        alpha: 255
+                    });
+                }
+            }
+
+            // DRAW shield visuals
+            push();
+            translate(explosion.x, explosion.y, explosion.z);
+
+            // 1) Core shimmer (faint)
+            const shimmerA = Math.max(0, explosion._alpha * 0.22);
+            if (shimmerA > 0) {
+                noStroke();
+                fill(SHIELD_COLOR[0], SHIELD_COLOR[1], SHIELD_COLOR[2], shimmerA);
+                sphere(explosion.size * 0.9);
+            }
+
+            // 2) Expanding ring (flat torus)
+            push();
+            // rotateX(HALF_PI);                       // << re-enable so ring lies on ground
+            const a1 = Math.max(0, explosion._alpha);
+            noFill();
+            stroke(SHIELD_COLOR[0], SHIELD_COLOR[1], SHIELD_COLOR[2], a1);
+            strokeWeight(explosion._ringThick * 1.6);
+            torus(explosion._ringR, explosion._ringThick * 0.9);
+            stroke(220, 240, 255, a1);
+            strokeWeight(explosion._ringThick * 0.6);
+            torus(explosion._ringR * 0.995, explosion._ringThick * 0.45);
+
+            // 3) Electric arcs along the ring (same rotated frame)
+            for (let k = explosion._arcs.length - 1; k >= 0; k--) {
+                const arc = explosion._arcs[k];
+                if (arc.life <= 0) { explosion._arcs.splice(k, 1); continue; }
+                arc.life--;
+
+                // shrink & fade
+                arc.len *= 0.92;
+                arc.wid *= 0.94;
+                const aFade = Math.max(0, Math.min(255, arc.life * 10));
+
+                // position on ring
+                const R = explosion._ringMaxR * random(0.6, 0.9);
+                const ax = Math.cos(arc.ang) * R;
+                const ay = Math.sin(arc.ang) * R;
+
+                push();
+                translate(ax, ay, arc.z);
+                rotateZ(arc.ang);                    // tangent alignment
+                noStroke();
+                // gentle flicker, clamped by fade
+                const flick = 150 + 60 * (noise(frameCount * 0.12 + k * 5) - 0.5);
+                fill(120, 200, 255, Math.min(aFade, flick));
+                // guard against going to zero
+                box(Math.max(arc.len, 0.1), Math.max(arc.wid, 0.1), 0.8);
+                pop();
+
+                arc.ang += arc.spin;
+            }
+            pop(); // end rotateX(HALF_PI) block
+
+
+            // 4) Blue debris shards (thin, glassy)
+            if (explosion._debris && explosion._debris.length) {
+                for (let j = explosion._debris.length - 1; j >= 0; j--) {
+                    const d = explosion._debris[j];
+
+                    // physics
+                    d.vz -= 0.25;
+                    d.x += d.vx; d.y += d.vy; d.z += d.vz;
+                    if (d.z < 0) { d.z = 0; d.vz *= -0.22; d.vx *= 0.84; d.vy *= 0.84; }
+
+                    // life/fade + shrink
+                    d.life--;
+                    d.s *= 0.96;
+                    d.alpha = Math.max(0, Math.min(255, d.life * 6));
+                    if (d.life <= 0 || d.s < 0.6) { explosion._debris.splice(j, 1); continue; }
+
+                    push();
+                    translate(d.x, d.y, d.z + 0.2);
+                    rotateX(frameCount * d.spinX); rotateY(frameCount * d.spinY);
+                    noStroke();
+                    fill(SHIELD_COLOR[0], SHIELD_COLOR[1], SHIELD_COLOR[2], d.alpha);
+                    box(d.s, d.s * 0.45, d.s * 0.25);
+                    pop();
+                }
+            }
+
+            pop(); // end translate
+
+            // UPDATE & CLEANUP
+            explosion._ringR = Math.min(explosion._ringMaxR, explosion._ringR + explosion._ringSpeed);
+            explosion._alpha = Math.max(0, explosion._alpha - 20);
+            explosion._life--;
+
+            if (explosion._life <= 0 &&
+                (!explosion._debris || explosion._debris.length === 0) &&
+                (!explosion._arcs || explosion._arcs.length === 0)) {
+                explosions.splice(i, 1);
+            }
+
+            // Skip normal orange explosion branch
+            continue;
+        }
 
         if (explosion.alpha > 0) {
             push();
@@ -1066,8 +1216,8 @@ function drawExplosions() {
                         // ambientMaterial(120, 110, 100, d.alpha);
                     }
                     noStroke();
-                    // strokeWeight(1);
-                    // stroke(0);
+                    strokeWeight(0.1);
+                    stroke(0);
                     box(d.s, d.s * 0.7, d.s * 0.35);
                     pop();
                 }
@@ -1077,7 +1227,6 @@ function drawExplosions() {
         // Remove explosion when fully faded// Remove explosion when fully faded AND no children left
         if (
             explosion.alpha <= 0 &&
-            explosion.particles.length === 0 &&
             (!explosion._debris || explosion._debris.length === 0)
         ) {
             explosions.splice(i, 1);
@@ -1087,7 +1236,7 @@ function drawExplosions() {
 }
 
 // Function to create an explosion with particles
-function createExplosion(x, y, z, size, color) {
+function createExplosion(x, y, z, size, color, effect) {
     // triggerScreenShake(size, 20);
     const particles = [];
     for (let i = 0; i < 20; i++) { // Number of particles
@@ -1117,6 +1266,7 @@ function createExplosion(x, y, z, size, color) {
         alpha: 255, // Initial opacity
         particles: particles,
         color: color,
+        effect: effect,
     });
 }
 
