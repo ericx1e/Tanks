@@ -50,6 +50,11 @@ function initializeAITank(id, x, y, tier, buttonType) {
             shield: 1
         }
     }
+    if (tier == 7) {
+        tank.buffs = {
+            shield: 2
+        }
+    }
 
     tank.color = colorList[tank.tier]
 
@@ -149,9 +154,9 @@ function updateAITank(lobby, lobbyCode, tank, level, players, bullets) {
             break;
         case 7:
             shootingRange = PLAYER_SIZE * 20;
-            speed = 0.75 * AI_TANK_SPEED;
+            speed = 1.0 * AI_TANK_SPEED;
             fireCooldown = 30;
-            turretSpeed = 0.08;
+            turretSpeed = 0.40;
             break;
         case 'button':
             speed = 0;
@@ -173,13 +178,28 @@ function updateAITank(lobby, lobbyCode, tank, level, players, bullets) {
         tank.fireCooldown = 0;
     }
 
-    // Detect nearby bullets
-    const dangerBullet = detectNearbyBullet(tank, bullets, 10 * PLAYER_SIZE);
+    const RANGE = 10 * PLAYER_SIZE;
+    const AVOID_DOT = 0.35;
+    const SHOOT_DOT = 0.85;
 
-    if (tank.tier >= 1 && dangerBullet) {
-        // If a bullet is nearby, move away
-        // const bulletAngle = dangerBullet.angle;
-        tank.targetDirection = avoidBullet(tank, dangerBullet)
+    // Scan all bullets once
+    const candidates = [];
+    for (const b of bullets) {
+        if (b.owner === tank.id) continue; // ignore own shots
+        const dx = b.x - tank.x, dy = b.y - tank.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist > RANGE) continue;
+        const dot = bulletCosTowardTank(tank, b);
+        const { tStar, dmin2 } = closestApproach(b, tank);
+        candidates.push({ bullet: b, dist, dot, tStar, dmin2 });
+    }
+
+    // 1) Driving: be liberal—avoid the most concerning bullet by earliest impact (or highest dot as tie)
+    const driveThreats = candidates.filter(c => c.dot >= AVOID_DOT && c.tStar >= 0);
+    if (tank.tier >= 1 && driveThreats.length) {
+        driveThreats.sort((a, b) => (a.tStar - b.tStar) || (b.dot - a.dot));
+        const primary = driveThreats[0].bullet;
+        tank.targetDirection = avoidBullet(tank, primary);
     } else {
         // Otherwise, continue normal movement
         tank.movementTimer -= 1;
@@ -191,6 +211,44 @@ function updateAITank(lobby, lobbyCode, tank, level, players, bullets) {
         }
     }
 
+
+    // 2) Shooting: be strict—only direct bullets on true collision course
+    const shootThreats = candidates
+        .filter(c => c.dot >= SHOOT_DOT && c.tStar >= 0)
+        .sort((a, b) => (a.tStar - b.tStar) || (a.dist - b.dist));
+
+    // Try to shoot 1–3 most imminent threats (stop after first successful shot)
+    if (tank.tier >= 5 && shootThreats.length) {
+        const maxShotsThisFrame = 3;
+        let shots = 0;
+        for (const { bullet, dist } of shootThreats) {
+            const fired = fireAtDangerBullet(
+                lobbyCode, tank, bullet, bullets, level, players, fireCooldown
+            );
+            if (fired && ++shots >= maxShotsThisFrame) break;
+            // Small assist: if very close, help cooldown tick faster
+            if (dist < 6 * PLAYER_SIZE) {
+                tank.fireCooldown = Math.max(0, tank.fireCooldown - 1);
+            }
+        }
+    }
+
+
+    // if (tank.tier >= 1 && threats.length) {
+    //     // If a bullet is nearby, move away
+    //     // tank.targetDirection = avoidBullet(tank, dangerBullet)
+    //     const primary = threats[0].bullet;
+    //     tank.targetDirection = avoidBullet(tank, primary);
+
+    //     if (tank.tier >= 1) {
+    //         for (const { bullet } of threats) {
+    //             const fired = fireAtDangerBullet(
+    //                 lobbyCode, tank, bullet, bullets, level, players, fireCooldown
+    //             );
+    //             if (fired) break;
+    //         }
+    //     }
+    // } 
     // Smoothly adjust the angle toward the target direction
     tank.angle = lerpAngle(tank.angle, tank.targetDirection, 0.1)
 
@@ -566,6 +624,71 @@ function detectBotInPath(x, y, angle, maxDistance, players, firingTankId) {
     return false; // No bot detected in the path
 }
 
+function bulletCosTowardTank(tank, bullet) {
+    const dirx = Math.cos(bullet.angle), diry = Math.sin(bullet.angle);
+    const rx = tank.x - bullet.x, ry = tank.y - bullet.y;
+    const rmag = Math.hypot(rx, ry) || 1e-6;
+    return (dirx * (rx / rmag) + diry * (ry / rmag)); // in [-1, 1]
+}
+
+function closestApproach(bullet, tank) {
+    const px = bullet.x - tank.x, py = bullet.y - tank.y;
+    const vb = bullet.speed || BULLET_SPEED;
+    const vx = Math.cos(bullet.angle) * vb, vy = Math.sin(bullet.angle) * vb;
+    const v2 = vx * vx + vy * vy || 1e-6;
+    const tStar = - (px * vx + py * vy) / v2; // can be < 0 (moving away)
+    const cx = px + vx * Math.max(tStar, 0);
+    const cy = py + vy * Math.max(tStar, 0);
+    const dmin2 = cx * cx + cy * cy;
+    return { tStar, dmin2 };
+}
+
+function isDirectCollisionCourse(tank, bullet) {
+    const { tStar, dmin2 } = closestApproach(bullet, tank);
+    if (tStar < 0) return false; // not coming toward us
+    const hitR = (PLAYER_SIZE / 2) + BULLET_SIZE;
+    return dmin2 <= hitR * hitR;
+}
+
+
+function getCollisionThreats(tank, bullets, range, maxThreats = 3) {
+    const hitR = (PLAYER_SIZE / 2) + BULLET_SIZE;
+    const hitR2 = hitR * hitR;
+    const threats = [];
+
+    for (const b of bullets) {
+        if (b.owner === tank.id) continue; // ignore our own
+        // quick range cull
+        const dx = b.x - tank.x, dy = b.y - tank.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist > range) continue;
+
+        const vb = (b.speed || BULLET_SPEED);
+        const vx = Math.cos(b.angle) * vb;
+        const vy = Math.sin(b.angle) * vb;
+
+        const v2 = vx * vx + vy * vy;
+        if (v2 < 1e-9) continue;
+
+        // t* = argmin_t |p + v t|^2 = - (p·v) / |v|^2
+        const tStar = - (dx * vx + dy * vy) / v2;
+        if (tStar < 0) continue; // closest approach is in the past (moving away)
+
+        // miss distance at t*
+        const cx = dx + vx * tStar;
+        const cy = dy + vy * tStar;
+        const dmin2 = cx * cx + cy * cy;
+
+        if (dmin2 <= hitR2) {
+            threats.push({ bullet: b, tStar, dmin2, dist });
+        }
+    }
+
+    // Sort: soonest impact first; tie-break by smaller current distance
+    threats.sort((a, b) => (a.tStar - b.tStar) || (a.dist - b.dist));
+    return threats.slice(0, maxThreats);
+}
+
 // Detect nearby bullets
 function detectNearbyBullet(tank, bullets, range) {
     for (let bullet of bullets) {
@@ -612,6 +735,106 @@ function avoidBullet(tank, bullet) {
     return diff1 > diff2 ? perpendicular1 : perpendicular2;
 }
 
+function isDirectCollisionCourse(tank, bullet) {
+    const px = bullet.x - tank.x;
+    const py = bullet.y - tank.y;
+
+    const vb = bullet.speed || BULLET_SPEED;
+    const vx = Math.cos(bullet.angle) * vb;
+    const vy = Math.sin(bullet.angle) * vb;
+
+    const v2 = vx * vx + vy * vy;
+    if (v2 < 1e-9) return false; // degenerate
+
+    // Time of closest approach for r(t) = p + v t
+    const tStar = - (px * vx + py * vy) / v2;
+
+    // If closest approach is in the past, it's not coming toward us
+    if (tStar < 0) return false;
+
+    // Miss distance at closest approach
+    const cx = px + vx * tStar;
+    const cy = py + vy * tStar;
+    const dmin2 = cx * cx + cy * cy;
+
+    // Hit if miss distance <= combined radii
+    const hitR = 2 * (PLAYER_SIZE) + BULLET_SIZE;
+    return dmin2 <= hitR * hitR;
+}
+
+function computeInterceptAngle(tank, bullet) {
+    const r0x = bullet.x - tank.x, r0y = bullet.y - tank.y;
+    const vb = bullet.speed || BULLET_SPEED;
+    const vbx = Math.cos(bullet.angle) * vb;
+    const vby = Math.sin(bullet.angle) * vb;
+
+    // our bullet speed mirrors fireBullet logic (tier 2 shoots faster)
+    const vs = (tank.tier === 2 ? 1.7 : 1.0) * BULLET_SPEED;
+
+    // (v_b^2 - v_s^2) t^2 + 2 (r0·v_b) t + |r0|^2 = 0
+    const A = (vbx * vbx + vby * vby) - (vs * vs);
+    const B = 2 * (r0x * vbx + r0y * vby);
+    const C = (r0x * r0x + r0y * r0y);
+
+    let t = null;
+    if (Math.abs(A) < 1e-6) {
+        if (Math.abs(B) > 1e-6) {
+            const tLin = -C / B;
+            if (tLin > 0) t = tLin;
+        }
+    } else {
+        const D = B * B - 4 * A * C;
+        if (D >= 0) {
+            const s = Math.sqrt(D);
+            const t1 = (-B - s) / (2 * A);
+            const t2 = (-B + s) / (2 * A);
+            const pos = [t1, t2].filter(tt => tt > 0);
+            if (pos.length) t = Math.min(...pos);
+        }
+    }
+
+    const tx = t == null ? bullet.x : bullet.x + vbx * t;
+    const ty = t == null ? bullet.y : bullet.y + vby * t;
+    return Math.atan2(ty - tank.y, tx - tank.x);
+}
+
+/**
+ * Try to shoot down an incoming bullet.
+ * Aligns turret toward predicted intercept and fires if:
+ *  - roughly aligned,
+ *  - line-of-sight is clear (no walls),
+ *  - no friendly AI in the short path,
+ *  - cooldown is ready.
+ * Returns true if it fired this frame.
+ */
+function fireAtDangerBullet(lobbyCode, tank, dangerBullet, bullets, level, players, fireCooldown) {
+    // Aim where we'll meet the bullet
+    const interceptAngle = computeInterceptAngle(tank, dangerBullet);
+
+    // Turn turret quickly toward intercept
+    tank.turretAngle = lerpAngle(tank.turretAngle, interceptAngle, 0.25);
+    tank.turretRotationalVelocity = 0;
+
+    // Requirements to shoot
+    const distToBullet = Math.hypot(dangerBullet.x - tank.x, dangerBullet.y - tank.y);
+    // const aligned = Math.abs(((interceptAngle - tank.turretAngle + Math.PI) % (2 * Math.PI)) - Math.PI) < Math.PI / 18; // ~10°
+    // const clear = !detectObstacleAlongRay(tank.x, tank.y, interceptAngle, distToBullet, level);
+    // const pathHasBot = detectBotInPath(tank.x, tank.y, interceptAngle, distToBullet, players, tank.id);
+    if (tank.tier !== 5 && tank.fireCooldown <= 0) {
+        fireBullet(lobbyCode, tank, tank.turretAngle, bullets, level);
+        // Shorter cooldown for point-defense so it can react again soon
+        tank.fireCooldown = tank.fireCooldown / 4;
+        // console.log('AI shooting down bullet');
+
+        return true;
+    }
+
+    // If it’s very close, help the bot get a shot off soon
+    // if (distToBullet < 6 * PLAYER_SIZE) {
+    //     tank.fireCooldown = Math.max(0, tank.fireCooldown - 1);
+    // }
+    return false;
+}
 
 module.exports = {
     setIO,

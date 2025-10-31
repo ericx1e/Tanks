@@ -1,490 +1,547 @@
 <!DOCTYPE html>
 <html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0"
+  />
+  <title>Multiplayer Tanks</title>
+  <meta name="description" content="Fast, skill-based multiplayer tank battles with ricochets, bullet-parries, and lobby play with friends." />
 
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Multiplayer Tanks</title>
-        <script async
-            src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-2188750956198037"
-            crossorigin="anonymous"></script>
+  <link rel="apple-touch-icon" sizes="180x180" href="/assets/favicon/apple-touch-icon.png" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon/favicon-32x32.png" />
+  <link rel="icon" type="image/png" sizes="16x16" href="/assets/favicon/favicon-16x16.png" />
+  <!-- No AdSense here; loaded at end after content exists -->
 
-        <link rel="apple-touch-icon" sizes="180x180"
-            href="/assets/favicon/apple-touch-icon.png">
-        <link rel="icon" type="image/png" sizes="32x32"
-            href="/assets/favicon/favicon-32x32.png">
-        <link rel="icon" type="image/png" sizes="16x16"
-            href="/assets/favicon/favicon-16x16.png">
-        <!-- <link rel="manifest" href="/site.webmanifest"> -->
-    </head>
-
-    <body>
-        <style>
+  <style>
     :root{
-        --bg:#111318;
-        --panel:#161a22;
-        --muted:#8b93a7;
-        --text:#e9eefc;
-        --accent:#6ea8ff;
-        --accent-2:#78f5cf;
-        --danger:#ff6b6b;
-        --ring: 0 0 0 3px rgba(110,168,255,.25);
-        --radius:16px;
+      --bg:#111318;
+      --panel:#161a22;
+      --muted:#8b93a7;
+      --text:#e9eefc;
+      --accent:#6ea8ff;
+      --accent-2:#78f5cf;
+      --danger:#ff6b6b;
+      --ring: 0 0 0 3px rgba(110,168,255,.25);
+      --radius:16px;
     }
     *{box-sizing:border-box}
     html,body{height:100%}
     body{
-        margin:0;
-        background:
+      margin:0;
+      background:
         radial-gradient(1200px 800px at 20% -10%, #1c2333 0%, rgba(28,35,51,0) 60%),
         radial-gradient(1000px 700px at 120% 20%, #0e3b2f40 0%, rgba(14,59,47,0) 55%),
         var(--bg);
-        color:var(--text);
-        font:500 16px/1.35 system-ui, -apple-system, Segoe UI, Roboto, Inter, Arial, sans-serif;
-        overflow:hidden;
+      color:var(--text);
+      font:500 16px/1.5 system-ui, -apple-system, Segoe UI, Roboto, Inter, Arial, sans-serif;
+      overflow-x:hidden;
     }
 
-    /* ============ NEW: Top header ============ */
+    /* ===== Header ===== */
     .site-header{
-        position:fixed;
-        left:24px; right:24px; top:24px;
-        height:56px;
-        display:flex; align-items:center; justify-content:space-between;
-        padding:10px 14px;
-        background:linear-gradient(180deg, #141923ee, #0f141bee);
-        border:1px solid #20273a;
-        border-radius:16px;
-        backdrop-filter:saturate(130%) blur(10px);
-        box-shadow:0 10px 40px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.05);
-        z-index:20;
+      position:fixed; left:24px; right:24px; top:24px; height:56px;
+      display:flex; align-items:center; justify-content:space-between;
+      padding:10px 14px;
+      background:linear-gradient(180deg, #141923ee, #0f141bee);
+      border:1px solid #20273a; border-radius:16px;
+      backdrop-filter:saturate(130%) blur(10px);
+      box-shadow:0 10px 40px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.05);
+      z-index:20;
     }
-    .brand{
-        display:flex; align-items:center; gap:10px;
-        color:var(--text); text-decoration:none; font-weight:800; letter-spacing:.02em;
-    }
-    .brand-dot{
-        width:10px; height:10px; border-radius:50%;
-        background:var(--accent-2);
-        box-shadow:0 0 18px rgba(120,245,207,.75), 0 0 2px rgba(120,245,207,1);
-    }
+    .brand{ display:flex; align-items:center; gap:10px; color:var(--text); text-decoration:none; font-weight:800; letter-spacing:.02em; }
+    .brand-dot{ width:10px; height:10px; border-radius:50%; background:var(--accent-2); box-shadow:0 0 18px rgba(120,245,207,.75), 0 0 2px rgba(120,245,207,1); }
     .brand:hover{ filter:brightness(1.06); }
-
     .site-nav{ display:flex; align-items:center; gap:10px; }
     .nav-link{
-        display:inline-flex; align-items:center; gap:8px;
-        padding:10px 12px; border-radius:12px;
-        text-decoration:none; color:var(--text);
-        border:1px solid #2b3142; background:#0d1117;
-        transition:.15s filter, .15s transform, .15s background, .15s border-color;
-        font-weight:600; letter-spacing:.02em;
+      display:inline-flex; align-items:center; gap:8px; padding:10px 12px; border-radius:12px;
+      text-decoration:none; color:var(--text);
+      border:1px solid #2b3142; background:#0d1117;
+      transition:.15s filter, .15s transform, .15s background, .15s border-color;
+      font-weight:600; letter-spacing:.02em;
     }
     .nav-link:hover{ filter:brightness(1.05); }
-    .nav-primary{
-        border-color:#345fb3;
-        background:linear-gradient(180deg, #2a69d0, #214ea6);
-    }
+    .nav-primary{ border-color:#345fb3; background:linear-gradient(180deg, #2a69d0, #214ea6); }
 
-    /* Panel */
+    /* ===== Lobby Panel ===== */
     #lobby-controls{
-        position:fixed; inset:auto 24px 24px auto; /* bottom-right by default */
-        display:grid; gap:10px;
-        width: min(520px, calc(100vw - 48px));
-        background:linear-gradient(180deg, #141923, #10141b);
-        border:1px solid #20273a;
-        border-radius:var(--radius);
-        box-shadow:0 10px 40px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.04);
-        padding:16px;
-        backdrop-filter:saturate(130%) blur(8px);
-        z-index:10;
+      position:fixed; inset:auto 24px 24px auto;
+      display:grid; gap:10px;
+      width:min(520px, calc(100vw - 48px));
+      background:linear-gradient(180deg, #141923, #10141b);
+      border:1px solid #20273a; border-radius:var(--radius);
+      box-shadow:0 10px 40px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.04);
+      padding:16px; backdrop-filter:saturate(130%) blur(8px);
+      z-index:10;
+      transition: transform .25s ease, opacity .2s ease, visibility .2s;
     }
-
     @media (max-width:900px){
-        /* NEW: push the panel below the header on mobile */
-        #lobby-controls{ inset: 96px 24px auto 24px; }
-        .site-header{ left:16px; right:16px; top:16px; }
+      #lobby-controls{ inset: 96px 24px auto 24px; }
+      .site-header{ left:16px; right:16px; top:16px; }
     }
-
     .row{ display:grid; grid-template-columns: 1fr auto; gap:10px; }
     .stack{ display:grid; gap:8px; }
-
     label{ font-size:12px; color:var(--muted); letter-spacing:.02em; }
     input[type="text"]{
-        width:100%; padding:12px 14px; border-radius:12px; border:1px solid #29324a;
-        background:#0d1117; color:var(--text);
-        outline:none; transition:.15s border-color, .15s box-shadow, .15s background;
+      width:100%; padding:12px 14px; border-radius:12px; border:1px solid #29324a;
+      background:#0d1117; color:var(--text);
+      outline:none; transition:.15s border-color, .15s box-shadow, .15s background;
     }
     input::placeholder{ color:#657091; }
-
     input:focus{ border-color:#36507e; box-shadow:var(--ring); background:#0b0f14; }
     input[disabled]{ opacity:.6; cursor:not-allowed; }
-
     button{
-        padding:12px 14px; border-radius:12px; border:1px solid #2a3752;
-        background:linear-gradient(180deg, #1c2740, #162035);
-        color:var(--text); font-weight:600; letter-spacing:.02em;
-        cursor:pointer; transition: .15s transform, .15s filter, .15s background, .15s border-color;
+      padding:12px 14px; border-radius:12px; border:1px solid #2a3752;
+      background:linear-gradient(180deg, #1c2740, #162035);
+      color:var(--text); font-weight:600; letter-spacing:.02em;
+      cursor:pointer; transition:.15s transform, .15s filter, .15s background, .15s border-color;
     }
     button:hover{ filter:brightness(1.05); }
     button:active{ transform:translateY(1px); }
     button[disabled]{ opacity:.5; cursor:not-allowed; }
+    .btn-accent{ border-color:#345fb3; background:linear-gradient(180deg, #2a69d0, #214ea6); }
+    .btn-ghost{ background:#0d1117; border-color:#2b3142; }
 
-    .btn-accent{
-        border-color:#345fb3;
-        background:linear-gradient(180deg, #2a69d0, #214ea6);
-    }
-
-    .btn-ghost{
-        background:#0d1117; border-color:#2b3142;
-    }
-
-    /* Lobby info row (appears after you’re in a lobby) */
     #lobby-info{
-        display:none; align-items:center; justify-content:space-between;
-        gap:10px; padding:10px 12px; border-radius:12px;
-        background:#0d1117; border:1px solid #2b3142;
+      display:none; align-items:center; justify-content:space-between;
+      gap:10px; padding:10px 12px; border-radius:12px;
+      background:#0d1117; border:1px solid #2b3142;
     }
     #lobby-code-badge{
-        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
-        font-size:14px; letter-spacing:.18em; padding:8px 10px; border-radius:10px;
-        background:#121826; border:1px dashed #2b3550; color:#cfe0ff;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      font-size:14px; letter-spacing:.18em; padding:8px 10px; border-radius:10px;
+      background:#121826; border:1px dashed #2b3550; color:#cfe0ff;
     }
-
-    /* Tiny helper text */
     .hint{ font-size:12px; color:#7c86a3; }
 
     /* Toast */
     #toast{
-        position: fixed; left:50%; bottom:40px; transform:translateX(-50%) translateY(20px);
-        background:#0b0f14; color:#e6f0ff; border:1px solid #25314a;
-        padding:10px 14px; border-radius:12px; opacity:0; pointer-events:none;
-        transition:.25s opacity, .25s transform;
-        box-shadow:0 6px 24px rgba(0,0,0,.45);
-        z-index:999;
+      position: fixed; left:50%; bottom:40px; transform:translateX(-50%) translateY(20px);
+      background:#0b0f14; color:#e6f0ff; border:1px solid #25314a;
+      padding:10px 14px; border-radius:12px; opacity:0; pointer-events:none;
+      transition:.25s opacity, .25s transform;
+      box-shadow:0 6px 24px rgba(0,0,0,.45);
+      z-index:999;
     }
     #toast.show{ opacity:1; transform:translateX(-50%) translateY(0); }
-    
-    /* Style the default p5 canvas if present */
+
+    /* p5 canvas look */
     #defaultCanvas0{
-    border-radius: 18px;
-    box-shadow:
-        0 20px 120px rgba(0,0,0,.55),
-        inset 0 0 0 1px rgba(255,255,255,.04);
-    z-index:1; /* sits above background, under start-screen */
+      display:block;
+      margin: 10px auto 24px;
+      max-width:100%;
+      height:auto !important;
+      border-radius: 18px;
+      box-shadow: 0 20px 120px rgba(0,0,0,.55), inset 0 0 0 1px rgba(255,255,255,.04);
+      z-index:1;
     }
 
-    /* Slide/fade the panel out when hidden */
-    #lobby-controls {
-        transition: transform .25s ease, opacity .2s ease, visibility .2s;
-    }
-    #lobby-controls.is-hidden {
-        transform: translateY(16px) scale(.98);
-        opacity: 0;
-        visibility: hidden;
-        pointer-events: none;
-    }
+    /* Hide/show lobby panel */
+    #lobby-controls.is-hidden { transform: translateY(16px) scale(.98); opacity: 0; visibility: hidden; pointer-events: none; }
 
-    /* Reopen button (FAB) */
+    /* Reopen FAB */
     #lobby-fab{
-        position:fixed; right:24px; bottom:24px;
-        display:none; align-items:center; gap:10px;
-        padding:12px 14px; border-radius:999px;
-        background:linear-gradient(180deg, #1c2740, #162035);
-        border:1px solid #2a3752; color:var(--text);
-        box-shadow:0 10px 30px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.04);
-        cursor:pointer; z-index:11;
+      position:fixed; right:24px; bottom:24px;
+      display:none; align-items:center; gap:10px;
+      padding:12px 14px; border-radius:999px;
+      background:linear-gradient(180deg, #1c2740, #162035);
+      border:1px solid #2a3752; color:var(--text);
+      box-shadow:0 10px 30px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.04);
+      cursor:pointer; z-index:11;
     }
     #lobby-fab.show { display:inline-flex; }
     #lobby-fab .pill {
-        font-family: ui-monospace, Menlo, Consolas, monospace;
-        background:#121826; border:1px dashed #2b3550; color:#cfe0ff;
-        padding:6px 8px; border-radius:10px; letter-spacing:.14em; font-size:12px;
+      font-family: ui-monospace, Menlo, Consolas, monospace;
+      background:#121826; border:1px dashed #2b3550; color:#cfe0ff;
+      padding:6px 8px; border-radius:10px; letter-spacing:.14em; font-size:12px;
     }
-    </style>
 
-        <header class="site-header" role="banner" aria-label="Site header">
-            <a class="brand" href="https://tankgame.app" aria-label="Tank Game home">
-                <span class="brand-dot" aria-hidden="true"></span>
-                Tank&nbsp;Game
-            </a>
-            <nav class="site-nav" aria-label="Primary">
-                <a class="nav-link" href="https://erictxie.com">My Website</a>
-                <a class="nav-link nav-primary" href="/wiki/#/overview" target="_blank"
-                    rel="noopener">Wiki</a>
-            </nav>
-        </header>
+    /* ===== Page Content & Ads ===== */
+    .page { margin-top: 96px; padding: 0 16px 80px; }
+    .container { max-width: 1100px; margin: 0 auto; }
+    .content { display: grid; gap: 18px; }
+    .content h1, .content h2 { margin: 0; }
+    .content h1 { font-size: clamp(26px, 3vw, 34px); }
+    .content h2 { font-size: clamp(20px, 2.4vw, 26px); color: #cfe0ff; }
+    .content p, .content li { color: #cfd7ea; }
+    .ad-block { margin: 10px 0 6px; padding: 8px 0; border-top: 1px solid #232a3b; border-bottom: 1px solid #232a3b; }
 
-        <div id="lobby-controls" role="region" aria-label="Lobby controls">
-            <!-- Name -->
-            <div class="stack">
-                <label for="player-name">Display name</label>
-                <div class="row">
-                    <input id="player-name" type="text" placeholder="Name" maxlength="16"
-                        autocomplete="name" />
-                    <button id="set-name" class="btn-accent">Save</button>
-                </div>
-                <div class="row" style="grid-template-columns:auto auto 1fr; gap:8px">
-                    <button id="random-name" class="btn-ghost">🎲 Random</button>
-                    <button id="edit-name" class="btn-ghost" style="display:none">Edit</button>
-                    <span id="name-status" class="hint"></span>
-                </div>
-            </div>
+    /* Footer */
+    .site-footer { border-top:1px solid #20273a; background:#0f141b; padding:16px 0; }
+    .footer-grid{ display:flex; align-items:center; justify-content:space-between; gap:12px; }
+    .footer-nav a{ color:#9fb6ff; text-decoration:none; margin-left:12px; }
+    .footer-nav a:hover{ text-decoration:underline; }
+    /* Give the game a predictable box the canvas will fit into */
+    .game-wrap { margin: 12px 0 16px; }
+    #game-mount {
+        width: 100%;
+        /* Fill most of the viewport height but keep reasonable bounds */
+        height: clamp(420px, 72vh, 860px);
+        /* Optional subtle frame behind the canvas */
+        border-radius: 18px;
+        background: rgba(0,0,0,.25);
+        box-shadow: 0 20px 120px rgba(0,0,0,.55), inset 0 0 0 1px rgba(255,255,255,.04);
+    }
 
-            <!-- Lobby actions -->
-            <div class="stack">
-                <label for="join-lobby-code">Play with friends</label>
-                <div class="row">
-                    <input id="join-lobby-code" type="text" placeholder="Enter lobby code"
-                        inputmode="latin" autocapitalize="characters" />
-                    <button id="join-lobby" class="btn-accent" disabled>Join</button>
-                </div>
-                <div class="row" style="grid-template-columns:auto 1fr">
-                    <button id="create-lobby">Create new lobby</button>
-                    <span class="hint">Press Enter to submit. Code is not case
-                        sensitive.</span>
-                </div>
-            </div>
+    /* Mobile: a tad shorter to leave space for UI */
+    @media (max-width: 900px) {
+        #game-mount { height: clamp(360px, 68vh, 760px); }
+    }
 
-            <!-- Current lobby -->
-            <div id="lobby-info" aria-live="polite">
-                <span class="hint">Lobby</span>
-                <span id="lobby-code-badge">----</span>
-                <button id="copy-code" class="btn-ghost">Copy</button>
-            </div>
-        </div>
+    /* Let the page fit the viewport; reduce excess bottom padding */
+    .page { 
+        margin-top: 96px; 
+        padding: 0 16px 24px;      /* was 80px */
+        min-height: calc(100vh - 96px - 56px); /* header + some breathing room */
+    }
 
-        <div id="toast" role="status" aria-live="polite"></div>
-        <button id="lobby-fab" aria-label="Open lobby panel">
-            <span>Lobby</span>
-            <span id="lobby-fab-code" class="pill">----</span>
-        </button>
+    /* Remove trailing bottom margins that can create a “gap” look */
+    .content > :last-child { margin-bottom: 0; }
+    .ad-block:last-child { margin-bottom: 0; }
 
-        <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.11.2/p5.min.js"
-            integrity="sha512-1YMgn4j8cIL91s14ByDGmHtBU6+F8bWOMcF47S0cRO3QNm8SKPNexy4s3OCim9fABUtO++nJMtcpWbINWjMSzQ=="
-            crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-        <!-- <script src="p5.js"></script> -->
-        <script src="/socket.io/socket.io.js"></script>
-        <script src="/constants.js"></script>
-        <script src="/vision.js"></script>
-        <script src="/drawDrop.js"></script>
-        <!-- <div id="lobby-controls">
-    <input id="player-name" type="text" placeholder="Player">
-    <button id="set-name">Set Name</button>
-    <button id="create-lobby">Create Lobby</button>
-    <input id="join-lobby-code" type="text" placeholder="Enter Lobby Code">
-    <button id="join-lobby">Join Lobby</button>
-</div> -->
-        <div>
-            <!-- <h2 id="lobby-info">Lobby: N/A</h2> -->
-        </div>
-        <script>
-        // const socket = io.connect('localhost:3000');
-        const socket = io.connect('https://multiplayer-tanks-3fa3c942a132.herokuapp.com/');
+    /* If you kept the old #defaultCanvas0 style, keep only the look — not height */
+    #defaultCanvas0 {
+        display:block;
+        width:100%;          /* p5 will set pixel size via JS; width here is fine */
+        height:auto !important;  /* avoid CSS-stretching to a fixed height */
+        margin: 0 auto; 
+        border-radius: 18px;
+        box-shadow: 0 20px 120px rgba(0,0,0,.55), inset 0 0 0 1px rgba(255,255,255,.04);
+    }
 
-        const el = (id) => document.getElementById(id);
-        const toast = (msg) => {
-            const t = el('toast');
-            t.textContent = msg;
-            t.classList.add('show');
-            clearTimeout(toast._timer);
-            toast._timer = setTimeout(() => t.classList.remove('show'), 1600);
-        };
+    /* Tips section styling */
+    .tips {
+    margin-top: 12px;
+    padding: 12px 0 6px;
+    border-top: 1px solid #232a3b;
+    border-bottom: 1px solid #232a3b;
+    }
 
-        const NAME_KEY = 'tanks.displayName';
+    .tips h2 {
+    font-size: clamp(20px, 2.4vw, 26px);
+    color: #cfe0ff;
+    margin-bottom: 8px;
+    }
 
-        const getSavedName = () => localStorage.getItem(NAME_KEY) || '';
-        const emitNameIfAny = () => {
-        const n = getSavedName();
-        if (n) socket.emit('setName', n);
-        };
+    .tips ul {
+    list-style-type: disc;
+    margin: 0;
+    padding-left: 24px;
+    color: #cfd7ea;
+    }
 
-        function normalizeCode(raw){
-            return raw.trim().toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,8);
-        }
-
-        function setButtonsEnabled(hasName){
-            el('create-lobby').disabled = !hasName;
-            const joinFilled = normalizeCode(el('join-lobby-code').value).length >= 2;
-            el('join-lobby').disabled = !(hasName && joinFilled);
-        }
-
-        // === Name flow ===
-        function applySavedNameUI(name){
-            el('player-name').value = name || '';
-            const has = !!name;
-            el('player-name').disabled = has;
-            el('set-name').style.display = has ? 'none' : '';
-            el('edit-name').style.display = has ? '' : 'none';
-            el('random-name').disabled = has;
-            el('name-status').textContent = has ? `Saved as “${name}”` : 'Pick a name to continue';
-            setButtonsEnabled(has);
-        }
-
-        function randomName(){
-            const adjectives = ['Crimson','Quantum','Nimble','Nebula','Turbo','Silent','Swift','Azure','Cobalt','Verdant','Solar','Feral'];
-            const nouns = ['Tank','Raptor','Blitz','Comet','Golem','Falcon','Viper','Knight','Forge','Sprite','Nova','Spectre'];
-            return adjectives[Math.floor(Math.random()*adjectives.length)]
-                + nouns[Math.floor(Math.random()*nouns.length)]
-                + Math.floor(Math.random()*90+10);
-        }
-
-        function saveName(name){
-            name = (name||'').trim().slice(0,16);
-            if(!name){ toast('Enter a name first'); return; }
-            localStorage.setItem(NAME_KEY, name);
-            socket.emit('setName', name); // you already emit this in your current inline script
-            applySavedNameUI(name);
-            el('random-name').disabled = true;
-            toast('Name saved');
-        }
-
-        // === Lobby UI ===
-        function showLobbyCode(code){
-            if(!code) return;
-            el('lobby-info').style.display = 'grid';
-            el('lobby-code-badge').textContent = code;
-        }
-
-        // === Wire up events (inputs & buttons) ===
-        // initial state
-        applySavedNameUI(localStorage.getItem(NAME_KEY));
-
-        el('set-name').addEventListener('click', () => saveName(el('player-name').value));
-        el('random-name').addEventListener('click', () => {
-            el('player-name').value = randomName();
-            el('player-name').focus();
-        });
-        el('edit-name').addEventListener('click', () => {
-            el('player-name').disabled = false;
-            el('player-name').focus();
-            el('set-name').style.display = '';
-            el('edit-name').style.display = 'none';
-            el('random-name').disabled = false;
-            el('name-status').textContent = 'Editing name…';
-        });
-
-        el('player-name').addEventListener('input', () => setButtonsEnabled(!!el('player-name').value.trim()));
-        el('join-lobby-code').addEventListener('input', () => {
-            const v = normalizeCode(el('join-lobby-code').value);
-            if(el('join-lobby-code').value !== v) el('join-lobby-code').value = v;
-            setButtonsEnabled(!!localStorage.getItem(NAME_KEY));
-        });
-
-        // Submit on Enter
-        document.addEventListener('keydown', (e) => {
-        if (e.key !== 'Enter') return;
-        const hasNameSaved = !!getSavedName();
-        const code = normalizeCode(el('join-lobby-code').value);
-
-        if (document.activeElement === el('player-name')) {
-            saveName(el('player-name').value);
-        } else if ((hasNameSaved || el('player-name').value.trim()) && code.length >= 2) {
-            if (!hasNameSaved) saveName(el('player-name').value);
-            socket.emit('joinLobby', {code, name: getSavedName()});
-        } else if (hasNameSaved || el('player-name').value.trim()) {
-            if (!hasNameSaved) saveName(el('player-name').value);
-            socket.emit('createLobby');
-        } else {
-            toast('Save a name first');
-        }
-        });
-
-        el('create-lobby').addEventListener('click', () => {
-            if (!getSavedName() && el('player-name').value.trim()) {
-                saveName(el('player-name').value);
-            }
-            if(!localStorage.getItem(NAME_KEY)) return toast('Save a name first');
-            socket.emit('createLobby', { name: getSavedName() });
-        });
-
-        el('join-lobby').addEventListener('click', () => {
-            if (!getSavedName() && el('player-name').value.trim()) {
-                saveName(el('player-name').value);
-            }
-            if(!localStorage.getItem(NAME_KEY)) return toast('Save a name first');
-            const code = normalizeCode(el('join-lobby-code').value);
-            console.log('joining lobby', code);
-            if(!code) return toast('Enter a lobby code');
-            socket.emit('joinLobby', { code, name: getSavedName() });
-        });
-
-        el('copy-code').addEventListener('click', async () => {
-            const code = el('lobby-code-badge').textContent.trim();
-            if(!code) return;
-            try{
-            await navigator.clipboard.writeText(code);
-            toast('Copied lobby code');
-            }catch(e){
-            toast('Copy failed');
-            }
-        });
-
-        // Prevent drag selection while clicking around
-        document.addEventListener('selectstart', (e)=>e.preventDefault());
-
-        socket.on('lobbyCreated', (data) => {
-            showLobbyCode(data.lobbyCode);
-            updateFabCode(data.lobbyCode);
-            el('join-lobby-code').value = data.lobbyCode;
-            hideLobbyPanel();
-            setButtonsEnabled(true);
-            emitNameIfAny();
-            toast('Lobby created');
-        });
-
-        socket.on('lobbyJoined', (data) => {
-            showLobbyCode(data.lobbyCode);
-            updateFabCode(data.lobbyCode);
-            setButtonsEnabled(true);
-            hideLobbyPanel();
-            emitNameIfAny();
-            toast('Joined lobby');
-        });
-
-        socket.on('disconnect', () => {
-            showLobbyPanel();
-        });
-
-        socket.on('error', (err) => { toast(err?.message || 'Something went wrong'); });
-        const panel = el('lobby-controls');
-        const fab = el('lobby-fab');
-        const fabCode = el('lobby-fab-code');
-
-        function showLobbyPanel() {
-            panel.classList.remove('is-hidden');
-            fab.classList.remove('show');
-            panel.setAttribute('aria-hidden','false');
-        }
-
-        function hideLobbyPanel() {
-            panel.classList.add('is-hidden');
-            fab.classList.add('show');
-            panel.setAttribute('aria-hidden','true');
-        }
-
-        function updateFabCode(code){
-            if (!code) return;
-            fabCode.textContent = code;
-        }
-        fab.addEventListener('click', showLobbyPanel);
+    .tips li {
+    margin: 6px 0;
+    line-height: 1.5;
+    }
 
 
-        document.addEventListener('click', (e) => {
-            const panel = el('lobby-controls');
-            const fab = el('lobby-fab');
+  </style>
+</head>
 
-            // Ignore clicks on the panel or FAB itself
-            if (panel.contains(e.target) || fab.contains(e.target)) return;
+<body>
+  <!-- ===== Header ===== -->
+  <header class="site-header" role="banner" aria-label="Site header">
+    <a class="brand" href="https://tankgame.app" aria-label="Tank Game home">
+      <span class="brand-dot" aria-hidden="true"></span>
+      Tank&nbsp;Game
+    </a>
+    <nav class="site-nav" aria-label="Primary">
+      <a class="nav-link" href="https://erictxie.com">My Website</a>
+      <a class="nav-link nav-primary" href="/wiki/#/overview" target="_blank" rel="noopener">Wiki</a>
+    </nav>
+  </header>
 
-            // If panel is open and user clicks outside, close it
-            if (!panel.classList.contains('is-hidden')) {
-                hideLobbyPanel();
-            }
-        });
+  <!-- ===== Lobby Panel ===== -->
+  <div id="lobby-controls" role="region" aria-label="Lobby controls">
+    <!-- Name -->
+    <div class="stack">
+      <label for="player-name">Display name</label>
+      <div class="row">
+        <input id="player-name" type="text" placeholder="Name" maxlength="16" autocomplete="name" />
+        <button id="set-name" class="btn-accent">Save</button>
+      </div>
+      <div class="row" style="grid-template-columns:auto auto 1fr; gap:8px">
+        <button id="random-name" class="btn-ghost">🎲 Random</button>
+        <button id="edit-name" class="btn-ghost" style="display:none">Edit</button>
+        <span id="name-status" class="hint"></span>
+      </div>
+    </div>
+
+    <!-- Lobby actions -->
+    <div class="stack">
+      <label for="join-lobby-code">Play with friends</label>
+      <div class="row">
+        <input id="join-lobby-code" type="text" placeholder="Enter lobby code" inputmode="latin" autocapitalize="characters" />
+        <button id="join-lobby" class="btn-accent" disabled>Join</button>
+      </div>
+      <div class="row" style="grid-template-columns:auto 1fr">
+        <button id="create-lobby">Create new lobby</button>
+        <span class="hint">Press Enter to submit. Code is not case sensitive.</span>
+      </div>
+    </div>
+
+    <!-- Current lobby -->
+    <div id="lobby-info" aria-live="polite">
+      <span class="hint">Lobby</span>
+      <span id="lobby-code-badge">----</span>
+      <button id="copy-code" class="btn-ghost">Copy</button>
+    </div>
+  </div>
+
+  <div id="toast" role="status" aria-live="polite"></div>
+  <button id="lobby-fab" aria-label="Open lobby panel">
+    <span>Lobby</span>
+    <span id="lobby-fab-code" class="pill">----</span>
+  </button>
+
+  <!-- ===== Page Content (makes this page “content-rich”) ===== -->
+  <main class="page">
+    <div class="container">
+      <article class="content">
+        <section class="intro">
+          <h1>Multiplayer Tanks</h1>
+          <p>
+            Fast paced tank battles with ricochets and bullet-parries. Move with
+            <strong>WASD</strong>, aim with your mouse, and click to fire. Create or join a lobby
+            to battle alone or with friends across maze-like arenas.
+          </p>
+        </section>
+
+        <section class="game-wrap">
+            <div id="game-mount"></div>
+        </section>
+
+        <!-- Manual Ad #1 -->
+        <section class="ad-block">
+          <ins class="adsbygoogle"
+               style="display:block"
+               data-ad-client="ca-pub-2188750956198037"
+               data-ad-slot="XXXXXXXXXX"
+               data-ad-format="auto"
+               data-full-width-responsive="true"></ins>
+        </section>
+
+        <!-- Tips & Tricks -->
+    <section class="tips">
+        <h2>Tips &amp; Tricks</h2>
+        <ul>
+            <li><strong>Use corners smartly:</strong> Peek around walls and fire at sharp angles to bounce shots toward enemies.</li>
+            <li><strong>Predict movement:</strong> Fire slightly ahead of where an opponent is moving — ricochets can curve your odds.</li>
+            <li><strong>Parry bullets:</strong> Your shots can destroy incoming ones — time your fire to neutralize threats.</li>
+            <li><strong>Collect buffs:</strong> Power-ups like <em>Speed</em>, <em>Fire Rate</em>, and <em>Shield</em> appear randomly after kills — grab them fast.</li>
+            <li><strong>Stay mobile:</strong> Constant movement makes it harder for AI and players to predict your next shot.</li>
+        </ul>
+    </section>
 
 
 
-        </script>
-        <script src="/sketch.js" type="text/javascript"></script>
-    </body>
+        <section class="notes">
+          <h2>Patch Notes</h2>
+          <p><em>v0.9.2</em> — Improved bullet-bullet collision reliability; smarter AI dodges; performance and UI polish for the lobby panel.</p>
+          <p><em>v0.9.1</em> — New maze variants, lobby code copy button, canvas styling, reduced input latency.</p>
+          <p>More updates coming—balance tweaks, mobile controls, and new game modes.</p>
+        </section>
 
+        <!-- Manual Ad #2 -->
+        <section class="ad-block">
+          <ins class="adsbygoogle"
+               style="display:block"
+               data-ad-client="ca-pub-2188750956198037"
+               data-ad-slot="YYYYYYYYYY"
+               data-ad-format="auto"
+               data-full-width-responsive="true"></ins>
+        </section>
+      </article>
+    </div>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-grid">
+      <small>© 2025 Tank Game</small>
+      <nav class="footer-nav" aria-label="Footer">
+        <a href="/privacy">Privacy</a>
+        <a href="/contact">Contact</a>
+        <a href="/about">About</a>
+      </nav>
+    </div>
+  </footer>
+
+  <!-- ===== Scripts ===== -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.11.2/p5.min.js" integrity="sha512-1YMgn4j8cIL91s14ByDGmHtBU6+F8bWOMcF47S0cRO3QNm8SKPNexy4s3OCim9fABUtO++nJMtcpWbINWjMSzQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/constants.js"></script>
+  <script src="/vision.js"></script>
+  <script src="/drawDrop.js"></script>
+
+  <script>
+    const socket = io.connect('localhost:3000');
+    // const socket = io.connect('https://multiplayer-tanks-3fa3c942a132.herokuapp.com/');
+
+    const el = (id) => document.getElementById(id);
+    const toast = (msg) => {
+      const t = el('toast');
+      t.textContent = msg;
+      t.classList.add('show');
+      clearTimeout(toast._timer);
+      toast._timer = setTimeout(() => t.classList.remove('show'), 1600);
+    };
+
+    const NAME_KEY = 'tanks.displayName';
+    const getSavedName = () => localStorage.getItem(NAME_KEY) || '';
+    const emitNameIfAny = () => { const n = getSavedName(); if (n) socket.emit('setName', n); };
+
+    function normalizeCode(raw){ return raw.trim().toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,8); }
+
+    function setButtonsEnabled(hasName){
+      el('create-lobby').disabled = !hasName;
+      const joinFilled = normalizeCode(el('join-lobby-code').value).length >= 2;
+      el('join-lobby').disabled = !(hasName && joinFilled);
+    }
+
+    // === Name flow ===
+    function applySavedNameUI(name){
+      el('player-name').value = name || '';
+      const has = !!name;
+      el('player-name').disabled = has;
+      el('set-name').style.display = has ? 'none' : '';
+      el('edit-name').style.display = has ? '' : 'none';
+      el('random-name').disabled = has;
+      el('name-status').textContent = has ? `Saved as “${name}”` : 'Pick a name to continue';
+      setButtonsEnabled(has);
+    }
+
+    function randomName(){
+      const adjectives = ['Crimson','Quantum','Nimble','Nebula','Turbo','Silent','Swift','Azure','Cobalt','Verdant','Solar','Feral'];
+      const nouns = ['Tank','Raptor','Blitz','Comet','Golem','Falcon','Viper','Knight','Forge','Sprite','Nova','Spectre'];
+      return adjectives[Math.floor(Math.random()*adjectives.length)]
+        + nouns[Math.floor(Math.random()*nouns.length)]
+        + Math.floor(Math.random()*90+10);
+    }
+
+    function saveName(name){
+      name = (name||'').trim().slice(0,16);
+      if(!name){ toast('Enter a name first'); return; }
+      localStorage.setItem(NAME_KEY, name);
+      socket.emit('setName', name);
+      applySavedNameUI(name);
+      el('random-name').disabled = true;
+      toast('Name saved');
+    }
+
+    function showLobbyCode(code){
+      if(!code) return;
+      el('lobby-info').style.display = 'grid';
+      el('lobby-code-badge').textContent = code;
+    }
+
+    // Wire up
+    applySavedNameUI(localStorage.getItem(NAME_KEY));
+    el('set-name').addEventListener('click', () => saveName(el('player-name').value));
+    el('random-name').addEventListener('click', () => { el('player-name').value = randomName(); el('player-name').focus(); });
+    el('edit-name').addEventListener('click', () => {
+      el('player-name').disabled = false; el('player-name').focus();
+      el('set-name').style.display = ''; el('edit-name').style.display = 'none';
+      el('random-name').disabled = false; el('name-status').textContent = 'Editing name…';
+    });
+
+    el('player-name').addEventListener('input', () => setButtonsEnabled(!!el('player-name').value.trim()));
+    el('join-lobby-code').addEventListener('input', () => {
+      const v = normalizeCode(el('join-lobby-code').value);
+      if(el('join-lobby-code').value !== v) el('join-lobby-code').value = v;
+      setButtonsEnabled(!!localStorage.getItem(NAME_KEY));
+    });
+
+    // Enter submits
+    document.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter') return;
+      const hasNameSaved = !!getSavedName();
+      const code = normalizeCode(el('join-lobby-code').value);
+
+      if (document.activeElement === el('player-name')) {
+        saveName(el('player-name').value);
+      } else if ((hasNameSaved || el('player-name').value.trim()) && code.length >= 2) {
+        if (!hasNameSaved) saveName(el('player-name').value);
+        socket.emit('joinLobby', {code, name: getSavedName()});
+      } else if (hasNameSaved || el('player-name').value.trim()) {
+        if (!hasNameSaved) saveName(el('player-name').value);
+        socket.emit('createLobby');
+      } else {
+        toast('Save a name first');
+      }
+    });
+
+    el('create-lobby').addEventListener('click', () => {
+      if (!getSavedName() && el('player-name').value.trim()) { saveName(el('player-name').value); }
+      if(!localStorage.getItem(NAME_KEY)) return toast('Save a name first');
+      socket.emit('createLobby', { name: getSavedName() });
+    });
+
+    el('join-lobby').addEventListener('click', () => {
+      if (!getSavedName() && el('player-name').value.trim()) { saveName(el('player-name').value); }
+      if(!localStorage.getItem(NAME_KEY)) return toast('Save a name first');
+      const code = normalizeCode(el('join-lobby-code').value);
+      if(!code) return toast('Enter a lobby code');
+      socket.emit('joinLobby', { code, name: getSavedName() });
+    });
+
+    el('copy-code').addEventListener('click', async () => {
+      const code = el('lobby-code-badge').textContent.trim();
+      if(!code) return;
+      try{ await navigator.clipboard.writeText(code); toast('Copied lobby code'); }
+      catch(e){ toast('Copy failed'); }
+    });
+
+    // Close/open lobby panel
+    const panel = el('lobby-controls');
+    const fab = el('lobby-fab');
+    const fabCode = el('lobby-fab-code');
+
+    function showLobbyPanel() { panel.classList.remove('is-hidden'); fab.classList.remove('show'); panel.setAttribute('aria-hidden','false'); }
+    function hideLobbyPanel() { panel.classList.add('is-hidden'); fab.classList.add('show'); panel.setAttribute('aria-hidden','true'); }
+    function updateFabCode(code){ if (!code) return; fabCode.textContent = code; }
+    fab.addEventListener('click', showLobbyPanel);
+
+    document.addEventListener('click', (e) => {
+      if (panel.contains(e.target) || fab.contains(e.target)) return;
+      if (!panel.classList.contains('is-hidden')) { hideLobbyPanel(); }
+    });
+
+    // Socket events
+    socket.on('lobbyCreated', (data) => {
+      showLobbyCode(data.lobbyCode);
+      updateFabCode(data.lobbyCode);
+      el('join-lobby-code').value = data.lobbyCode;
+      hideLobbyPanel();
+      setButtonsEnabled(true);
+      emitNameIfAny();
+      toast('Lobby created');
+    });
+
+    socket.on('lobbyJoined', (data) => {
+      showLobbyCode(data.lobbyCode);
+      updateFabCode(data.lobbyCode);
+      setButtonsEnabled(true);
+      hideLobbyPanel();
+      emitNameIfAny();
+      toast('Joined lobby');
+    });
+
+    socket.on('disconnect', () => { showLobbyPanel(); });
+    socket.on('error', (err) => { toast(err?.message || 'Something went wrong'); });
+  </script>
+
+  <script src="/sketch.js" type="text/javascript"></script>
+
+  <!-- ===== AdSense: load after content exists; manual slots only ===== -->
+  <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-2188750956198037" crossorigin="anonymous"></script>
+  <script>
+    // Push both ad slots once the page is ready
+    window.addEventListener('load', function(){
+      try { (adsbygoogle = window.adsbygoogle || []).push({}); } catch(e) {}
+      try { (adsbygoogle = window.adsbygoogle || []).push({}); } catch(e) {}
+    });
+  </script>
+</body>
 </html>

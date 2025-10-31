@@ -172,12 +172,30 @@ socket.on('laserFired', (laserData) => {
 
 let font
 let fogLayer
+let cnv
+let gameMount
+
+function getMountSize() {
+    // Cache the element
+    if (!gameMount) gameMount = document.getElementById('game-mount') || document.body;
+    const r = gameMount.getBoundingClientRect();
+    const w = Math.max(1, Math.floor(r.width));
+    const h = Math.max(1, Math.floor(r.height));
+    return { w, h };
+}
 
 async function setup() {
     // createCanvas(1200, 800, WEBGL);
-    let canvas = createCanvas(800, 600, WEBGL);
-    canvas.position((window.innerWidth - width) / 2, (window.innerHeight - height) / 2);
+    // let canvas = createCanvas(800, 600, WEBGL);
+    // canvas.position((window.innerWidth - width) / 2, (window.innerHeight - height) / 2);
 
+
+    const { w, h } = getMountSize();
+
+    cnv = createCanvas(w, h, WEBGL);
+    cnv.parent(gameMount);
+
+    pixelDensity(1);
 
     try {
         font = await loadFont('assets/Roboto-Regular.ttf');
