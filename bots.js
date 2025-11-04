@@ -200,6 +200,8 @@ function updateAITank(lobby, lobbyCode, tank, level, players, bullets) {
         driveThreats.sort((a, b) => (a.tStar - b.tStar) || (b.dot - a.dot));
         const primary = driveThreats[0].bullet;
         tank.targetDirection = avoidBullet(tank, primary);
+
+        tank.dodgeTimer = 4;
     } else {
         // Otherwise, continue normal movement
         tank.movementTimer -= 1;
@@ -209,6 +211,8 @@ function updateAITank(lobby, lobbyCode, tank, level, players, bullets) {
             tank.targetDirection += (Math.random() - 0.5) * Math.PI; // Random new direction
             tank.movementTimer = Math.random() * 120 + 60; // Reset movement timer
         }
+
+        tank.dodgeTimer = Math.max(0, (tank.dodgeTimer || 0) - 1);
     }
 
 
@@ -217,9 +221,13 @@ function updateAITank(lobby, lobbyCode, tank, level, players, bullets) {
         .filter(c => c.dot >= SHOOT_DOT && c.tStar >= 0)
         .sort((a, b) => (a.tStar - b.tStar) || (a.dist - b.dist));
 
-    // Try to shoot 1–3 most imminent threats (stop after first successful shot)
-    if (tank.tier >= 5 && shootThreats.length) {
-        const maxShotsThisFrame = 3;
+
+    // if (tank.tier != 'button') {
+    //     tank.name = tank.fireCooldown //debug 
+    // }
+
+    if (tank.tier >= 4 && tank.tier != 5 && shootThreats.length) {
+        const maxShotsThisFrame = 1;
         let shots = 0;
         for (const { bullet, dist } of shootThreats) {
             const fired = fireAtDangerBullet(
@@ -228,7 +236,7 @@ function updateAITank(lobby, lobbyCode, tank, level, players, bullets) {
             if (fired && ++shots >= maxShotsThisFrame) break;
             // Small assist: if very close, help cooldown tick faster
             if (dist < 6 * PLAYER_SIZE) {
-                tank.fireCooldown = Math.max(0, tank.fireCooldown - 1);
+                tank.fireCooldown = Math.min(tank.fireCooldown, 30);
             }
         }
     }
@@ -250,17 +258,18 @@ function updateAITank(lobby, lobbyCode, tank, level, players, bullets) {
     //     }
     // } 
     // Smoothly adjust the angle toward the target direction
-    tank.angle = lerpAngle(tank.angle, tank.targetDirection, 0.1)
+    tank.angle = lerpAngle(tank.angle, tank.targetDirection, 0.1);
 
-    // Move the tank if there are no obstacles ahead
-    const newX = tank.x + Math.cos(tank.angle) * speed;
-    const newY = tank.y + Math.sin(tank.angle) * speed;
+    // Glide only during dodge; otherwise keep your original step
+    const isDodging = (tank._dodgeTimer || 0) > 0;
 
-    if (!isCollidingWithWall(newX, tank.y, PLAYER_SIZE, level)) {
-        tank.x = newX;
-    }
-    if (!isCollidingWithWall(tank.x, newY, PLAYER_SIZE, level)) {
-        tank.y = newY;
+    if (isDodging) {
+        tryMoveWithWallGlideAndEscape(tank, speed, level, true);
+    } else {
+        const newX = tank.x + Math.cos(tank.angle) * speed;
+        const newY = tank.y + Math.sin(tank.angle) * speed;
+        if (!isCollidingWithWall(newX, tank.y, PLAYER_SIZE, level)) tank.x = newX;
+        if (!isCollidingWithWall(tank.x, newY, PLAYER_SIZE, level)) tank.y = newY;
     }
 
     handleAITurret(lobby, lobbyCode, tank, level, players, bullets, shootingRange, turretSpeed, fireCooldown);
@@ -323,6 +332,7 @@ function handleAITurret(lobby, lobbyCode, tank, level, players, bullets, shootin
     // }
 
     if (playerInSight) {
+        // return;
         // Lock onto the player and fire
 
         // const dx = playerInSight.player.x - tank.x;
@@ -735,6 +745,94 @@ function avoidBullet(tank, bullet) {
     return diff1 > diff2 ? perpendicular1 : perpendicular2;
 }
 
+// Sample nearby tiles to estimate a wall "normal" pointing away from walls
+function getWallNormalAt(x, y, level) {
+    const off = TILE_SIZE * 0.6;
+    const samples = [
+        { dx: off, dy: 0 }, // right
+        { dx: -off, dy: 0 }, // left
+        { dx: 0, dy: off },// down
+        { dx: 0, dy: -off },// up
+    ];
+    let nx = 0, ny = 0;
+    for (const s of samples) {
+        const cx = x + s.dx, cy = y + s.dy;
+        const col = Math.floor(cx / TILE_SIZE);
+        const row = Math.floor(cy / TILE_SIZE);
+        if (isWall(col, row, level)) {
+            // push away from that side (add opposite of the sample direction)
+            nx += -s.dx; ny += -s.dy;
+        }
+    }
+    const mag = Math.hypot(nx, ny);
+    if (mag < 1e-6) return { nx: 0, ny: 0 };
+    return { nx: nx / mag, ny: ny / mag };
+}
+
+// Slide along walls; if totally blocked, perform a corner escape.
+// Returns true if moved this frame.
+function tryMoveWithWallGlideAndEscape(tank, speed, level, isDodging) {
+    const stepX = Math.cos(tank.angle) * speed;
+    const stepY = Math.sin(tank.angle) * speed;
+
+    let moved = false;
+
+    // Try full step
+    const nx = tank.x + stepX, ny = tank.y + stepY;
+    if (!isCollidingWithWall(nx, tank.y, PLAYER_SIZE, level)) { tank.x = nx; moved = true; }
+    if (!isCollidingWithWall(tank.x, ny, PLAYER_SIZE, level)) { tank.y = ny; moved = true; }
+
+    if (moved) {
+        tank._stuckFrames = 0;
+        return true;
+    }
+
+    // Try sliding along the freer axis based on probe
+    const probe = Math.max(PLAYER_SIZE * 0.6, speed);
+    const xBlocked = isCollidingWithWall(tank.x + Math.sign(stepX) * probe, tank.y, PLAYER_SIZE, level);
+    const yBlocked = isCollidingWithWall(tank.x, tank.y + Math.sign(stepY) * probe, PLAYER_SIZE, level);
+
+    if (!xBlocked) {
+        const nx2 = tank.x + stepX;
+        if (!isCollidingWithWall(nx2, tank.y, PLAYER_SIZE, level)) { tank.x = nx2; tank._stuckFrames = 0; return true; }
+    }
+    if (!yBlocked) {
+        const ny2 = tank.y + stepY;
+        if (!isCollidingWithWall(tank.x, ny2, PLAYER_SIZE, level)) { tank.y = ny2; tank._stuckFrames = 0; return true; }
+    }
+
+    // Corner escape 
+    tank._stuckFrames = (tank._stuckFrames || 0) + 1;
+
+    // small backstep
+    const back = Math.min(speed * 1.2, PLAYER_SIZE * 0.7);
+    const bx = tank.x - Math.cos(tank.angle) * back;
+    const by = tank.y - Math.sin(tank.angle) * back;
+    const backOkX = !isCollidingWithWall(bx, tank.y, PLAYER_SIZE, level);
+    const backOkY = !isCollidingWithWall(tank.x, by, PLAYER_SIZE, level);
+    if (backOkX) tank.x = bx;
+    if (backOkY) tank.y = by;
+
+    // steer away from local wall normal with a small random bias (prevents stacking)
+    const { nx: nwx, ny: nwy } = getWallNormalAt(tank.x, tank.y, level);
+    if (nwx !== 0 || nwy !== 0) {
+        const awayAngle = Math.atan2(nwy, nwx); // direction away from walls
+        // Blend target a bit toward awayAngle +/- jitter
+        const jitter = (Math.random() - 0.5) * (Math.PI / 8);
+        const escapeAngle = (awayAngle + jitter + Math.PI) % (2 * Math.PI); // bias to exit corner
+        tank.targetDirection = lerpAngle(tank.targetDirection, escapeAngle, 0.35);
+    } else {
+        // If no normal, spin slightly
+        tank.targetDirection = (tank.targetDirection + (Math.random() < 0.5 ? 1 : -1) * Math.PI / 6) % (2 * Math.PI);
+    }
+
+    // give the escape a couple frames to work (helps “burst” out of corners)
+    if (isDodging) tank._dodgeTimer = Math.max(tank._dodgeTimer || 0, 3);
+
+    return false;
+}
+
+
 function isDirectCollisionCourse(tank, bullet) {
     const px = bullet.x - tank.x;
     const py = bullet.y - tank.y;
@@ -823,14 +921,14 @@ function fireAtDangerBullet(lobbyCode, tank, dangerBullet, bullets, level, playe
     if (tank.tier !== 5 && tank.fireCooldown <= 0) {
         fireBullet(lobbyCode, tank, tank.turretAngle, bullets, level);
         // Shorter cooldown for point-defense so it can react again soon
-        tank.fireCooldown = tank.fireCooldown / 4;
+        tank.fireCooldown = fireCooldown / 2;
         // console.log('AI shooting down bullet');
 
         return true;
     }
 
     // If it’s very close, help the bot get a shot off soon
-    // if (distToBullet < 6 * PLAYER_SIZE) {
+    // if (distToBullet < 3 * TILE_SIZE) {
     //     tank.fireCooldown = Math.max(0, tank.fireCooldown - 1);
     // }
     return false;

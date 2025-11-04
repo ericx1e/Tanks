@@ -1,20 +1,20 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta
-    name="viewport"
-    content="width=device-width, initial-scale=1.0"
-  />
-  <title>Multiplayer Tanks</title>
-  <meta name="description" content="Fast, skill-based multiplayer tank battles with ricochets, bullet-parries, and lobby play with friends." />
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0" />
+    <title>Multiplayer Tanks</title>
+    <meta name="description"
+      content="Fast, skill-based multiplayer tank battles with ricochets, bullet-parries, and lobby play with friends." />
 
-  <link rel="apple-touch-icon" sizes="180x180" href="/assets/favicon/apple-touch-icon.png" />
-  <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon/favicon-32x32.png" />
-  <link rel="icon" type="image/png" sizes="16x16" href="/assets/favicon/favicon-16x16.png" />
-  <!-- No AdSense here; loaded at end after content exists -->
+    <link rel="apple-touch-icon" sizes="180x180" href="/assets/favicon/apple-touch-icon.png" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon/favicon-32x32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/assets/favicon/favicon-16x16.png" />
+    <!-- No AdSense here; loaded at end after content exists -->
 
-  <style>
+    <style>
     :root{
       --bg:#111318;
       --panel:#161a22;
@@ -27,7 +27,7 @@
       --radius:16px;
     }
     *{box-sizing:border-box}
-    html,body{height:100%}
+    html,body
     body{
       margin:0;
       background:
@@ -69,7 +69,7 @@
       position:fixed; inset:auto 24px 24px auto;
       display:grid; gap:10px;
       width:min(520px, calc(100vw - 48px));
-      background:linear-gradient(180deg, #141923, #10141b);
+      /* background:linear-gradient(180deg, #141923, #10141b); */
       border:1px solid #20273a; border-radius:var(--radius);
       box-shadow:0 10px 40px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.04);
       padding:16px; backdrop-filter:saturate(130%) blur(8px);
@@ -177,7 +177,7 @@
     #game-mount {
         width: 100%;
         /* Fill most of the viewport height but keep reasonable bounds */
-        height: clamp(420px, 72vh, 860px);
+        height: clamp(600px, 72vh, 860px);
         /* Optional subtle frame behind the canvas */
         border-radius: 18px;
         background: rgba(0,0,0,.25);
@@ -238,144 +238,156 @@
 
 
   </style>
-</head>
+  </head>
 
-<body>
-  <!-- ===== Header ===== -->
-  <header class="site-header" role="banner" aria-label="Site header">
-    <a class="brand" href="https://tankgame.app" aria-label="Tank Game home">
-      <span class="brand-dot" aria-hidden="true"></span>
-      Tank&nbsp;Game
-    </a>
-    <nav class="site-nav" aria-label="Primary">
-      <a class="nav-link" href="https://erictxie.com">My Website</a>
-      <a class="nav-link nav-primary" href="/wiki/#/overview" target="_blank" rel="noopener">Wiki</a>
-    </nav>
-  </header>
-
-  <!-- ===== Lobby Panel ===== -->
-  <div id="lobby-controls" role="region" aria-label="Lobby controls">
-    <!-- Name -->
-    <div class="stack">
-      <label for="player-name">Display name</label>
-      <div class="row">
-        <input id="player-name" type="text" placeholder="Name" maxlength="16" autocomplete="name" />
-        <button id="set-name" class="btn-accent">Save</button>
-      </div>
-      <div class="row" style="grid-template-columns:auto auto 1fr; gap:8px">
-        <button id="random-name" class="btn-ghost">🎲 Random</button>
-        <button id="edit-name" class="btn-ghost" style="display:none">Edit</button>
-        <span id="name-status" class="hint"></span>
-      </div>
-    </div>
-
-    <!-- Lobby actions -->
-    <div class="stack">
-      <label for="join-lobby-code">Play with friends</label>
-      <div class="row">
-        <input id="join-lobby-code" type="text" placeholder="Enter lobby code" inputmode="latin" autocapitalize="characters" />
-        <button id="join-lobby" class="btn-accent" disabled>Join</button>
-      </div>
-      <div class="row" style="grid-template-columns:auto 1fr">
-        <button id="create-lobby">Create new lobby</button>
-        <span class="hint">Press Enter to submit. Code is not case sensitive.</span>
-      </div>
-    </div>
-
-    <!-- Current lobby -->
-    <div id="lobby-info" aria-live="polite">
-      <span class="hint">Lobby</span>
-      <span id="lobby-code-badge">----</span>
-      <button id="copy-code" class="btn-ghost">Copy</button>
-    </div>
-  </div>
-
-  <div id="toast" role="status" aria-live="polite"></div>
-  <button id="lobby-fab" aria-label="Open lobby panel">
-    <span>Lobby</span>
-    <span id="lobby-fab-code" class="pill">----</span>
-  </button>
-
-  <!-- ===== Page Content (makes this page “content-rich”) ===== -->
-  <main class="page">
-    <div class="container">
-      <article class="content">
-        <section class="intro">
-          <h1>Multiplayer Tanks</h1>
-          <p>
-            Fast paced tank battles with ricochets and bullet-parries. Move with
-            <strong>WASD</strong>, aim with your mouse, and click to fire. Create or join a lobby
-            to battle alone or with friends across maze-like arenas.
-          </p>
-        </section>
-
-        <section class="game-wrap">
-            <div id="game-mount"></div>
-        </section>
-
-        <!-- Manual Ad #1 -->
-        <section class="ad-block">
-          <ins class="adsbygoogle"
-               style="display:block"
-               data-ad-client="ca-pub-2188750956198037"
-               data-ad-slot="XXXXXXXXXX"
-               data-ad-format="auto"
-               data-full-width-responsive="true"></ins>
-        </section>
-
-        <!-- Tips & Tricks -->
-    <section class="tips">
-        <h2>Tips &amp; Tricks</h2>
-        <ul>
-            <li><strong>Use corners smartly:</strong> Peek around walls and fire at sharp angles to bounce shots toward enemies.</li>
-            <li><strong>Predict movement:</strong> Fire slightly ahead of where an opponent is moving — ricochets can curve your odds.</li>
-            <li><strong>Parry bullets:</strong> Your shots can destroy incoming ones — time your fire to neutralize threats.</li>
-            <li><strong>Collect buffs:</strong> Power-ups like <em>Speed</em>, <em>Fire Rate</em>, and <em>Shield</em> appear randomly after kills — grab them fast.</li>
-            <li><strong>Stay mobile:</strong> Constant movement makes it harder for AI and players to predict your next shot.</li>
-        </ul>
-    </section>
-
-
-
-        <section class="notes">
-          <h2>Patch Notes</h2>
-          <p><em>v0.9.2</em> — Improved bullet-bullet collision reliability; smarter AI dodges; performance and UI polish for the lobby panel.</p>
-          <p><em>v0.9.1</em> — New maze variants, lobby code copy button, canvas styling, reduced input latency.</p>
-          <p>More updates coming—balance tweaks, mobile controls, and new game modes.</p>
-        </section>
-
-        <!-- Manual Ad #2 -->
-        <section class="ad-block">
-          <ins class="adsbygoogle"
-               style="display:block"
-               data-ad-client="ca-pub-2188750956198037"
-               data-ad-slot="YYYYYYYYYY"
-               data-ad-format="auto"
-               data-full-width-responsive="true"></ins>
-        </section>
-      </article>
-    </div>
-  </main>
-
-  <footer class="site-footer">
-    <div class="container footer-grid">
-      <small>© 2025 Tank Game</small>
-      <nav class="footer-nav" aria-label="Footer">
-        <a href="/privacy">Privacy</a>
-        <a href="/contact">Contact</a>
-        <a href="/about">About</a>
+  <body>
+    <!-- ===== Header ===== -->
+    <header class="site-header" role="banner" aria-label="Site header">
+      <a class="brand" href="https://tankgame.app" aria-label="Tank Game home">
+        <span class="brand-dot" aria-hidden="true"></span>
+        Tank&nbsp;Game
+      </a>
+      <nav class="site-nav" aria-label="Primary">
+        <a class="nav-link" href="https://erictxie.com">My Website</a>
+        <a class="nav-link nav-primary" href="/wiki/#/overview" target="_blank"
+          rel="noopener">Wiki</a>
       </nav>
+    </header>
+
+    <!-- ===== Lobby Panel ===== -->
+    <div id="lobby-controls" role="region" aria-label="Lobby controls">
+      <!-- Name -->
+      <div class="stack">
+        <label for="player-name">Display name</label>
+        <div class="row">
+          <input id="player-name" type="text" placeholder="Name" maxlength="16"
+            autocomplete="name" />
+          <button id="set-name" class="btn-accent">Save</button>
+        </div>
+        <div class="row" style="grid-template-columns:auto auto 1fr; gap:8px">
+          <button id="random-name" class="btn-ghost">🎲 Random</button>
+          <button id="edit-name" class="btn-ghost" style="display:none">Edit</button>
+          <span id="name-status" class="hint"></span>
+        </div>
+      </div>
+
+      <!-- Lobby actions -->
+      <div class="stack">
+        <label for="join-lobby-code">Play with friends</label>
+        <div class="row">
+          <input id="join-lobby-code" type="text" placeholder="Enter lobby code"
+            inputmode="latin" autocapitalize="characters" />
+          <button id="join-lobby" class="btn-accent" disabled>Join</button>
+        </div>
+        <div class="row" style="grid-template-columns:auto 1fr">
+          <button id="create-lobby">Create new lobby</button>
+          <span class="hint">Press Enter to submit. Code is not case sensitive.</span>
+        </div>
+      </div>
+
+      <!-- Current lobby -->
+      <div id="lobby-info" aria-live="polite">
+        <span class="hint">Lobby</span>
+        <span id="lobby-code-badge">----</span>
+        <button id="copy-code" class="btn-ghost">Copy</button>
+      </div>
     </div>
-  </footer>
 
-  <!-- ===== Scripts ===== -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.11.2/p5.min.js" integrity="sha512-1YMgn4j8cIL91s14ByDGmHtBU6+F8bWOMcF47S0cRO3QNm8SKPNexy4s3OCim9fABUtO++nJMtcpWbINWjMSzQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-  <script src="/socket.io/socket.io.js"></script>
-  <script src="/constants.js"></script>
-  <script src="/vision.js"></script>
-  <script src="/drawDrop.js"></script>
+    <div id="toast" role="status" aria-live="polite"></div>
+    <button id="lobby-fab" aria-label="Open lobby panel">
+      <span>Lobby</span>
+      <span id="lobby-fab-code" class="pill">----</span>
+    </button>
 
-  <script>
+    <!-- ===== Page Content (makes this page “content-rich”) ===== -->
+    <main class="page">
+      <div class="container">
+        <article class="content">
+          <section class="intro">
+            <h1>Multiplayer Tanks</h1>
+            <p>
+              Fast paced tank battles with ricochets and bullet-parries. Move with
+              <strong>WASD</strong>, aim with your mouse, and click to fire. Create or join a
+              lobby
+              to battle alone or with friends across maze-like arenas.
+            </p>
+          </section>
+
+          <section class="game-wrap">
+            <div id="game-mount"></div>
+          </section>
+
+          <!-- Manual Ad #1 -->
+          <section class="ad-block">
+            <ins class="adsbygoogle"
+              style="display:block"
+              data-ad-client="ca-pub-2188750956198037"
+              data-ad-slot="XXXXXXXXXX"
+              data-ad-format="auto"
+              data-full-width-responsive="true"></ins>
+          </section>
+
+          <!-- Tips & Tricks -->
+          <section class="tips">
+            <h2>Tips &amp; Tricks</h2>
+            <ul>
+              <li><strong>Use corners smartly:</strong> Peek around walls and fire at sharp
+                angles to bounce shots toward enemies.</li>
+              <li><strong>Predict movement:</strong> Fire slightly ahead of where an opponent
+                is moving — ricochets can curve your odds.</li>
+              <li><strong>Parry bullets:</strong> Your shots can destroy incoming ones — time
+                your fire to neutralize threats.</li>
+              <li><strong>Collect buffs:</strong> Power-ups like <em>Speed</em>, <em>Fire
+                  Rate</em>, and <em>Shield</em> appear randomly after kills — grab them
+                fast.</li>
+              <li><strong>Stay mobile:</strong> Constant movement makes it harder for AI and
+                players to predict your next shot.</li>
+            </ul>
+          </section>
+
+          <section class="notes">
+            <h2>Patch Notes</h2>
+            <p><em>v0.9.2</em> — Improved bullet-bullet collision reliability; smarter AI
+              dodges; performance and UI polish for the lobby panel.</p>
+            <p><em>v0.9.1</em> — New maze variants, lobby code copy button, canvas styling,
+              reduced input latency.</p>
+            <p>More updates coming—balance tweaks, mobile controls, and new game modes.</p>
+          </section>
+
+          <!-- Manual Ad #2 -->
+          <section class="ad-block">
+            <ins class="adsbygoogle"
+              style="display:block"
+              data-ad-client="ca-pub-2188750956198037"
+              data-ad-slot="YYYYYYYYYY"
+              data-ad-format="auto"
+              data-full-width-responsive="true"></ins>
+          </section>
+        </article>
+      </div>
+    </main>
+
+    <footer class="site-footer">
+      <div class="container footer-grid">
+        <small>© 2025 Tank Game</small>
+        <nav class="footer-nav" aria-label="Footer">
+          <a href="/privacy">Privacy</a>
+          <a href="/contact">Contact</a>
+          <a href="/about">About</a>
+        </nav>
+      </div>
+    </footer>
+
+    <!-- ===== Scripts ===== -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.11.2/p5.min.js"
+      integrity="sha512-1YMgn4j8cIL91s14ByDGmHtBU6+F8bWOMcF47S0cRO3QNm8SKPNexy4s3OCim9fABUtO++nJMtcpWbINWjMSzQ=="
+      crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="/constants.js"></script>
+    <script src="/vision.js"></script>
+    <script src="/drawDrop.js"></script>
+
+    <script>
     const socket = io.connect('localhost:3000');
     // const socket = io.connect('https://multiplayer-tanks-3fa3c942a132.herokuapp.com/');
 
@@ -532,16 +544,18 @@
     socket.on('error', (err) => { toast(err?.message || 'Something went wrong'); });
   </script>
 
-  <script src="/sketch.js" type="text/javascript"></script>
+    <script src="/sketch.js" type="text/javascript"></script>
 
-  <!-- ===== AdSense: load after content exists; manual slots only ===== -->
-  <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-2188750956198037" crossorigin="anonymous"></script>
-  <script>
+    <!-- ===== AdSense: load after content exists; manual slots only ===== -->
+    <script async
+      src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-2188750956198037"
+      crossorigin="anonymous"></script>
+    <script>
     // Push both ad slots once the page is ready
     window.addEventListener('load', function(){
       try { (adsbygoogle = window.adsbygoogle || []).push({}); } catch(e) {}
       try { (adsbygoogle = window.adsbygoogle || []).push({}); } catch(e) {}
     });
   </script>
-</body>
+  </body>
 </html>
