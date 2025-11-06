@@ -249,6 +249,7 @@
       </a>
       <nav class="site-nav" aria-label="Primary">
         <a class="nav-link" href="https://erictxie.com">My Website</a>
+        <a class="nav-link" href="/level-editor.html">Level Editor</a>
         <a class="nav-link nav-primary" href="/wiki/#/overview" target="_blank"
           rel="noopener">Wiki</a>
       </nav>
@@ -388,8 +389,8 @@
     <script src="/drawDrop.js"></script>
 
     <script>
-    const socket = io.connect('localhost:3000');
-    // const socket = io.connect('https://multiplayer-tanks-3fa3c942a132.herokuapp.com/');
+    // const socket = io.connect('localhost:3000');
+    const socket = io.connect('https://multiplayer-tanks-3fa3c942a132.herokuapp.com/');
 
     const el = (id) => document.getElementById(id);
     const toast = (msg) => {

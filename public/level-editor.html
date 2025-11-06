@@ -1,0 +1,882 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Tank Game — Level Editor</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+    :root {
+      --bg: #0f1115;
+      --panel: #171a21;
+      --panel-2: #1f2430;
+      --ink: #eaf2ff;
+      --ink-dim: #a9b3c1;
+      --accent: #6ea9ff;
+      --accent-2: #29d3a3;
+      --warn: #ffc857;
+      --error: #ff6b6b;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      height: 100%;
+      margin: 0;
+      background: radial-gradient(1200px 800px at 70% -20%, #1c2230 0%, #0f1115 60%) fixed;
+      color: var(--ink);
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Noto Sans";
+      overflow: hidden; /* keep canvas centered and avoid page scroll */
+    }
+    .wrap {
+      height: 100%;
+      display: grid;
+      grid-template-columns: 320px 1fr;
+      gap: 12px;
+      padding: 12px;
+      min-width: 700px; /* prevent extreme collapse */
+    }
+    .panel {
+      background: linear-gradient(180deg, #171a21 0%, #1f2430 100%);
+      border: 1px solid #2b3241;
+      border-radius: 12px;
+      padding: 12px;
+      overflow: auto;
+    }
+    .panel h2 {
+      margin: 6px 0 10px;
+      font-size: 16px;
+      color: var(--ink);
+      letter-spacing: .2px;
+    }
+    .controls { display: grid; gap: 10px; }
+    .row { display: flex; gap: 8px; align-items: center; }
+    .row > label { min-width: 88px; color: var(--ink-dim); font-size: 13px; }
+    .row input[type="number"], .row select {
+      width: 100%;
+      padding: 8px 10px;
+      border-radius: 8px;
+      border: 1px solid #2f3749;
+      background: #151923;
+      color: var(--ink);
+      outline: none;
+    }
+    .seg { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+    .chip, .tool {
+      padding: 8px 10px;
+      border-radius: 10px;
+      border: 1px solid #2f3749;
+      background: #151923;
+      color: var(--ink);
+      text-align: center;
+      cursor: pointer;
+      user-select: none;
+      font-size: 13px;
+    }
+    .chip.active, .tool.active { outline: 2px solid var(--accent); }
+    .tool-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+    .tiny { font-size: 12px; color: var(--ink-dim); }
+    textarea {
+      width: 100%;
+      min-height: 140px;
+      resize: vertical;
+      border-radius: 10px;
+      border: 1px solid #2f3749;
+      background: #10141e;
+      color: var(--ink);
+      padding: 10px;
+      outline: none;
+    }
+    .btn {
+      appearance: none;
+      border: 1px solid #2f3749;
+      background: #182034;
+      color: var(--ink);
+      padding: 10px 12px;
+      border-radius: 10px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    .btn.acc { background: #1a2a4c; border-color: #2a3a5b; }
+    .btn.acc:hover { outline: 2px solid var(--accent); }
+    .btn.warn { background: #2a220f; border-color: #4a3a1a; color: #ffd27a; }
+    canvas { display: block; border-radius: 12px; }
+    .kbd { padding: 2px 6px; border-radius: 6px; background: #0b0e14; border: 1px solid #233046; color: #b9c5d8; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono"; }
+    .legend {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 6px;
+      font-size: 12px; color: #a9b3c1;
+    }
+    .footer { margin-top: 8px; color: #a9b3c1; font-size: 12px; line-height: 1.4; }
+
+    /* Stage + preview */
+    #stage { overflow: hidden; position: relative; display: flex; flex-direction: column; }
+    #canvasMount { width: 100%; flex: 1; min-height: 0; position: relative; }
+    .preview {
+      margin-top: 12px;
+      height: 320px;
+      border-top: 1px solid #2b3241;
+      padding-top: 12px;
+      flex-shrink: 0;
+      position: relative;
+    }
+    .preview.hidden { display: none; }
+    #previewMount { 
+      width: 100%; 
+      height: 100%; 
+      position: relative;
+      pointer-events: auto; /* Ensure this captures its own clicks */
+    }
+    #previewMount canvas {
+      display: block !important;
+      border: 2px solid #2b3241;
+      border-radius: 8px;
+      pointer-events: auto; /* Canvas captures its own mouse events */
+    }
+  </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <!-- LEFT PANEL -->
+      <div class="panel" id="panel">
+        <div
+          style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+          <h2 style="margin: 0;">Level Editor</h2>
+          <button class="btn" id="backBtn" style="padding: 6px 12px;"
+            onclick="window.location.href='index.html'">← Back to Game</button>
+        </div>
+        <div class="controls">
+          <div class="row">
+            <label>Grid Size</label>
+            <input type="number" id="cols" min="4" max="200" value="40" title="Cols (width)" />
+            <input type="number" id="rows" min="4" max="200" value="24"
+              title="Rows (height)" />
+            <button class="btn" id="resize">Resize</button>
+          </div>
+
+          <div class="row">
+            <label>Tool</label>
+            <div class="tool-row">
+              <div class="tool active" data-tool="wall">Walls</div>
+              <div class="tool" data-tool="tank">Tank Tier</div>
+              <div class="tool" data-tool="start">Start (S)</div>
+            </div>
+          </div>
+
+          <div id="wallControls">
+            <div class="row">
+              <label>Wall Height</label>
+              <div class="seg" id="wallHeights"></div>
+            </div>
+            <div class="tiny">Tip: <span class="kbd">0</span> = erase, <span
+                class="kbd">1..9</span> set height quickly.</div>
+          </div>
+
+          <div id="tankControls" style="display:none;">
+            <div class="row">
+              <label>Tank Letter</label>
+              <div class="seg" id="letters"></div>
+            </div>
+            <div class="tiny">Letters are placed as-is (A=Tier0, B=Tier1, …, S is reserved for
+              spawn).</div>
+          </div>
+
+          <div class="row">
+            <label>Brush</label>
+            <select id="brush">
+              <option value="1">1×1</option>
+              <option value="2">2×2</option>
+              <option value="3">3×3</option>
+            </select>
+          </div>
+
+          <div class="row">
+            <label>Actions</label>
+            <button class="btn acc" id="clear">Clear</button>
+            <button class="btn warn" id="outlineBox">Rect Fill (drag)</button>
+          </div>
+
+          <div class="row">
+            <label>Export</label>
+            <button class="btn acc" id="copyBtn">Copy (trim)</button>
+            <button class="btn" id="downloadBtn">Download .txt</button>
+          </div>
+
+          <div class="row"><label>Import</label></div>
+          <textarea id="io" placeholder="Paste level text here to import…"></textarea>
+          <div class="row">
+            <button class="btn" id="importBtn">Import</button>
+          </div>
+
+          <div class="row">
+            <label>Preview</label>
+            <label style="display:flex;align-items:center;gap:8px;">
+              <input type="checkbox" id="toggle3D"> 3D Preview
+            </label>
+          </div>
+
+          <div class="legend">
+            <div>Digit 0 = empty</div><div>1..9 = wall height</div>
+            <div>Letters A..Z = AI</div><div>S = Start point (unique)</div>
+          </div>
+
+          <div class="footer">
+            Mouse: Left = paint • Right = erase • Hold <span class="kbd">Shift</span> to draw
+            filled rectangle.<br />
+            Keyboard: <span class="kbd">0..9</span> (wall), <span class="kbd">A..Z</span>
+            (tier), <span class="kbd">S</span> (spawn). Output matches <span
+              class="kbd">readLevels()</span>.
+          </div>
+        </div>
+      </div>
+
+      <!-- RIGHT PANEL -->
+      <div class="panel" id="stage">
+        <div id="canvasMount"></div>
+        <div id="previewWrap" class="preview hidden">
+          <div id="previewMount"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- p5 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.11.2/p5.min.js"
+      crossorigin="anonymous"></script>
+
+    <script>
+    // ====== STATE ======
+    let COLS = 40, ROWS = 24;
+    const CELL = 24; // fixed 2D cell size
+    let grid = [];           // characters: '0'..'9', 'A'..'Z', 'S'
+    let currentTool = 'wall';
+    let currentWall = '1';
+    let currentLetter = 'A';
+    let brushSize = 1;
+    let rectModeActive = false;
+    let dragStart = null;    // {c, r}
+    let shiftRect = false;
+    let startPlaced = false; // ensure one 'S'
+    let p5Instance = null;   // 2D instance
+    let p5Preview = null;    // 3D instance
+
+    function makeGrid(w, h, fill='0') { return Array.from({length: h}, _ => Array.from({length: w}, _ => fill)); }
+    function clamp(v, lo, hi){ return Math.max(lo, Math.min(hi, v)); }
+
+    // ====== UI HOOKUP ======
+    const wallHeightsEl = document.getElementById('wallHeights');
+    const lettersEl = document.getElementById('letters');
+
+    // Wall height chips 0..9
+    for (let d = 0; d <= 9; d++) {
+      const el = document.createElement('div');
+      el.className = 'chip' + (d===1 ? ' active':'');
+      el.textContent = String(d);
+      el.dataset.val = String(d);
+      el.addEventListener('click', () => {
+        document.querySelectorAll('#wallHeights .chip').forEach(x=>x.classList.remove('active'));
+        el.classList.add('active');
+        currentWall = String(d);
+        selectToolBtn('wall');
+      });
+      wallHeightsEl.appendChild(el);
+    }
+
+    // Tier letter chips (A..L shown; type others if needed)
+    'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.slice(0,12).split('').forEach(ch => {
+      const el = document.createElement('div');
+      el.className = 'chip' + (ch==='A' ? ' active':'');
+      el.textContent = ch;
+      el.dataset.val = ch;
+      el.addEventListener('click', () => {
+        document.querySelectorAll('#letters .chip').forEach(x=>x.classList.remove('active'));
+        el.classList.add('active');
+        currentLetter = ch;
+        selectToolBtn('tank');
+      });
+      lettersEl.appendChild(el);
+    });
+
+    // Tool buttons
+    const toolBtns = [...document.querySelectorAll('.tool')];
+    toolBtns.forEach(btn => btn.addEventListener('click', () => { selectToolBtn(btn.dataset.tool); }));
+    function selectToolBtn(tool) {
+      currentTool = tool;
+      toolBtns.forEach(b => b.classList.toggle('active', b.dataset.tool===tool));
+      document.getElementById('wallControls').style.display = (tool==='wall') ? '' : 'none';
+      document.getElementById('tankControls').style.display = (tool==='tank') ? '' : 'none';
+    }
+
+    // Resize grid
+    document.getElementById('resize').addEventListener('click', () => {
+      const c = clamp(parseInt(document.getElementById('cols').value||COLS), 4, 200);
+      const r = clamp(parseInt(document.getElementById('rows').value||ROWS), 4, 200);
+      COLS = c; ROWS = r;
+      grid = makeGrid(COLS, ROWS, '0');
+      startPlaced = false;
+      fitCanvasToStage();
+      previewRedraw();
+      redrawIO();
+    });
+
+    document.getElementById('brush').addEventListener('change', (e)=>{ brushSize = parseInt(e.target.value||'1',10); });
+
+    document.getElementById('clear').addEventListener('click', ()=>{
+      grid = makeGrid(COLS, ROWS, '0');
+      startPlaced = false;
+      previewRedraw();
+      redrawIO();
+    });
+
+    // Rect fill toggle (or hold Shift while dragging)
+    document.getElementById('outlineBox').addEventListener('click', ()=>{
+      rectModeActive = !rectModeActive;
+      document.getElementById('outlineBox').classList.toggle('active', rectModeActive);
+    });
+
+    // 3D toggle
+    const toggle3D = document.getElementById('toggle3D');
+    toggle3D.addEventListener('change', () => {
+      const on = toggle3D.checked;
+      document.getElementById('previewWrap').classList.toggle('hidden', !on);
+      if (on) {
+        createPreview();
+        fitPreview();
+        previewRedraw();
+      } else {
+        destroyPreview();
+      }
+    });
+
+    // ====== EXPORT / IMPORT ======
+    function getBounds() {
+      let minR = ROWS, maxR = -1, minC = COLS, maxC = -1;
+      for (let r=0; r<ROWS; r++) for (let c=0; c<COLS; c++) {
+        if (grid[r][c] !== '0') {
+          if (r < minR) minR = r;
+          if (r > maxR) maxR = r;
+          if (c < minC) minC = c;
+          if (c > maxC) maxC = c;
+        }
+      }
+      if (maxR === -1) return { r0: 0, r1: Math.max(0, ROWS-1), c0: 0, c1: Math.max(0, COLS-1), empty: true };
+      return { r0: minR, r1: maxR, c0: minC, c1: maxC, empty: false };
+    }
+    function levelToTextTrimmed() {
+      const {r0, r1, c0, c1} = getBounds();
+      const out = [];
+      for (let r = r0; r <= r1; r++) out.push(grid[r].slice(c0, c1+1).join(''));
+      return out.join('\n');
+    }
+    function levelToTextFull() { return grid.map(row => row.join('')).join('\n'); }
+
+    document.getElementById('copyBtn').addEventListener('click', () => {
+      const txt = levelToTextTrimmed();
+      navigator.clipboard.writeText(txt).catch(()=>{});
+      const io = document.getElementById('io');
+      io.value = txt; io.select();
+    });
+    document.getElementById('downloadBtn').addEventListener('click', () => {
+      const blob = new Blob([levelToTextTrimmed()], {type: 'text/plain'});
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'level.txt';
+      a.click();
+      URL.revokeObjectURL(a.href);
+    });
+
+    function normalizeChar(ch) {
+      if (!ch) return '0';
+      const up = ch.toUpperCase();
+      if (up === 'S') return 'S';
+      if (up >= 'A' && up <= 'Z') return up;
+      if (up >= '0' && up <= '9') return up;
+      return '0';
+    }
+    function importFromText(text) {
+      const src = (text || '').replace(/\r/g, '');
+      const lines = src.split('\n');
+      // Skip leading blanks
+      let i = 0;
+      while (i < lines.length && lines[i].trim() === '') i++;
+      // First contiguous block
+      const block = [];
+      for (; i < lines.length; i++) {
+        const raw = lines[i];
+        if (raw.trim() === '') break;
+        block.push(raw);
+      }
+      if (!block.length) return false;
+
+      const width = Math.max(...block.map(s => s.length));
+      const height = block.length;
+
+      const newGrid = Array.from({ length: height }, (_, r) => {
+        const row = [];
+        const line = block[r] || '';
+        for (let c = 0; c < width; c++) row.push(normalizeChar(line[c]));
+        return row;
+      });
+
+      // Single S enforcement
+      let foundS = false;
+      for (let r = 0; r < height; r++) for (let c = 0; c < width; c++) {
+        if (newGrid[r][c] === 'S') {
+          if (foundS) newGrid[r][c] = '0';
+          else foundS = true;
+        }
+      }
+
+      // Commit
+      COLS = width; ROWS = height; grid = newGrid; startPlaced = foundS;
+
+      // Reflect UI + canvas
+      document.getElementById('cols').value = COLS;
+      document.getElementById('rows').value = ROWS;
+
+      fitCanvasToStage();
+      previewRedraw();
+
+      // Show trimmed export in textarea
+      document.getElementById('io').value = levelToTextTrimmed();
+
+      p5Instance?.redraw();
+      return true;
+    }
+    document.getElementById('importBtn').addEventListener('click', ()=>{
+      const text = (document.getElementById('io').value || '');
+      const ok = importFromText(text);
+      if (!ok) document.getElementById('io').placeholder = 'No level found (paste a non-empty block).';
+    });
+
+    function redrawIO() {
+      const io = document.getElementById('io');
+      if (io) io.value = levelToTextTrimmed();
+      p5Instance?.redraw();
+    }
+
+    // ====== SIZING HELPERS ======
+    function stageInnerSize() {
+      const stage = document.getElementById('stage');
+      const cs = getComputedStyle(stage);
+      const padX = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight);
+      const padY = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+      return { w: Math.max(0, stage.clientWidth - padX - 2),
+               h: Math.max(0, stage.clientHeight - padY - 2) };
+    }
+    function fitCanvasToStage() {
+      if (!p5Instance) return;
+      const { w, h } = stageInnerSize();
+      const targetW = Math.min(COLS * CELL + 1, w);
+      const targetH = Math.min(ROWS * CELL + 1, h);
+      p5Instance.resizeCanvas(targetW, targetH);
+      p5Instance.redraw();
+    }
+
+    // ====== 2D P5 (EDITOR) ======
+    let pg; // offscreen for crisp grid lines
+
+    new p5(p => {
+      p.setup = function() {
+        grid = makeGrid(COLS, ROWS, '0');
+
+        // Create small then fit to stage
+        const cnv = p.createCanvas(10, 10);
+        cnv.parent('canvasMount');
+        p.pixelDensity(1);
+        pg = p.createGraphics(COLS*CELL+1, ROWS*CELL+1);
+        p.noLoop();
+
+        p5Instance = p;
+        fitCanvasToStage();
+        window.addEventListener('resize', () => {
+          fitCanvasToStage();
+          fitPreview();
+        });
+      };
+
+      p.draw = function() {
+        p.background(20,24,33);
+        const W = COLS*CELL+1, H = ROWS*CELL+1;
+        const x0 = Math.floor((p.width - W)/2);
+        const y0 = Math.floor((p.height - H)/2);
+
+        // grid bg
+        pg.push();
+        pg.clear();
+        pg.noStroke();
+        pg.fill(27, 32, 44);
+        pg.rect(0,0,W,H,10);
+
+        // grid lines
+        pg.stroke(40,46,60);
+        pg.strokeWeight(1);
+        for (let c=0; c<=COLS; c++) pg.line(c*CELL + .5, 0, c*CELL + .5, H);
+        for (let r=0; r<=ROWS; r++) pg.line(0, r*CELL + .5, W, r*CELL + .5);
+
+        // cells
+        pg.textAlign(pg.CENTER, pg.CENTER);
+        pg.textSize(Math.max(10, CELL*0.55));
+        for (let r=0; r<ROWS; r++) for (let c=0; c<COLS; c++) {
+          const ch = grid[r][c];
+          const x = c*CELL, y = r*CELL;
+
+          if (ch === '0') {
+            // empty
+          } else if (/[1-9]/.test(ch)) {
+            const hgt = parseInt(ch, 10);
+            const base = [138, 90, 43];
+            const shade = 18*hgt;
+            pg.noStroke();
+            pg.fill(base[0]+shade*0.2, base[1]-shade*0.05, base[2]-shade*0.15);
+            pg.rect(x+1, y+1, CELL-1, CELL-1, 5);
+            pg.fill(220, 210, 195, 160);
+            pg.text(ch, x + CELL/2, y + CELL/2);
+          } else if (ch === 'S') {
+            pg.noStroke();
+            pg.fill(35, 55, 95);
+            pg.rect(x+1, y+1, CELL-1, CELL-1, 5);
+            pg.fill(110, 180, 255);
+            pg.text('S', x + CELL/2, y + CELL/2);
+          } else { // A..Z (tanks)
+            pg.noStroke();
+            pg.fill(32, 40, 30);
+            pg.rect(x+1, y+1, CELL-1, CELL-1, 5);
+            pg.fill(255, 230, 120);
+            pg.text(ch, x + CELL/2, y + CELL/2);
+          }
+        }
+        pg.pop();
+
+        p.image(pg, x0, y0);
+
+        // Hover highlight
+        const {c, r} = mouseToCell(p.mouseX, p.mouseY);
+        if (overCanvas(p) && c>=0 && r>=0 && c<COLS && r<ROWS) {
+          p.noFill();
+          p.stroke(110,170,255,180);
+          p.strokeWeight(2);
+          p.rect(x0 + c*CELL, y0 + r*CELL, CELL*brushSize, CELL*brushSize);
+        }
+
+        // Rect selection preview
+        if (overCanvas(p) && (rectModeActive || shiftRect) && dragStart) {
+          const cur = cellClamp(mouseToCell(p.mouseX, p.mouseY));
+          const a = dragStart, b = cur;
+          const rx = x0 + Math.min(a.c,b.c)*CELL;
+          const ry = y0 + Math.min(a.r,b.r)*CELL;
+          const rw = (Math.abs(a.c-b.c)+1)*CELL;
+          const rh = (Math.abs(a.r-b.r)+1)*CELL;
+          p.noFill();
+          p.stroke(255, 210, 80, 200);
+          p.strokeWeight(2);
+          p.rect(rx, ry, rw, rh);
+        }
+      };
+
+      // Helpers
+      function overCanvas(p) { 
+        // Check if mouse is within canvas bounds
+        if (p.mouseX < 0 || p.mouseY < 0 || p.mouseX > p.width || p.mouseY > p.height) return false;
+        
+        // Also check that we're not over the preview section
+        const previewWrap = document.getElementById('previewWrap');
+        if (previewWrap && !previewWrap.classList.contains('hidden')) {
+          const rect = previewWrap.getBoundingClientRect();
+          const globalX = p.mouseX + p.canvas.getBoundingClientRect().left;
+          const globalY = p.mouseY + p.canvas.getBoundingClientRect().top;
+          if (globalY >= rect.top && globalY <= rect.bottom) {
+            return false; // Mouse is over the preview area
+          }
+        }
+        return true;
+      }
+      function inBoard(mx, my) {
+        const W = COLS*CELL+1, H = ROWS*CELL+1;
+        const x0 = Math.floor((p.width - W)/2);
+        const y0 = Math.floor((p.height - H)/2);
+        return (mx>=x0 && my>=y0 && mx<=x0+W && my<=y0+H);
+      }
+      function mouseToCell(mx, my) {
+        const W = COLS*CELL+1, H = ROWS*CELL+1;
+        const x0 = Math.floor((p.width - W)/2);
+        const y0 = Math.floor((p.height - H)/2);
+        return { c: Math.floor((mx - x0)/CELL), r: Math.floor((my - y0)/CELL) };
+      }
+      function cellClamp(cr) { return { c: clamp(cr.c, 0, COLS-1), r: clamp(cr.r, 0, ROWS-1) }; }
+
+      p.mousePressed = function() {
+        if (!overCanvas(p)) return;
+        if (!inBoard(p.mouseX, p.mouseY)) return;
+        shiftRect = p.keyIsDown(p.SHIFT);
+        const {c, r} = cellClamp(mouseToCell(p.mouseX, p.mouseY));
+        if (rectModeActive || shiftRect) { dragStart = {c, r}; p.redraw(); return; }
+        if (p.mouseButton === p.LEFT) applyPaint(c, r);
+        else if (p.mouseButton === p.RIGHT) eraseAt(c, r);
+      };
+      p.mouseDragged = function() {
+        if (!overCanvas(p)) return;
+        if (!inBoard(p.mouseX, p.mouseY)) return;
+        const {c, r} = cellClamp(mouseToCell(p.mouseX, p.mouseY));
+        if (rectModeActive || shiftRect) { p.redraw(); return; }
+        if (p.mouseButton === p.LEFT) applyPaint(c, r);
+        else if (p.mouseButton === p.RIGHT) eraseAt(c, r);
+      };
+      p.mouseReleased = function() {
+        if (!overCanvas(p)) { dragStart = null; p.redraw(); return; }
+        if (!inBoard(p.mouseX, p.mouseY)) { dragStart = null; p.redraw(); return; }
+        if (dragStart && (rectModeActive || shiftRect)) {
+          const a = dragStart;
+          const b = cellClamp(mouseToCell(p.mouseX, p.mouseY));
+          const c0 = Math.min(a.c, b.c), c1 = Math.max(a.c, b.c);
+          const r0 = Math.min(a.r, b.r), r1 = Math.max(a.r, b.r);
+          for (let rr=r0; rr<=r1; rr++) for (let cc=c0; cc<=c1; cc++) applyPaint(cc, rr);
+        }
+        dragStart = null;
+        p.redraw();
+      };
+
+      function applyPaint(c, r) {
+        switch (currentTool) {
+          case 'wall': paintAt(c, r, currentWall); break;
+          case 'tank': paintAt(c, r, currentLetter); break;
+          case 'start': paintAt(c, r, 'S'); break;
+        }
+      }
+
+      // Prevent scroll/RCM on canvas
+      // p.mouseWheel = function(e){ return false; };
+      // p.contextMenu = function(){ return false; };
+    });
+
+    // ====== EDIT OPERATIONS (shared) ======
+    function eachBrushCell(c, r, fn) {
+      for (let dr=0; dr<brushSize; dr++) for (let dc=0; dc<brushSize; dc++) fn(c+dc, r+dr);
+    }
+    function paintAt(c, r, value) {
+      eachBrushCell(c, r, (cc, rr) => {
+        if (cc<0 || rr<0 || cc>=COLS || rr>=ROWS) return;
+        if (value === 'S') {
+          // Only one S; remove old S first
+          for (let y=0; y<ROWS; y++) for (let x=0; x<COLS; x++) if (grid[y][x]==='S') grid[y][x]='0';
+          grid[rr][cc] = 'S';
+          startPlaced = true;
+        } else {
+          if (grid[rr][cc] === 'S' && value !== '0') {
+            grid[rr][cc] = value; // allow overwrite
+            if (value !== 'S') startPlaced = false;
+          } else {
+            grid[rr][cc] = value;
+          }
+        }
+      });
+      previewRedraw();
+      redrawIO();
+    }
+    function eraseAt(c, r) { paintAt(c, r, '0'); }
+
+    // ====== 3D PREVIEW ======
+    function previewSize() {
+      const wrap = document.getElementById('previewWrap');
+      const cs = getComputedStyle(wrap);
+      const padX = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight);
+      const padY = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+      return { w: Math.max(100, wrap.clientWidth - padX),
+               h: Math.max(160, wrap.clientHeight - padY) };
+    }
+    function fitPreview() {
+      if (!p5Preview) return;
+      const { w, h } = previewSize();
+      p5Preview.resizeCanvas(w, h);
+      p5Preview.redraw();
+    }
+    function destroyPreview() {
+      if (p5Preview) { p5Preview.remove(); p5Preview = null; }
+    }
+    function previewRedraw() {
+      if (p5Preview) p5Preview.redraw();
+    }
+
+    function createPreview() {
+      console.log('createPreview called, p5Preview exists:', !!p5Preview);
+      if (p5Preview) return;
+      
+      p5Preview = new p5(p => {
+        const TS = 20;        // tile size in preview units
+        const HUNIT = 12;     // wall height per digit
+        let cameraInitialized = false; // Track if we've set the initial camera
+
+        p.setup = function() {
+          console.log('p5 preview setup starting...');
+          const { w, h } = previewSize();
+          console.log('Creating canvas with dimensions:', w, h);
+          const cnv = p.createCanvas(w, h, p.WEBGL);
+          cnv.parent('previewMount');
+          p.pixelDensity(1);
+          p.noLoop();
+          console.log('Canvas created, calling initial redraw');
+          p.redraw(); // Initial render
+        };
+
+        p.draw = function() {
+          console.log('3D preview drawing...');
+          p.background(16,18,24);
+
+          const cols = COLS, rows = ROWS;
+          const worldW = cols * TS;
+          const worldH = rows * TS;
+
+          // Set initial camera position only once
+          if (!cameraInitialized) {
+            const camDist = Math.max(cols, rows) * TS * 0.8;
+            p.camera(
+              camDist * 0.6,  // x: offset to the side
+              -camDist * 0.5, // y: elevated above
+              camDist * 0.6,  // z: back from center
+              0, 0, 0,        // looking at origin
+              0, 1, 0         // up vector
+            );
+            cameraInitialized = true;
+          }
+
+          // Improved lighting for better visibility
+          p.ambientLight(120); // Brighter ambient
+          p.directionalLight(200, 200, 200, 0.3, -1, -0.5); // Main light from above-right
+          p.directionalLight(100, 100, 120, -0.3, -0.5, 0.3); // Fill light from left
+          p.pointLight(150, 150, 150, 0, -worldH, 0); // Top light for highlights
+
+          // Smooth orbit controls - takes over after initial camera set
+          p.orbitControl();
+
+          p.push();
+          // Center world around origin
+          p.translate(-worldW/2, 0, -worldH/2);
+
+          // Floor - properly aligned with the grid
+          p.push();
+          p.translate(worldW/2, 0, worldH/2); // Center the floor
+          p.rotateX(p.HALF_PI); // Rotate to be horizontal
+          p.noStroke();
+          p.ambientMaterial(28, 35, 48);
+          p.plane(worldW, worldH);
+          p.pop();
+
+          // Cells - aligned with floor grid
+          for (let r=0; r<rows; r++) {
+            for (let c=0; c<cols; c++) {
+              const ch = grid[r][c];
+              const x = c * TS + TS/2; // Center each cell
+              const z = r * TS + TS/2;
+
+              if (/[1-9]/.test(ch)) {
+                const h = parseInt(ch,10) * HUNIT;
+                p.push();
+                p.translate(x, -h/2, z);
+                p.noStroke();
+                // Slight shade by height
+                const shade = 18 * parseInt(ch,10);
+                p.ambientMaterial(120 + shade*0.2, 85 - shade*0.05, 55 - shade*0.15);
+                p.box(TS*0.92, h, TS*0.92, 1, 1);
+                p.pop();
+              } else if (ch === 'S') {
+                p.push();
+                p.translate(x, -6, z);
+                p.noStroke();
+                p.ambientMaterial(40, 110, 220);
+                p.cone(TS*0.28, 14, 16, 1);
+                p.pop();
+              } else if (/[A-Z]/.test(ch)) {
+
+                const colorList = [[100, 100, 100], [200, 100, 100], [200, 200, 100], [100, 200, 100], [200, 100, 200], [50, 150, 220], [200, 100, 50], [150, 100, 100]];
+                const tierIndex = ch.charCodeAt(0) - 65; // A=0, B=1, etc.
+                const color = colorList[tierIndex % colorList.length]; // Cycle through colors
+                
+                p.push();
+                p.translate(x, 0, z);
+                p.noStroke();
+                
+                // Tank base (lower box)
+                p.push();
+                p.translate(0, -TS*0.25, 0);
+                p.ambientMaterial(color[0], color[1], color[2]);
+                p.box(TS*0.5, TS*0.25, TS*0.5);
+                p.pop();
+                
+                // Turret (upper box)
+                p.push();
+                p.translate(0, -TS*0.5, 0);
+                p.ambientMaterial(color[0], color[1], color[2]);
+                p.box(TS*0.25, TS*0.15, TS*0.25);
+                p.pop();
+                
+                // Barrel (cylinder pointing forward)
+                p.push();
+                p.translate(TS*0.25, -TS*0.5, 0);
+                p.rotateZ(Math.PI/2);
+                p.ambientMaterial(color[0] * 0.8, color[1] * 0.8, color[2] * 0.8);
+                p.cylinder(TS*0.04, TS*0.375, 8, 1);
+                p.pop();
+                
+                p.pop();
+              }
+            }
+          }
+          p.pop();
+        };
+
+        // Let orbit control animate while dragging, then pause
+        p.mouseDragged = function() { 
+          if (p.mouseX >= 0 && p.mouseX <= p.width && p.mouseY >= 0 && p.mouseY <= p.height) {
+            p.loop(); 
+            return false; // Prevent event propagation
+          }
+        };
+        p.mouseReleased = function() { 
+          p.noLoop(); 
+          return false; // Prevent event propagation
+        };
+        p.mousePressed = function() {
+          return false; // Prevent event propagation
+        };
+
+      });
+    }
+
+    // ====== INIT ======
+    window.addEventListener('load', () => {
+      document.getElementById('io').value = '';
+      
+      // 3D Preview toggle
+      document.getElementById('toggle3D').addEventListener('change', (e) => {
+        console.log('3D Preview toggle:', e.target.checked);
+        const wrap = document.getElementById('previewWrap');
+        
+        if (e.target.checked) {
+          // Show the preview wrapper first
+          wrap.classList.remove('hidden');
+          console.log('Preview wrapper shown');
+          
+          // Resize main canvas to fit new layout
+          fitCanvasToStage();
+          
+          // Wait a frame for layout to complete, then create preview
+          requestAnimationFrame(() => {
+            const size = previewSize();
+            console.log('Preview size:', size);
+            
+            if (size.w > 0 && size.h > 0) {
+              createPreview();
+              console.log('Preview created, p5Preview:', p5Preview);
+            } else {
+              console.error('Preview wrapper has no dimensions!');
+            }
+          });
+        } else {
+          wrap.classList.add('hidden');
+          destroyPreview();
+          // Resize main canvas to fill available space
+          fitCanvasToStage();
+          console.log('Preview destroyed');
+        }
+      });
+    });
+    </script>
+  </body>
+</html>
