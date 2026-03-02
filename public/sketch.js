@@ -11,6 +11,9 @@ let drops = []; // Store active drops
 // let drops = [{ x: 200, y: 200, buff: 'speed' }, { x: 250, y: 200, buff: 'fireRate' }, { x: 300, y: 200, buff: 'bulletSpeed' }, { x: 350, y: 200, buff: 'shield' }, { x: 400, y: 200, buff: 'multiShot' }, { x: 450, y: 200, buff: 'bulletBounces' }]; // test drop
 let buffs = [];
 
+// Minimap: tracks which tiles have been seen this run
+let exploredTiles = null;
+
 let camX = 0, camY = 0, camZ = 600;
 
 let shakeIntensity = 0;
@@ -23,6 +26,9 @@ let transitionTimer = 0;
 let transitionMessage = '';
 let gameMode = 'lobby';
 
+// adjustable parameters for vision/raycasting
+let visionResolution = Math.PI / 150; // smaller value gives finer fog edges
+
 let VIEWPORT_WIDTH = 800; // Match canvas width
 let VIEWPORT_HEIGHT = 600; // Match canvas height
 
@@ -33,6 +39,18 @@ let tracks = [];
 let trackState = {};                // per-tank: { prev:{x,y}, accum:number }
 const TRACK_SPACING = PLAYER_SIZE * 0.8;     // increase for wider spacing
 const TRACK_FADE_FRAMES = 120;
+
+// --- Client-side smoothing state ---
+let smoothingEnabled = true;
+let localX = 0, localY = 0;
+let localVx = 0, localVy = 0;
+let localAngle = 0, localTurretAngle = 0;
+let localPredValid = false;
+let currentKeys = { w: false, a: false, s: false, d: false };
+let currentTurretAngle = 0;
+const playerInterpBuf = {}; // id -> [{x, y, angle, turretAngle, t}, ...]
+const INTERP_DELAY_MS = 100;
+let bulletState = {}; // id -> {x, y, angle, speed, receivedAt}
 
 
 function getViewportBounds(playerX, playerY) {
@@ -87,10 +105,40 @@ socket.on('error', (err) => {
 });
 
 socket.on('updatePlayers', (serverPlayers) => {
+    const now = Date.now();
+    for (const [id, p] of Object.entries(serverPlayers)) {
+        if (id === socket.id) {
+            if (!localPredValid) {
+                // First update — initialize local prediction from server
+                localX = p.x; localY = p.y;
+                localVx = p.vx || 0; localVy = p.vy || 0;
+                localAngle = p.angle;
+                localTurretAngle = p.turretAngle || 0;
+                localPredValid = true;
+            }
+            // Reconciliation is intentionally deferred to applySmoothing() so
+            // corrections are applied at the render-frame rate, not socket-packet rate.
+        } else {
+            // Buffer remote player snapshots for interpolation
+            if (!playerInterpBuf[id]) playerInterpBuf[id] = [];
+            playerInterpBuf[id].push({ x: p.x, y: p.y, angle: p.angle, turretAngle: p.turretAngle || 0, t: now });
+            if (playerInterpBuf[id].length > 20) playerInterpBuf[id].shift();
+        }
+    }
+    // Clean up buffers for disconnected players
+    for (const id of Object.keys(playerInterpBuf)) {
+        if (!serverPlayers[id]) delete playerInterpBuf[id];
+    }
     players = serverPlayers;
 });
 
 socket.on('updateBullets', (serverBullets) => {
+    const now = Date.now();
+    const nextState = {};
+    serverBullets.forEach((b, i) => {
+        nextState[i] = { x: b.x, y: b.y, angle: b.angle, speed: b.speed, receivedAt: now };
+    });
+    bulletState = nextState;
     bullets = serverBullets;
 });
 
@@ -103,6 +151,10 @@ socket.on('updateLevel', (data) => {
     levelNumber = data.levelNumber;
     tracks.length = 0;
     trackState = {};
+    // Reset minimap exploration on every new level
+    exploredTiles = level.length && level[0].length
+        ? Array.from({ length: level.length }, () => new Array(level[0].length).fill(false))
+        : null;
 });
 
 socket.on('explosion', (data) => {
@@ -190,9 +242,8 @@ async function setup() {
     // canvas.position((window.innerWidth - width) / 2, (window.innerHeight - height) / 2);
 
 
-    const { w, h } = getMountSize();
-
-    cnv = createCanvas(w, h, WEBGL);
+    if (!gameMount) gameMount = document.getElementById('game-mount') || document.body;
+    cnv = createCanvas(1100, 680, WEBGL);
     cnv.parent(gameMount);
 
     pixelDensity(1);
@@ -310,17 +361,12 @@ function draw() {
         textSize(width / 14);
         text("TANK ARENA", 0, -height / 2 + 90);
 
-        // Subtitle
-        fill(180);
-        textSize(width / 35);
-        text("Create or Join a Lobby", 0, -height / 2 + 150);
-
         // Chips
         const chips = ["W / A / S / D — Move", "Mouse — Aim", "Click — Fire"];
         const chipW = width * 0.45;
         const chipH = height / 16;
         const spacing = chipH * 1.2;
-        const startY = -height / 2 + 210;
+        const startY = height / 2 - chipH * chips.length * 1.4;
 
         textSize(width / 45);
         for (let i = 0; i < chips.length; i++) {
@@ -384,6 +430,10 @@ function draw() {
 
     drawDrops();
 
+    if (smoothingEnabled) {
+        applySmoothing();
+    }
+
     // Draw all tanks
     for (let id in players) {
         const tank = players[id];
@@ -446,6 +496,13 @@ function draw() {
 
     camera(camX + offsetX, camY + offsetY, camZ + offsetZ, targetX + offsetX, targetY + offsetY, targetZ, 0, 1, 0);
 
+    // Show fog/vision hint for first 5 seconds, then briefly every 10 s
+    if (frameCount < 300 || frameCount % 600 < 120) {
+        const VH = 630 * Math.tan(Math.PI / 6);
+        const VW = VH * (width / height);
+        drawHintText("F: fog toggle | V: vision quality", -VW + 20, -VH + 20);
+    }
+
     // camera(camX, camY, camZ, targetX, targetY, targetZ, 0, 1, 0);
 
     // Draw bullets
@@ -458,37 +515,43 @@ function draw() {
     drawTrails();
 
     if (isFogOfWar && !allDead) {
-        const resolution = PI / 150;
-        // const visiblePoints = calculateVision(targetTank.x, targetTank.y, level, maxDistance, resolution);
+        const resolution = visionResolution;
         if (gameMode == 'lobby') {
             const maxDistance = TILE_SIZE * 100;
             const visiblePoints = calculateVision(targetTank.x, targetTank.y, level, targetTank.visionDistance, resolution);
             drawFogOfWar(targetTank.x, targetTank.y, visiblePoints);
         } else if (gameMode == 'arena') {
-            const maxDistance = TILE_SIZE * 7;
             const visiblePoints = calculateVision(targetTank.x, targetTank.y, level, targetTank.visionDistance, resolution);
             drawFogOfWar(targetTank.x, targetTank.y, visiblePoints);
+            const sharedVision = calculateSharedVision(players, level, resolution);
+            for (const { x: vx, y: vy, points } of sharedVision) markExplored(vx, vy, points);
         } else {
             const maxDistance = TILE_SIZE * 5;
             const visiblePoints = calculateSharedVision(players, level, resolution);
             drawSharedFogOfWar(targetTank.x, targetTank.y, visiblePoints);
+            for (const { x: vx, y: vy, points } of visiblePoints) markExplored(vx, vy, points);
         }
-        // const visiblePoints = calculateLimitedVision(myTank.x, myTank.y, myTank.turretAngle, Math.PI / 4, level, maxDistance, resolution);
-
     }
 
     push(); // Save current transformations
     resetMatrix(); // Reset transformations to screen space
-    // translate(0, 0, 300)
 
     camera(0, 0, 630, 0, 0, 0)
-    // console.log(mouseX)
     // Draw the ping in the top-left corner of the screen
     fill(255); // Set text color
     textSize(20); // Set text size
     textAlign(LEFT, TOP); // Align text to the top-left
     textFont(font);
-    text(`Ping: ${Math.round(ping)} ms`, -width / 2 + width / 7, -height / 2 + width / 11); // Display rounded ping
+
+    // disable depth test so ping is always visible
+    if (false) {
+        const gl = drawingContext;
+        gl.disable(gl.DEPTH_TEST);
+        text(`Ping: ${Math.round(ping)} ms`, -width / 2 + width / 7, -height / 2 + width / 11); // Display rounded ping
+        gl.enable(gl.DEPTH_TEST);
+    }
+
+    if (gameMode !== 'lobby') drawMinimap();
 
     pop(); // Restore transformations
 }
@@ -496,6 +559,96 @@ function draw() {
 function triggerScreenShake(intensity, duration) {
     shakeIntensity = intensity;
     shakeDuration = duration;
+}
+
+function drawHintText(msg, x, y) {
+    push();
+    resetMatrix();
+    camera(0, 0, 630, 0, 0, 0);
+    const gl = drawingContext;
+    gl.disable(gl.DEPTH_TEST);
+    fill(255, 200);
+    textSize(14);
+    textAlign(LEFT, TOP);
+    textFont(font);
+    text(msg, x, y);
+    gl.enable(gl.DEPTH_TEST);
+    pop();
+}
+
+// Mark tiles visible along each ray as explored (DDA tile walk from player to ray endpoint).
+function markExplored(playerX, playerY, points) {
+    if (!exploredTiles || !level.length) return;
+    const rows = exploredTiles.length, cols = exploredTiles[0].length;
+    const pCol = Math.floor(playerX / TILE_SIZE);
+    const pRow = Math.floor(playerY / TILE_SIZE);
+    for (const pt of points) {
+        const eCol = Math.floor(pt.x / TILE_SIZE);
+        const eRow = Math.floor(pt.y / TILE_SIZE);
+        const dCol = eCol - pCol, dRow = eRow - pRow;
+        const steps = Math.max(1, Math.max(Math.abs(dCol), Math.abs(dRow)));
+        for (let s = 0; s <= steps; s++) {
+            const c = Math.round(pCol + dCol * s / steps);
+            const r = Math.round(pRow + dRow * s / steps);
+            if (r >= 0 && r < rows && c >= 0 && c < cols) exploredTiles[r][c] = true;
+        }
+    }
+}
+
+// Draw a small exploration minimap in the bottom-left corner (screen space).
+function drawMinimap() {
+    if (!exploredTiles || !level.length || !level[0].length) return;
+    const rows = level.length, cols = level[0].length;
+    const tilePx = Math.max(2, Math.floor(150 / Math.max(rows, cols)));
+    const mmW = cols * tilePx, mmH = rows * tilePx;
+    const margin = 12;
+    // Empirically-tuned frustum half-extents for camera(0,0,630) screen-space overlay
+    const VH = 250;
+    const VW = VH * (width / height);
+    const mmLeft = -VW + margin;
+    const mmTop = VH - margin - mmH;
+
+    // The fog plane writes depth buffer values across the whole screen.
+    // Disable depth testing so the minimap always renders on top.
+    const gl = drawingContext;
+    gl.disable(gl.DEPTH_TEST);
+
+    rectMode(CORNER);
+    noStroke();
+    fill(0, 0, 0, 160);
+    rect(mmLeft - 2, mmTop - 2, mmW + 4, mmH + 4);
+
+    for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+            if (!exploredTiles[r][c]) continue;
+            fill(level[r][c] > 0 ? 50 : 150, level[r][c] > 0 ? 50 : 145, level[r][c] > 0 ? 55 : 130);
+            rect(mmLeft + c * tilePx, mmTop + r * tilePx, tilePx, tilePx);
+        }
+    }
+
+    // Player dots — blue for self, green for allies
+    for (const [id, tank] of Object.entries(players)) {
+        if (tank.isDead || tank.isAI) continue;
+        const pc = Math.floor(tank.x / TILE_SIZE);
+        const pr = Math.floor(tank.y / TILE_SIZE);
+        fill(id === socket.id ? color(80, 180, 255) : color(80, 220, 100));
+        rect(mmLeft + pc * tilePx, mmTop + pr * tilePx, tilePx, tilePx);
+    }
+
+    gl.enable(gl.DEPTH_TEST);
+}
+
+// keyboard shortcuts to tweak fog/vision
+function keyPressed() {
+    if (key === 'F' || key === 'f') {
+        // toggleFogOfWar();
+        isFogOfWar = !isFogOfWar;
+    }
+    if (key === 'V' || key === 'v') {
+        // alternate between fine and coarse ray resolution
+        visionResolution = (visionResolution === PI / 150 ? PI / 300 : PI / 150);
+        clearVisionCache();
+    }
 }
 
 function drawTransitionScreen() {
@@ -514,6 +667,113 @@ function drawTransitionScreen() {
 }
 
 setInterval(handleMovement, 1000 / 60)
+
+// Client replica of server's isCollidingWithWall (used for CSP)
+function clientCollidesWithWall(x, y) {
+    if (!level || !level[0]) return false;
+    const offsets = [
+        [-PLAYER_SIZE, -PLAYER_SIZE], [-PLAYER_SIZE, PLAYER_SIZE],
+        [PLAYER_SIZE, PLAYER_SIZE], [PLAYER_SIZE, -PLAYER_SIZE],
+    ];
+    for (const [dx, dy] of offsets) {
+        const col = Math.floor((x + dx) / TILE_SIZE);
+        const row = Math.floor((y + dy) / TILE_SIZE);
+        if (row < 0 || col < 0 || row >= level.length || col >= level[0].length || level[row][col] > 0)
+            return true;
+    }
+    return false;
+}
+
+function clientLerpAngle(current, target, t) {
+    let diff = ((target - current + Math.PI) % (2 * Math.PI)) - Math.PI;
+    if (diff < -Math.PI) diff += 2 * Math.PI;
+    return current + diff * t;
+}
+
+// Extrapolate a bullet's display position forward from its last received state.
+// Bullets travel in straight lines at constant speed between bounces, so this is exact
+// until the next bounce — at which point the server correction snaps us back.
+function getBulletDisplayPos(index) {
+    const s = bulletState[index];
+    const b = bullets[index];
+    if (!s || !b) return b ? { x: b.x, y: b.y } : { x: 0, y: 0 };
+    const framesElapsed = (Date.now() - s.receivedAt) / (1000 / 60);
+    return {
+        x: s.x + Math.cos(s.angle) * s.speed * framesElapsed,
+        y: s.y + Math.sin(s.angle) * s.speed * framesElapsed,
+    };
+}
+
+// Apply client-side prediction (local player) and entity interpolation (remote players)
+function applySmoothing() {
+    // Local player: reconcile prediction against server authority at render-frame rate,
+    // then write smoothed state back for rendering. Doing this here (not in the socket
+    // handler) means corrections blend in at 60fps instead of firing on each packet.
+    if (localPredValid && players[socket.id]) {
+        if (players[socket.id].isDead) {
+            localPredValid = false; // reinitialize from server on respawn
+        } else {
+            // Step 1: advance local physics exactly once per render frame.
+            // Running this here (not in setInterval) prevents timer drift from
+            // accumulating extra steps and overshooting the server near max speed.
+            const maxSpeed = myTank?.max_speed ?? MAX_SPEED;
+            if (currentKeys.w) localVy -= ACCELERATION;
+            if (currentKeys.s) localVy += ACCELERATION;
+            if (currentKeys.a) localVx -= ACCELERATION;
+            if (currentKeys.d) localVx += ACCELERATION;
+            localVx *= (1 - FRICTION);
+            localVy *= (1 - FRICTION);
+            const mag = Math.hypot(localVx, localVy);
+            if (mag > maxSpeed) { localVx = localVx / mag * maxSpeed; localVy = localVy / mag * maxSpeed; }
+            if (localVx !== 0 || localVy !== 0) {
+                localAngle = clientLerpAngle(localAngle, Math.atan2(localVy, localVx), 0.1);
+            }
+            const nx = localX + localVx, ny = localY + localVy;
+            if (!clientCollidesWithWall(nx, localY)) localX = nx; else localVx = 0;
+            if (!clientCollidesWithWall(localX, ny)) localY = ny; else localVy = 0;
+            localTurretAngle = currentTurretAngle;
+
+            // Step 2: reconcile against server authority at render-frame rate.
+            const sp = players[socket.id];
+            const errX = sp.x - localX;
+            const errY = sp.y - localY;
+            if (Math.hypot(errX, errY) > PLAYER_SIZE * 3) {
+                // Large divergence (wall collision mismatch) — snap immediately
+                localX = sp.x; localY = sp.y;
+                localVx = sp.vx || 0; localVy = sp.vy || 0;
+                localAngle = sp.angle;
+            } else {
+                // Blend position and velocity toward server to prevent drift at max speed
+                localX += errX * 0.1;
+                localY += errY * 0.1;
+                localVx += ((sp.vx || 0) - localVx) * 0.1;
+                localVy += ((sp.vy || 0) - localVy) * 0.1;
+            }
+
+            // Step 3: write smoothed state to render
+            sp.x = localX;
+            sp.y = localY;
+            sp.angle = localAngle;
+            sp.turretAngle = localTurretAngle;
+        }
+    }
+
+    // Remote players: interpolate between buffered snapshots
+    const renderTime = Date.now() - INTERP_DELAY_MS;
+    for (const [id, buf] of Object.entries(playerInterpBuf)) {
+        if (!players[id] || buf.length < 2) continue;
+        let i = buf.length - 2;
+        while (i > 0 && buf[i].t > renderTime) i--;
+        const before = buf[i], after = buf[i + 1];
+        const span = after.t - before.t;
+        const t = span > 0 ? Math.max(0, Math.min(1, (renderTime - before.t) / span)) : 1;
+        players[id].x = before.x + (after.x - before.x) * t;
+        players[id].y = before.y + (after.y - before.y) * t;
+        players[id].angle = clientLerpAngle(before.angle, after.angle, t);
+        players[id].turretAngle = before.turretAngle + (after.turretAngle - before.turretAngle) * t;
+    }
+}
+
 function leaveTracksForTank(tank, id) {
     if (!tank) return;
 
@@ -1345,21 +1605,16 @@ function drawUI() {
 
 function handleMovement() {
     if (!myTank) return;
-
-    const keys = {
-        w: keyIsDown(87), // W key
-        a: keyIsDown(65), // A key
-        s: keyIsDown(83), // S key
-        d: keyIsDown(68), // D key
+    // Capture input and send to server. Physics prediction runs in applySmoothing()
+    // (inside draw()) so it fires exactly once per render frame, not at setInterval rate.
+    currentKeys = {
+        w: keyIsDown(87),
+        a: keyIsDown(65),
+        s: keyIsDown(83),
+        d: keyIsDown(68),
     };
-
-    const turretAngle = atan2(mouseY - height / 2, mouseX - width / 2);
-
-    // Emit the movement input to the server
-    socket.emit('playerInput', {
-        keys: keys,
-        turretAngle: turretAngle,
-    });
+    currentTurretAngle = atan2(mouseY - height / 2, mouseX - width / 2);
+    socket.emit('playerInput', { keys: currentKeys, turretAngle: currentTurretAngle });
 }
 
 function handleTankMovement() {
@@ -1413,47 +1668,45 @@ function mouseDragged() {
 }
 
 function drawBullets() {
-    bullets.forEach((bullet) => {
+    bullets.forEach((bullet, i) => {
+        const { x, y } = getBulletDisplayPos(i);
+        const bz = PLAYER_SIZE * 1.4 - BULLET_SIZE;
+
         push();
-        translate(bullet.x, bullet.y, PLAYER_SIZE * 1.4 - BULLET_SIZE);
+        translate(x, y, bz);
 
         // Draw bullet outline
         noStroke();
         push();
-        const cameraPos = new p5.Vector(camX, camY, camZ); // Camera position
-        const bulletPos = new p5.Vector(bullet.x, bullet.y, PLAYER_SIZE * 1.4 - BULLET_SIZE); // Bullet position
-        const viewDirection = p5.Vector.sub(cameraPos, bulletPos).normalize(); // Direction from bullet to camera
+        const cameraPos = new p5.Vector(camX, camY, camZ);
+        const bulletPos = new p5.Vector(x, y, bz);
+        const viewDirection = p5.Vector.sub(cameraPos, bulletPos).normalize();
 
-        // Offset the outline behind the bullet
-        const offset = viewDirection.mult(-2); // Move slightly behind the bullet
-        translate(offset.x, offset.y, offset.z); // Apply the offset
-
+        const offset = viewDirection.mult(-2);
+        translate(offset.x, offset.y, offset.z);
 
         fill(0);
-        sphere(BULLET_SIZE + 1); // Slightly larger sphere for the outline
+        sphere(BULLET_SIZE + 1);
 
         if (bullet.owner && players[bullet.owner] && players[bullet.owner].isAI) {
             fill(255, 0, 0, 100);
-            translate(offset.x, offset.y, offset.z); // Red outline for enemy bullets
-            sphere(BULLET_SIZE + 2); // Slightly larger sphere for the outline
+            translate(offset.x, offset.y, offset.z);
+            sphere(BULLET_SIZE + 2);
         }
 
         pop();
-        // Draw bullet
         fill(150);
-        sphere(BULLET_SIZE); // Render bullet as a sphere
+        sphere(BULLET_SIZE);
         pop();
 
-        if (frameCount % 1 == 0) {
-            trails.push({
-                x: bullet.x,
-                y: bullet.y,
-                z: PLAYER_SIZE * 1.4 - BULLET_SIZE, // Initial explosion height
-                size: BULLET_SIZE, // Initial explosion size
-                dSize: BULLET_SIZE / 15,
-                alpha: 108, // Initial opacity
-            })
-        }
+        // Trail spawned at the client-smoothed position — no gaps from network jitter
+        trails.push({
+            x, y,
+            z: bz,
+            size: BULLET_SIZE,
+            dSize: BULLET_SIZE / 15,
+            alpha: 108,
+        });
     });
 }
 

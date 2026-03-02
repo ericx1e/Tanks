@@ -28,6 +28,20 @@ const socketToLobby = {}; // Map socket IDs to their respective lobby codes
 const socketToNames = {};
 const transitionTimers = {};
 
+const debug_lag = false;
+// Lag simulation for development. Set LAG_MS > 0 to enable.
+// JITTER_MS adds random variance around LAG_MS, causing packets to arrive out of order.
+const LAG_MS = 0;
+const JITTER_MS = 60;
+const lagEmit = (target, event, data) => {
+    if (LAG_MS > 0 || JITTER_MS > 0) {
+        const delay = Math.max(0, LAG_MS + (Math.random() * 2 - 1) * JITTER_MS);
+        setTimeout(() => target.emit(event, data), delay);
+    } else {
+        target.emit(event, data);
+    }
+};
+
 function createLobby() {
     const lobbyCode = uuidv4().slice(0, 2).toUpperCase();
     lobbies[lobbyCode] = {
@@ -524,7 +538,7 @@ function fireLaser(lobby, lobbyCode, tank, players, level, isActive) {
                             if (lobby.mode === 'lobby') {
                                 if (player.isAI && player.tier === 'button') {
                                     const buttonId = player.name.toLowerCase()
-                                    if (buttonId === 'campaign' || buttonId === 'arena' || buttonId === 'survival') {
+                                    if (buttonId === 'campaign' || buttonId === 'arena' || buttonId === 'survival' || buttonId === 'endless') {
                                         // player.isDead = true;
                                         changeMode(lobbyCode, buttonId);
                                         lobby.levelNumber = -1;
@@ -710,7 +724,7 @@ function updateBullets(lobby, lobbyCode) {
                     spawnDrop(lobbyCode, player.x, player.y);
                 }
 
-                if (lobby.mode === 'survival') {
+                if (lobby.mode === 'survival' || lobby.mode === 'endless') {
                     if (player.tier !== 'chest') {
                         lobby.tankKills++;
                         if (lobby.tankKills % 5 === 0) {
@@ -723,7 +737,7 @@ function updateBullets(lobby, lobbyCode) {
                 if (lobby.mode === 'lobby') {
                     if (player.isAI && player.tier === 'button') {
                         const buttonId = player.name.toLowerCase()
-                        if (buttonId === 'campaign' || buttonId === 'arena' || buttonId === 'survival') {
+                        if (buttonId === 'campaign' || buttonId === 'arena' || buttonId === 'survival' || buttonId === 'endless') {
                             // player.isDead = true;
                             changeMode(lobbyCode, buttonId);
                             lobby.levelNumber = -1;
@@ -833,6 +847,7 @@ function updatePlayerStats(lobby, player) {
 
     switch (lobby.mode) {
         case 'campaign':
+        case 'endless':
             player.visionDistance = 5 * TILE_SIZE
             player.max_speed = MAX_SPEED;
             player.maxBullets = 6;
@@ -887,6 +902,7 @@ function updatePlayerStats(lobby, player) {
             player.bulletSpeed = 0.7 * BULLET_SPEED * player.bulletSpeedMultiplier
             break;
         case 'campaign':
+        case 'endless':
             player.bulletSpeed = 1.1 * BULLET_SPEED * player.bulletSpeedMultiplier
             break;
         default:
@@ -1018,8 +1034,16 @@ setInterval(() => {
 
         updateBullets(lobby, lobbyCode);
 
-        io.to(lobbyCode).emit('updatePlayers', lobby.players);
-        io.to(lobbyCode).emit('updateBullets', lobby.bullets);
+        if (debug_lag) {
+            lagEmit(io.to(lobbyCode), 'updatePlayers', lobby.players);
+            lagEmit(io.to(lobbyCode), 'updateBullets', lobby.bullets);
+        } else {
+            io.to(lobbyCode).emit('updatePlayers', lobby.players);
+            io.to(lobbyCode).emit('updateBullets', lobby.bullets);
+        }
+
+
+
 
         for (const [_, player] of Object.entries(lobby.players)) {
             if (!player.isAI && !player.isDead) {
@@ -1045,7 +1069,7 @@ setInterval(() => {
             updatePlayerStats(lobby, player);
         }
 
-        if (lobby.mode == 'lobby' || lobby.mode == 'campaign') {
+        if (lobby.mode == 'lobby' || lobby.mode == 'campaign' || lobby.mode == 'endless') {
             if (lobby.level && updateAITanks(lobby, lobbyCode, lobby.players, lobby.level, lobby.bullets)) {
                 // createLevel(lobbyCode, lobby.levelNumber + 1);
                 // console.log(lobby.levelNumber, lobby.totalLevels - 1)
@@ -1094,7 +1118,7 @@ setInterval(() => {
             }
         }
 
-        if (lobby.mode == 'campaign' || lobby.mode == 'survival') {
+        if (lobby.mode == 'campaign' || lobby.mode == 'survival' || lobby.mode == 'endless') {
             let allDead = true;
             let numPlayers = 0;
             for (const [_, player] of Object.entries(lobby.players)) {

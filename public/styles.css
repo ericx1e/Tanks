@@ -1,0 +1,439 @@
+:root {
+    --bg: #111318;
+    --panel: #161a22;
+    --muted: #8b93a7;
+    --text: #e9eefc;
+    --accent: #6ea8ff;
+    --accent-2: #78f5cf;
+    --danger: #ff6b6b;
+    --ring: 0 0 0 3px rgba(110, 168, 255, .25);
+    --radius: 16px;
+}
+
+* {
+    box-sizing: border-box
+}
+
+html,
+body body {
+    margin: 0;
+    background:
+        radial-gradient(1200px 800px at 20% -10%, #1c2333 0%, rgba(28, 35, 51, 0) 60%),
+        radial-gradient(1000px 700px at 120% 20%, #0e3b2f40 0%, rgba(14, 59, 47, 0) 55%),
+        var(--bg);
+    color: var(--text);
+    font: 500 16px/1.5 system-ui, -apple-system, Segoe UI, Roboto, Inter, Arial, sans-serif;
+    overflow-x: hidden;
+}
+
+/* ===== Header ===== */
+.site-header {
+    position: fixed;
+    left: 24px;
+    right: 24px;
+    top: 24px;
+    height: 56px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    background: linear-gradient(180deg, #141923ee, #0f141bee);
+    border: 1px solid #20273a;
+    border-radius: 16px;
+    backdrop-filter: saturate(130%) blur(10px);
+    box-shadow: 0 10px 40px rgba(0, 0, 0, .45), inset 0 1px 0 rgba(255, 255, 255, .05);
+    z-index: 20;
+}
+
+.brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: var(--text);
+    text-decoration: none;
+    font-weight: 800;
+    letter-spacing: .02em;
+}
+
+.brand-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--accent-2);
+    box-shadow: 0 0 18px rgba(120, 245, 207, .75), 0 0 2px rgba(120, 245, 207, 1);
+}
+
+.brand:hover {
+    filter: brightness(1.06);
+}
+
+.site-nav {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.nav-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    border-radius: 12px;
+    text-decoration: none;
+    color: var(--text);
+    border: 1px solid #2b3142;
+    background: #0d1117;
+    transition: .15s filter, .15s transform, .15s background, .15s border-color;
+    font-weight: 600;
+    letter-spacing: .02em;
+}
+
+.nav-link:hover {
+    filter: brightness(1.05);
+}
+
+.nav-primary {
+    border-color: #345fb3;
+    background: linear-gradient(180deg, #2a69d0, #214ea6);
+}
+
+/* ===== Lobby Panel ===== */
+#lobby-controls {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    display: grid;
+    gap: 10px;
+    width: min(420px, calc(100% - 48px));
+    background: rgba(11, 14, 22, 0.82);
+    border: 1px solid #20273a;
+    border-radius: var(--radius);
+    box-shadow: 0 10px 40px rgba(0, 0, 0, .45), inset 0 1px 0 rgba(255, 255, 255, .04);
+    padding: 16px;
+    backdrop-filter: saturate(130%) blur(8px);
+    z-index: 10;
+    transition: transform .25s ease, opacity .2s ease, visibility .2s;
+}
+
+@media (max-width:900px) {
+    .site-header {
+        left: 16px;
+        right: 16px;
+        top: 16px;
+    }
+}
+
+.row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 10px;
+}
+
+.stack {
+    display: grid;
+    gap: 8px;
+}
+
+label {
+    font-size: 12px;
+    color: var(--muted);
+    letter-spacing: .02em;
+}
+
+input[type="text"] {
+    width: 100%;
+    padding: 12px 14px;
+    border-radius: 12px;
+    border: 1px solid #29324a;
+    background: #0d1117;
+    color: var(--text);
+    outline: none;
+    transition: .15s border-color, .15s box-shadow, .15s background;
+}
+
+input::placeholder {
+    color: #657091;
+}
+
+input:focus {
+    border-color: #36507e;
+    box-shadow: var(--ring);
+    background: #0b0f14;
+}
+
+input[disabled] {
+    opacity: .6;
+    cursor: not-allowed;
+}
+
+button {
+    padding: 12px 14px;
+    border-radius: 12px;
+    border: 1px solid #2a3752;
+    background: linear-gradient(180deg, #1c2740, #162035);
+    color: var(--text);
+    font-weight: 600;
+    letter-spacing: .02em;
+    cursor: pointer;
+    transition: .15s transform, .15s filter, .15s background, .15s border-color;
+}
+
+button:hover {
+    filter: brightness(1.05);
+}
+
+button:active {
+    transform: translateY(1px);
+}
+
+button[disabled] {
+    opacity: .5;
+    cursor: not-allowed;
+}
+
+.btn-accent {
+    border-color: #345fb3;
+    background: linear-gradient(180deg, #2a69d0, #214ea6);
+}
+
+.btn-ghost {
+    background: #0d1117;
+    border-color: #2b3142;
+}
+
+#lobby-info {
+    display: none;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: 12px;
+    background: #0d1117;
+    border: 1px solid #2b3142;
+}
+
+#lobby-code-badge {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    font-size: 14px;
+    letter-spacing: .18em;
+    padding: 8px 10px;
+    border-radius: 10px;
+    background: #121826;
+    border: 1px dashed #2b3550;
+    color: #cfe0ff;
+}
+
+.hint {
+    font-size: 12px;
+    color: #7c86a3;
+}
+
+/* Toast */
+#toast {
+    position: fixed;
+    left: 50%;
+    bottom: 40px;
+    transform: translateX(-50%) translateY(20px);
+    background: #0b0f14;
+    color: #e6f0ff;
+    border: 1px solid #25314a;
+    padding: 10px 14px;
+    border-radius: 12px;
+    opacity: 0;
+    pointer-events: none;
+    transition: .25s opacity, .25s transform;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, .45);
+    z-index: 999;
+}
+
+#toast.show {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+}
+
+
+/* Hide/show lobby panel */
+#lobby-controls.is-hidden {
+    transform: translate(-50%, -50%) translateY(16px) scale(.98);
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+}
+
+/* Reopen FAB */
+#lobby-fab {
+    position: fixed;
+    right: 24px;
+    bottom: 24px;
+    display: none;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 14px;
+    border-radius: 999px;
+    background: linear-gradient(180deg, #1c2740, #162035);
+    border: 1px solid #2a3752;
+    color: var(--text);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, .45), inset 0 1px 0 rgba(255, 255, 255, .04);
+    cursor: pointer;
+    z-index: 11;
+}
+
+#lobby-fab.show {
+    display: inline-flex;
+}
+
+#lobby-fab .pill {
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    background: #121826;
+    border: 1px dashed #2b3550;
+    color: #cfe0ff;
+    padding: 6px 8px;
+    border-radius: 10px;
+    letter-spacing: .14em;
+    font-size: 12px;
+}
+
+/* ===== Page Content & Ads ===== */
+.page {
+    margin-top: 96px;
+    padding: 0 16px 80px;
+}
+
+.container {
+    max-width: 1100px;
+    margin: 0 auto;
+}
+
+.content {
+    display: grid;
+    gap: 18px;
+}
+
+.content h1,
+.content h2 {
+    margin: 0;
+}
+
+.content h1 {
+    font-size: clamp(26px, 3vw, 34px);
+}
+
+.content h2 {
+    font-size: clamp(20px, 2.4vw, 26px);
+    color: #cfe0ff;
+}
+
+.content p,
+.content li {
+    color: #cfd7ea;
+}
+
+.ad-block {
+    margin: 10px 0 6px;
+    padding: 8px 0;
+    border-top: 1px solid #232a3b;
+    border-bottom: 1px solid #232a3b;
+}
+
+/* Footer */
+.site-footer {
+    border-top: 1px solid #20273a;
+    background: #0f141b;
+    padding: 16px 0;
+}
+
+.footer-grid {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.footer-nav a {
+    color: #9fb6ff;
+    text-decoration: none;
+    margin-left: 12px;
+}
+
+.footer-nav a:hover {
+    text-decoration: underline;
+}
+
+/* Give the game a predictable box the canvas will fit into */
+.game-wrap {
+    position: relative;
+    margin: 12px 0 16px;
+}
+
+#game-mount {
+    width: 100%;
+    /* Fill most of the viewport height but keep reasonable bounds */
+    height: clamp(600px, 72vh, 860px);
+    /* Optional subtle frame behind the canvas */
+    border-radius: 18px;
+    background: rgba(0, 0, 0, .25);
+    box-shadow: 0 20px 120px rgba(0, 0, 0, .55), inset 0 0 0 1px rgba(255, 255, 255, .04);
+}
+
+/* Mobile: a tad shorter to leave space for UI */
+@media (max-width: 900px) {
+    #game-mount {
+        height: clamp(360px, 68vh, 760px);
+    }
+}
+
+/* Let the page fit the viewport; reduce excess bottom padding */
+.page {
+    margin-top: 96px;
+    padding: 0 16px 24px;
+    /* was 80px */
+    min-height: calc(100vh - 96px - 56px);
+    /* header + some breathing room */
+}
+
+/* Remove trailing bottom margins that can create a “gap” look */
+.content> :last-child {
+    margin-bottom: 0;
+}
+
+.ad-block:last-child {
+    margin-bottom: 0;
+}
+
+/* Canvas is always 1100×680 px internally; scale it visually to fit the container */
+#defaultCanvas0 {
+    display: block;
+    width: 100% !important;
+    height: auto !important;
+    max-width: 1100px;
+    margin: 0 auto;
+    border-radius: 18px;
+    box-shadow: 0 20px 120px rgba(0, 0, 0, .55), inset 0 0 0 1px rgba(255, 255, 255, .04);
+}
+
+/* Tips section styling */
+.tips {
+    margin-top: 12px;
+    padding: 12px 0 6px;
+    border-top: 1px solid #232a3b;
+    border-bottom: 1px solid #232a3b;
+}
+
+.tips h2 {
+    font-size: clamp(20px, 2.4vw, 26px);
+    color: #cfe0ff;
+    margin-bottom: 8px;
+}
+
+.tips ul {
+    list-style-type: disc;
+    margin: 0;
+    padding-left: 24px;
+    color: #cfd7ea;
+}
+
+.tips li {
+    margin: 6px 0;
+    line-height: 1.5;
+}

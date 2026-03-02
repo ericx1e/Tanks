@@ -3,6 +3,7 @@ const fs = require('fs');
 const { initializeAITank } = require('./bots.js');
 const { TILE_SIZE } = require('./public/constants.js');
 const { getRandomNonWallPosition, generateOpenMaze } = require('./utils.js');
+const { generateLevel: generateBSPLevel } = require('./levelGen.js');
 
 function readLevels(path) {
   const levels = [];
@@ -28,9 +29,11 @@ function readLevels(path) {
   return levels;
 }
 
-const campaignLevels = readLevels('./campaignLevels.txt');
-const lobbyLevels    = readLevels('./lobbyLevel.txt');
-const arenaLevels    = readLevels('./arenaLevel.txt');
+let allCampaignLevels = [];
+try { allCampaignLevels = readLevels('./campaignLevels.txt'); } catch (_) { }
+
+const lobbyLevels = readLevels('./lobbyLevel.txt');
+const arenaLevels = readLevels('./arenaLevel.txt');
 
 function loadLevel(lobby, levelNumber) {
   let level;
@@ -41,7 +44,10 @@ function loadLevel(lobby, levelNumber) {
       level = lobbyLevels[levelNumber] || lobbyLevels[0] || [[]];
       break;
     case 'campaign':
-      level = campaignLevels[levelNumber] || [[]];
+      level = allCampaignLevels[levelNumber] || [[]];
+      break;
+    case 'endless':
+      level = generateBSPLevel(levelNumber, Infinity);
       break;
     case 'arena': {
       const size = Math.max(1, Math.floor(30 * Math.sqrt(Math.max(1, numPlayers))));
@@ -66,7 +72,7 @@ function loadLevel(lobby, levelNumber) {
   const players = {};
   let tankCount = 0;
   let buttonNumber = 0;
-  const buttonTypes = ['Campaign', lobby.friendlyFire ? 'Friendly Fire: ON' : 'Friendly Fire: OFF', 'Arena', 'Survival'];
+  const buttonTypes = ['Campaign', lobby.friendlyFire ? 'Friendly Fire: ON' : 'Friendly Fire: OFF', 'Arena', 'Survival', 'Endless'];
 
   for (let r = 0; r < level.length; r++) {
     for (let c = 0; c < level[0].length; c++) {
@@ -98,9 +104,10 @@ function loadLevel(lobby, levelNumber) {
 
 function getNumLevels(mode) {
   switch (mode) {
-    case 'campaign': return campaignLevels.length;
-    case 'lobby':    return lobbyLevels.length;
-    default:         return 1; // arena/survival are generated
+    case 'campaign': return allCampaignLevels.length;
+    case 'endless': return Infinity;
+    case 'lobby': return lobbyLevels.length;
+    default: return 1; // arena/survival are generated
   }
 }
 
