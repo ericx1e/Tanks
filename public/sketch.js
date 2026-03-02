@@ -13,6 +13,7 @@ let buffs = [];
 
 // Minimap: tracks which tiles have been seen this run
 let exploredTiles = null;
+let skipMarkExplored = false; // true for one updatePlayers cycle after a level load
 
 let camX = 0, camY = 0, camZ = 600;
 
@@ -130,6 +131,7 @@ socket.on('updatePlayers', (serverPlayers) => {
         if (!serverPlayers[id]) delete playerInterpBuf[id];
     }
     players = serverPlayers;
+    skipMarkExplored = false; // positions are now valid for the current level
 });
 
 socket.on('updateBullets', (serverBullets) => {
@@ -155,6 +157,9 @@ socket.on('updateLevel', (data) => {
     exploredTiles = level.length && level[0].length
         ? Array.from({ length: level.length }, () => new Array(level[0].length).fill(false))
         : null;
+    // Block markExplored until the next updatePlayers so stale positions
+    // from the previous level don't pollute the fresh exploredTiles.
+    skipMarkExplored = true;
 });
 
 socket.on('explosion', (data) => {
@@ -258,6 +263,10 @@ async function setup() {
 
     frameRate(60);
     fogLayer = createGraphics(width, height);
+
+    // Dev console helper: type godMode() in the browser console to toggle invincibility
+    window.godMode = () => socket.emit('toggleGodMode');
+    socket.on('godModeStatus', (on) => console.log(`%cGod mode ${on ? 'ON ✓' : 'OFF ✗'}`, `color:${on ? 'lime' : 'red'};font-weight:bold`))
     // fogLayer.clear();
 }
 
@@ -523,13 +532,17 @@ function draw() {
         } else if (gameMode == 'arena') {
             const visiblePoints = calculateVision(targetTank.x, targetTank.y, level, targetTank.visionDistance, resolution);
             drawFogOfWar(targetTank.x, targetTank.y, visiblePoints);
-            const sharedVision = calculateSharedVision(players, level, resolution);
-            for (const { x: vx, y: vy, points } of sharedVision) markExplored(vx, vy, points);
+            if (!skipMarkExplored) {
+                const sharedVision = calculateSharedVision(players, level, resolution);
+                for (const { x: vx, y: vy, points } of sharedVision) markExplored(vx, vy, points);
+            }
         } else {
             const maxDistance = TILE_SIZE * 5;
             const visiblePoints = calculateSharedVision(players, level, resolution);
             drawSharedFogOfWar(targetTank.x, targetTank.y, visiblePoints);
-            for (const { x: vx, y: vy, points } of visiblePoints) markExplored(vx, vy, points);
+            if (!skipMarkExplored) {
+                for (const { x: vx, y: vy, points } of visiblePoints) markExplored(vx, vy, points);
+            }
         }
     }
 
@@ -552,6 +565,7 @@ function draw() {
     }
 
     if (gameMode !== 'lobby') drawMinimap();
+    if (gameMode !== 'lobby') drawBuffHUD();
 
     pop(); // Restore transformations
 }
@@ -633,6 +647,61 @@ function drawMinimap() {
         const pr = Math.floor(tank.y / TILE_SIZE);
         fill(id === socket.id ? color(80, 180, 255) : color(80, 220, 100));
         rect(mmLeft + pc * tilePx, mmTop + pr * tilePx, tilePx, tilePx);
+    }
+
+    gl.enable(gl.DEPTH_TEST);
+}
+
+// Draw active buff icons in the top-right corner (screen space).
+function drawBuffHUD() {
+    if (!myTank || !myTank.buffs) return;
+
+    const VH = 250;
+    const VW = VH * (width / height);
+    const margin = 14;
+    const iconScale = 0.85;
+    const slotH = 30;
+
+    const gl = drawingContext;
+    gl.disable(gl.DEPTH_TEST);
+
+    const buffTypes = ['speed', 'fireRate', 'bulletSpeed', 'bulletBounces', 'shield', 'multiShot'];
+    let slotY = -VH + margin + 10;
+
+    for (const buffType of buffTypes) {
+        let count;
+        if (buffType === 'shield') {
+            count = (myTank.buffs.shield || 0) + (myTank.shield ? 1 : 0);
+        } else {
+            count = myTank.buffs[buffType] || 0;
+        }
+        if (count === 0) continue;
+
+        const iconX = VW - margin - 10;
+
+        // Count badge
+        push();
+        translate(iconX - 20, slotY, 0);
+        fill(255, 255, 255, 220);
+        noStroke();
+        textFont(font);
+        textSize(11);
+        textAlign(RIGHT, CENTER);
+        rotateX(0);
+        text(`x${count}`, 0, 0);
+        pop();
+
+        // 3D drop model icon
+        // gl.enable(gl.DEPTH_TEST);
+        push();
+        translate(iconX, slotY, 0);
+        scale(iconScale);
+        rotateZ(frameCount / 45);
+        drawDrop(0, 0, frameCount / 45, buffType);
+        pop();
+        // gl.disable(gl.DEPTH_TEST);
+
+        slotY += slotH;
     }
 
     gl.enable(gl.DEPTH_TEST);
@@ -864,13 +933,14 @@ function drawTracks() {
 
 function drawTank(tank, isSelf) {
     const size = PLAYER_SIZE;
+    const cloakAlpha = (tank.tier === 8 && tank.cloaked) ? 10 : 255;
     push();
     // Tank base (lower box)
     translate(tank.x, tank.y, PLAYER_SIZE); // Position tank
     rotateZ(tank.angle); // Rotate tank base
 
     if (tank.isAI) {
-        fill(...tank.color); // AI tank color
+        fill(...tank.color, cloakAlpha); // AI tank color
     } else {
         fill(isSelf ? 'blue' : 'red'); // Differentiate self vs others
     }
@@ -880,7 +950,7 @@ function drawTank(tank, isSelf) {
         if (tank.tier === 'chest') {
             drawChest(tank);
         } else {
-            stroke(0)
+            stroke(0, 0, 0, cloakAlpha)
             strokeWeight(1.5)
             box(2 * size, 1.5 * size, size); // Tank base dimensions
             box(1.8 * size, 1.7 * size, size * 0.8); // Treads
@@ -917,6 +987,27 @@ function drawTank(tank, isSelf) {
                     drawBarrel(size / 3.1);
                     drawBarrel(-size / 3.1);
                     pop();
+                    break;
+                case 10: // Titan — wide 2×2 cluster
+                    push();
+                    translate(0, 0, -size / 3.5);
+                    drawBarrel(size / 3.5);
+                    drawBarrel(-size / 3.5);
+                    translate(0, 0, 2 * size / 3.5);
+                    drawBarrel(size / 3.5);
+                    drawBarrel(-size / 3.5);
+                    pop();
+                    break;
+                case 11: // Rusher — single centered barrel
+                    drawBarrel(0);
+                    break;
+                case 5:
+                case 13: // Laser tanks — wide emitter barrel
+                    drawLaserBarrel(0);
+                    break;
+                case 12: // Intelligence — twin thin fast barrels
+                    drawBarrel(size / 5);
+                    drawBarrel(-size / 5);
                     break;
                 default:
                     if (tank.multiShot > 0) {
@@ -984,6 +1075,9 @@ function drawTank(tank, isSelf) {
         push();
         translate(tank.x, tank.y, PLAYER_SIZE);
         fill(50, 100, 255, 100);
+        if (tank.cloaked) {
+            fill(50, 100, 255, cloakAlpha);
+        }
         noStroke();
         sphere(PLAYER_SIZE * 1.6);
 
@@ -994,6 +1088,24 @@ function drawTank(tank, isSelf) {
             text(tank.buffs.shield + 1, PLAYER_SIZE * 1.6 + 20, 0)
         }
         pop()
+    }
+
+    // Shield Tank (tier 9) — draw the blocking wall panel
+    if (tank.tier === 9 && tank.shieldActive && !tank.isDead) {
+        const sf = tank.shieldFacing;
+        const shieldDist = PLAYER_SIZE * 1.5;
+        push();
+        translate(
+            tank.x + Math.cos(sf) * shieldDist,
+            tank.y + Math.sin(sf) * shieldDist,
+            PLAYER_SIZE
+        );
+        rotateZ(sf + HALF_PI); // orient panel perpendicular to facing
+        fill(60, 120, 255, 200);
+        stroke(160, 210, 255, 240);
+        strokeWeight(2);
+        box(PLAYER_SIZE * 5, PLAYER_SIZE * 0.35, PLAYER_SIZE * 2.5);
+        pop();
     }
 
     function drawBarrel(x) {
@@ -1014,7 +1126,7 @@ function drawTank(tank, isSelf) {
         translate(offset.x, offset.y, offset.z); // Apply the offset
         rotateZ(PI / 2 + tank.turretAngle);
 
-        fill(0); // Semi-transparent black for the outline
+        fill(0, 0, 0, cloakAlpha); // Semi-transparent black for the outline
         cylinder(0.15 * size + 1, 1.5 * size);
 
         pop();
@@ -1036,11 +1148,11 @@ function drawTank(tank, isSelf) {
         translate(offset.x, offset.y, offset.z); // Apply the offset
         rotateZ(PI / 2 + tank.turretAngle);
 
-        fill(0); // Semi-transparent black for the outline
+        fill(0, 0, 0, cloakAlpha); // Semi-transparent black for the outline
         cylinder(0.20 * size + 1, 0.20 * size + 1.9);
 
         if (tank.isAI) {
-            fill(...tank.color); // AI tank color
+            fill(...tank.color, cloakAlpha); // AI tank color
         } else {
             fill(isSelf ? 'blue' : 'red'); // Differentiate self vs others
         }
@@ -1050,6 +1162,55 @@ function drawTank(tank, isSelf) {
 
         cylinder(0.20 * size);
         pop();
+        pop();
+    }
+
+    function drawLaserBarrel(x) {
+        const cameraPos = new p5.Vector(camX, camY, camZ);
+        const angle = tank.turretAngle;
+        let vd, off;
+        push();
+        translate(x, -size / 2, 0);
+
+        // Barrel outline
+        push();
+        vd = p5.Vector.sub(cameraPos, new p5.Vector(
+            tank.x + 1.3 * size * Math.cos(angle),
+            tank.y + 1.3 * size * Math.sin(angle),
+            size
+        )).normalize();
+        off = vd.mult(-2);
+        rotateZ(-(PI / 2 + angle));
+        translate(off.x, off.y, off.z);
+        rotateZ(PI / 2 + angle);
+        fill(0, 0, 0, cloakAlpha);
+        cylinder(0.22 * size + 1, 1.3 * size);
+        pop();
+
+        // Main barrel — wider, shorter than standard
+        cylinder(0.22 * size, 1.3 * size);
+
+        // Emitter disc at tip
+        push();
+        translate(0, -0.65 * size, 0);
+        push();
+        vd = p5.Vector.sub(cameraPos, new p5.Vector(
+            tank.x + 1.3 * size * Math.cos(angle),
+            tank.y - 0.65 * size + 1.3 * size * Math.sin(angle),
+            size
+        )).normalize();
+        off = vd.mult(-2);
+        rotateZ(-(PI / 2 + angle));
+        translate(off.x, off.y, off.z);
+        rotateZ(PI / 2 + angle);
+        fill(0, 0, 0, cloakAlpha);
+        cylinder(0.40 * size + 1, 0.12 * size + 1);
+        pop();
+        if (tank.isAI) fill(...tank.color, cloakAlpha);
+        else fill(isSelf ? 'blue' : 'red');
+        cylinder(0.40 * size, 0.12 * size);
+        pop();
+
         pop();
     }
 }
@@ -1655,6 +1816,8 @@ function mousePressed() {
     if (mouseX < 0 || mouseX > width || mouseY < 0 || mouseY > height) {
         return;
     }
+    const panel = document.getElementById('lobby-controls');
+    if (panel && !panel.classList.contains('is-hidden')) return;
     socket.emit('fireBullet', { angle: myTank.turretAngle });
     // socket.emit('fireBullet', { angle: myTank.turretAngle - PI / 11 });
     // socket.emit('fireBullet', { angle: myTank.turretAngle + PI / 11 });
@@ -1674,37 +1837,45 @@ function drawBullets() {
 
         push();
         translate(x, y, bz);
-
-        // Draw bullet outline
         noStroke();
-        push();
-        const cameraPos = new p5.Vector(camX, camY, camZ);
-        const bulletPos = new p5.Vector(x, y, bz);
-        const viewDirection = p5.Vector.sub(cameraPos, bulletPos).normalize();
 
-        const offset = viewDirection.mult(-2);
-        translate(offset.x, offset.y, offset.z);
-
-        fill(0);
-        sphere(BULLET_SIZE + 1);
-
-        if (bullet.owner && players[bullet.owner] && players[bullet.owner].isAI) {
-            fill(255, 0, 0, 100);
+        if (bullet.isCannonball) {
+            // Large rust-orange cannonball
+            push();
+            fill(60, 20, 5);
+            sphere(BULLET_SIZE * 3 + 2);
+            pop();
+            fill(190, 80, 30);
+            sphere(BULLET_SIZE * 3);
+        } else {
+            // Standard bullet with outline
+            push();
+            const cameraPos = new p5.Vector(camX, camY, camZ);
+            const bulletPos = new p5.Vector(x, y, bz);
+            const viewDirection = p5.Vector.sub(cameraPos, bulletPos).normalize();
+            const offset = viewDirection.mult(-2);
             translate(offset.x, offset.y, offset.z);
-            sphere(BULLET_SIZE + 2);
+            fill(0);
+            sphere(BULLET_SIZE + 1);
+            if (bullet.owner && players[bullet.owner] && players[bullet.owner].isAI) {
+                fill(255, 0, 0, 100);
+                translate(offset.x, offset.y, offset.z);
+                sphere(BULLET_SIZE + 2);
+            }
+            pop();
+            fill(150);
+            sphere(BULLET_SIZE);
         }
 
         pop();
-        fill(150);
-        sphere(BULLET_SIZE);
-        pop();
 
-        // Trail spawned at the client-smoothed position — no gaps from network jitter
+        // Trail
+        const trailSize = bullet.isCannonball ? BULLET_SIZE * 2.5 : BULLET_SIZE;
         trails.push({
             x, y,
             z: bz,
-            size: BULLET_SIZE,
-            dSize: BULLET_SIZE / 15,
+            size: trailSize,
+            dSize: trailSize / 15,
             alpha: 108,
         });
     });
@@ -1721,7 +1892,6 @@ function drawLasers() {
         rotateZ(angle)
         let r = PLAYER_SIZE / 2
         if (laser.isActive) {
-            // stroke(laser.color[0], laser.color[1], laser.color[2]);
             fill(255, 50, 0);
             if (frameCount % 5 == 0) {
                 createExplosion(laser.x1 + random(-r, r), laser.y1 + random(-r, r), PLAYER_SIZE * 1.4 - BULLET_SIZE + random(-r, r), BULLET_SIZE);

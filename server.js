@@ -463,6 +463,16 @@ io.on('connection', (socket) => {
         lobby.players[socket.id] = createPlayer()
     });
 
+    // Dev: toggle invincibility for the calling player
+    socket.on('toggleGodMode', () => {
+        const lobby = getLobby();
+        const player = lobby?.players[socket.id];
+        if (!player) return;
+        player.godMode = !player.godMode;
+        console.log(`God mode ${player.godMode ? 'ON' : 'OFF'} for ${socket.id}`);
+        io.to(socket.id).emit('godModeStatus', player.godMode);
+    });
+
     // Handle player disconnection
     socket.on('disconnect', () => {
         console.log(`Player disconnected: ${socket.id}`);
@@ -583,6 +593,40 @@ function fireLaser(lobby, lobbyCode, tank, players, level, isActive) {
     });
 }
 
+function explodeCannonball(lobby, lobbyCode, bullet, bulletsToRemove, i) {
+    const splashRadius = PLAYER_SIZE * 3.5;
+    const players = lobby.players;
+    for (const playerId in players) {
+        const player = players[playerId];
+        if (player.isDead) continue;
+        if (Math.hypot(player.x - bullet.x, player.y - bullet.y) > splashRadius) continue;
+        if (lobby.mode !== 'lobby' || player.isAI) {
+            const owner = players[bullet.owner];
+            if (!owner || lobby.friendlyFire || lobby.mode === 'arena' || (player.isAI !== owner.isAI)) {
+                if (player.shield) {
+                    player.shield = false;
+                } else if (!player.godMode) {
+                    player.isDead = true;
+                    if ((lobby.mode === 'survival' || lobby.mode === 'endless') && player.tier !== 'chest') {
+                        lobby.tankKills++;
+                        if (lobby.tankKills % 5 === 0) spawnDrop(lobbyCode, player.x, player.y);
+                    }
+                }
+            }
+        }
+        if (player.tier === 'chest') spawnDrop(lobbyCode, player.x, player.y);
+    }
+    bulletsToRemove.add(i);
+    io.to(lobbyCode).emit('explosion', {
+        x: bullet.x,
+        y: bullet.y,
+        z: PLAYER_SIZE * 1.4 - BULLET_SIZE,
+        size: BULLET_SIZE * 6,
+        dSize: 2,
+        color: [190, 80, 30],
+    });
+}
+
 function updateBullets(lobby, lobbyCode) {
     const bulletsToRemove = new Set();
     const bullets = lobby.bullets
@@ -642,7 +686,9 @@ function updateBullets(lobby, lobbyCode) {
 
         // Reduce bounces or remove bullet if no bounces remain
         if (horizontalCollision || verticalCollision) {
-            if (bullet.bounces > 0) {
+            if (bullet.isCannonball) {
+                explodeCannonball(lobby, lobbyCode, bullet, bulletsToRemove, i);
+            } else if (bullet.bounces > 0) {
                 bullet.bounces--;
             } else {
                 io.to(lobbyCode).emit('explosion', {
@@ -681,10 +727,48 @@ function updateBullets(lobby, lobbyCode) {
             }
         });
 
+        // Check for bullet interception by Shield Tanks (tier 9)
+        for (const playerId in players) {
+            if (bulletsToRemove.has(i)) break;
+            const shieldTank = players[playerId];
+            if (!shieldTank.isAI || shieldTank.tier !== 9 || !shieldTank.shieldActive || shieldTank.isDead) continue;
+            if (bullet.owner === shieldTank.id) continue; // never block own shots
+
+            const sf = shieldTank.shieldFacing;
+            const shieldDist = PLAYER_SIZE * 1.5;
+            const scx = shieldTank.x + Math.cos(sf) * shieldDist;
+            const scy = shieldTank.y + Math.sin(sf) * shieldDist;
+
+            const dx = bullet.x - scx;
+            const dy = bullet.y - scy;
+            const along = dx * Math.cos(sf) + dy * Math.sin(sf);
+            const perp = -dx * Math.sin(sf) + dy * Math.cos(sf);
+
+            if (Math.abs(along) <= PLAYER_SIZE * 0.5 && Math.abs(perp) <= PLAYER_SIZE * 2.5) {
+                // Bullet is inside the shield zone — only intercept if coming from the front
+                const bulletDotNormal = Math.cos(bullet.angle) * Math.cos(sf) + Math.sin(bullet.angle) * Math.sin(sf);
+                if (bulletDotNormal < 0) {
+                    bulletsToRemove.add(i);
+                    io.to(lobbyCode).emit('explosion', {
+                        x: bullet.x,
+                        y: bullet.y,
+                        z: PLAYER_SIZE,
+                        size: BULLET_SIZE * 2,
+                        dSize: 0.5,
+                        color: [100, 150, 255],
+                    });
+                }
+            }
+        }
+
         // Check for collisions with players
         for (let playerId in players) {
             const player = players[playerId];
             if (/*playerId !== bullet.owner && */isCollidingWithPlayer(nextX, nextY, player)) {
+                if (bullet.isCannonball) {
+                    explodeCannonball(lobby, lobbyCode, bullet, bulletsToRemove, i);
+                    break;
+                }
                 bulletsToRemove.add(i); // Remove bullet
 
                 let color = player.id; // indicates human player hit
@@ -710,18 +794,21 @@ function updateBullets(lobby, lobbyCode) {
                 if (lobby.mode !== 'lobby' || player.isAI) {// No player damage in lobby
                     const owner = lobby.players[bullet.owner];
 
-                    if (!owner || lobby.friendlyFire || lobby.mode === 'arena' || (player.isAI || owner.isAI))
+                    if (!owner || lobby.friendlyFire || lobby.mode === 'arena' || (player.isAI !== owner.isAI))
                         // Apply damage to the player
                         if (player.shield) {
                             player.shield = false; // Remove shield instead of killing
-                        } else {
+                        } else if (!player.godMode) {
                             player.isDead = true;
                         }
                     // player.isDead = true;
                 }
 
                 if (player.tier == 'chest') {
-                    spawnDrop(lobbyCode, player.x, player.y);
+                    const bulletOwner = lobby.players[bullet.owner];
+                    if (!bulletOwner || !bulletOwner.isAI) {
+                        spawnDrop(lobbyCode, player.x, player.y);
+                    }
                 }
 
                 if (lobby.mode === 'survival' || lobby.mode === 'endless') {
@@ -868,33 +955,33 @@ function updatePlayerStats(lobby, player) {
             break;
     }
 
-    // Apply buffs
+    // Apply buffs with sqrt-based diminishing returns
     if (player.buffs.speed > 0) {
-        player.max_speed *= 1 + 0.1 * player.buffs.speed; // Example: 10% speed boost per buff
+        player.max_speed *= 1 + 0.12 * Math.sqrt(player.buffs.speed);
     }
 
     if (player.buffs.fireRate > 0) {
-        player.fireRateMultiplier *= 1 - 0.1 * player.buffs.fireRate; // Example: 10% faster fire rate per buff
-        player.maxBullets += player.buffs.fireRate; // Convert fire rate to max bullets
+        player.fireRateMultiplier = Math.max(0.35, 1 - 0.09 * Math.sqrt(player.buffs.fireRate));
+        player.maxBullets += Math.ceil(Math.sqrt(player.buffs.fireRate));
     }
 
     if (player.buffs.shield > 0) {
         if (!player.shield) {
             player.shield = true;
-            player.buffs.shield--; // Shield active if at least one shield buff exists
+            player.buffs.shield--;
         }
     }
 
     if (player.buffs.bulletSpeed > 0) {
-        player.bulletSpeedMultiplier *= 1 + 0.1 * player.buffs.bulletSpeed; // Example: 10% bullet speed boost per buff
+        player.bulletSpeedMultiplier *= 1 + 0.12 * Math.sqrt(player.buffs.bulletSpeed);
     }
 
     if (player.buffs.multiShot > 0) {
-        player.multiShot += player.buffs.multiShot; // Add extra bullets based on multi-shot buffs
+        player.multiShot += Math.ceil(Math.sqrt(player.buffs.multiShot));
     }
 
     if (player.buffs.bulletBounces > 0) {
-        player.bulletBounces += player.buffs.bulletBounces;
+        player.bulletBounces += Math.ceil(Math.sqrt(player.buffs.bulletBounces));
     }
 
     switch (lobby.mode) {
@@ -1149,7 +1236,7 @@ setInterval(() => {
             lobby.arenaProgress++;
 
             if (lobby.arenaProgress % 10 == 0) {
-                lobby.spawnTier = Math.min(lobby.spawnTier + 1, 7);
+                lobby.spawnTier = Math.min(lobby.spawnTier + 1, 12);
                 spawnSurvivalBots(lobbyCode, 10);
             }
         }

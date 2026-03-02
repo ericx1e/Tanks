@@ -76,8 +76,6 @@ function drawDrop(x, y, angle, buff) {
             rotateZ(PI / 2)
             cylinder(size / 10, size / 2.5)
             pop();
-            resetMatrix();
-            translate(x, y, WALL_HEIGHT / 4)
             fill(0, 0, 255, 100);
             sphere(size);
             break;

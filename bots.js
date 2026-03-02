@@ -10,7 +10,7 @@ function setIO(ioInstance) {
 
 // Initialize AI tanks
 
-const colorList = [[100, 100, 100], [200, 100, 100], [200, 200, 100], [100, 200, 100], [200, 100, 200], [50, 150, 220], [200, 100, 50], [150, 100, 100]]
+const colorList = [[100, 100, 100], [200, 100, 100], [200, 200, 100], [100, 200, 100], [200, 100, 200], [50, 150, 220], [200, 100, 50], [150, 100, 100], [190, 210, 240], [60, 100, 220], [30, 15, 50], [190, 80, 30], [220, 30, 90], [50, 200, 210]]
 
 function initializeAITank(id, x, y, tier, buttonType) {
     let tank = {
@@ -54,6 +54,36 @@ function initializeAITank(id, x, y, tier, buttonType) {
         tank.buffs = {
             shield: 2
         }
+    }
+    if (tier == 8) {
+        tank.cloakTimer = 280;
+        tank.cloaked = false;
+        tank.buffs = { shield: 1 };
+    }
+    if (tier == 9) {
+        tank.shieldActive = false;
+        tank.shieldFacing = 0;
+    }
+    if (tier == 10) {
+        tank.buffs = { shield: 3 };
+    }
+    if (tier == 11) {
+        // Cannon — slow, fires exploding cannonballs
+    }
+    if (tier == 12) {
+        tank.flankSide = 1;
+        tank.flankTimer = 150;
+        tank.buffs = { shield: 1 };
+    }
+    if (tier == 13) {
+        tank = {
+            ...tank,
+            laserDuration: 55,
+            isFiringLaser: false,
+            laserRange: TILE_SIZE * 5,
+            laserWidth: PLAYER_SIZE / 2,
+        };
+        tank.buffs = { shield: 1 };
     }
 
     tank.color = colorList[tank.tier]
@@ -158,6 +188,41 @@ function updateAITank(lobby, lobbyCode, tank, level, players, bullets) {
             fireCooldown = 30;
             turretSpeed = 0.40;
             break;
+        case 8: // Phantom — fast cloaking tank
+            speed = 1.3 * AI_TANK_SPEED;
+            fireCooldown = 75;
+            turretSpeed = 0.15;
+            break;
+        case 9: // Shield Tank — deploys a front-facing bullet wall
+            speed = 1.0 * AI_TANK_SPEED;
+            shootingRange = PLAYER_SIZE * 22;
+            fireCooldown = 90;
+            turretSpeed = 0.18;
+            break;
+        case 10: // Titan — triple shot, rapid fire, 3 shields
+            speed = 0.7 * AI_TANK_SPEED;
+            shootingRange = PLAYER_SIZE * 20;
+            fireCooldown = 26;
+            turretSpeed = 0.50;
+            break;
+        case 11: // Rusher — fast aggressive hunter, rushes the player down
+            speed = 1.5 * AI_TANK_SPEED;
+            shootingRange = PLAYER_SIZE * 20;
+            fireCooldown = 50;
+            turretSpeed = 0.22;
+            break;
+        case 12: // Intelligence — fast, omniscient, flanks and leads shots
+            speed = 1.8 * AI_TANK_SPEED;
+            shootingRange = PLAYER_SIZE * 30;
+            fireCooldown = 40;
+            turretSpeed = 0.45;
+            break;
+        case 13: // Laser Pulse — fast, short-range laser with high uptime
+            speed = 1.2 * AI_TANK_SPEED;
+            shootingRange = PLAYER_SIZE * 20;
+            fireCooldown = 90;
+            turretSpeed = 0.22;
+            break;
         case 'button':
             speed = 0;
             shootingRange = 0;
@@ -172,20 +237,46 @@ function updateAITank(lobby, lobbyCode, tank, level, players, bullets) {
             break;
     }
 
+    // Phantom cloak mechanic
+    if (tank.tier === 8) {
+        tank.cloakTimer -= 1;
+        if (tank.cloakTimer <= 0) {
+            tank.cloaked = !tank.cloaked;
+            if (tank.cloaked) {
+                tank.shield = 1;
+            }
+            tank.cloakTimer = tank.cloaked ? 280 : 150;
+        }
+    }
+
+    // Intelligence Tank: flank the nearest player when not dodging
+    if (tank.tier === 12) {
+        tank.flankTimer = (tank.flankTimer || 150) - 1;
+        if (tank.flankTimer <= 0) {
+            tank.flankSide = -tank.flankSide;
+            tank.flankTimer = Math.floor(Math.random() * 80) + 100;
+        }
+    }
+
     // Initialize fire cooldown
     if (!tank.fireCooldown) {
         // tank.fireCooldown = fireCooldown / 2;
         tank.fireCooldown = 0;
     }
 
+    tank._defendingThisFrame = false; // reset flag used to suppress turret override
+    if (tank.defenseCooldown > 0) tank.defenseCooldown--;
+
     const RANGE = 10 * PLAYER_SIZE;
     const AVOID_DOT = 0.35;
-    const SHOOT_DOT = 0.85;
+    const SHOOT_DOT = 0.80;
 
     // Scan all bullets once
     const candidates = [];
     for (const b of bullets) {
         if (b.owner === tank.id) continue; // ignore own shots
+        const bulletOwner = players[b.owner];
+        if (bulletOwner && bulletOwner.isAI) continue; // only react to player bullets
         const dx = b.x - tank.x, dy = b.y - tank.y;
         const dist = Math.hypot(dx, dy);
         if (dist > RANGE) continue;
@@ -199,9 +290,9 @@ function updateAITank(lobby, lobbyCode, tank, level, players, bullets) {
     if (tank.tier >= 1 && driveThreats.length) {
         driveThreats.sort((a, b) => (a.tStar - b.tStar) || (b.dot - a.dot));
         const primary = driveThreats[0].bullet;
-        tank.targetDirection = avoidBullet(tank, primary);
+        tank.targetDirection = avoidBullet(tank, primary, level);
 
-        tank.dodgeTimer = 4;
+        tank._dodgeTimer = 10;
     } else {
         // Otherwise, continue normal movement
         tank.movementTimer -= 1;
@@ -212,7 +303,43 @@ function updateAITank(lobby, lobbyCode, tank, level, players, bullets) {
             tank.movementTimer = Math.random() * 120 + 60; // Reset movement timer
         }
 
-        tank.dodgeTimer = Math.max(0, (tank.dodgeTimer || 0) - 1);
+        tank._dodgeTimer = Math.max(0, (tank._dodgeTimer || 0) - 1);
+
+        // Rusher: charge directly at the nearest player at all times
+        if (tank.tier === 11) {
+            let nearestPlayer = null, nearestDist = Infinity;
+            for (const id in players) {
+                const p = players[id];
+                if (!p.isAI && !p.isDead) {
+                    const d = Math.hypot(p.x - tank.x, p.y - tank.y);
+                    if (d < nearestDist) { nearestDist = d; nearestPlayer = p; }
+                }
+            }
+            if (nearestPlayer) {
+                tank.targetDirection = Math.atan2(nearestPlayer.y - tank.y, nearestPlayer.x - tank.x);
+            }
+        }
+
+        // Intelligence Tank: when not dodging, flank the nearest player
+        if (tank.tier === 12) {
+            let nearestPlayer = null, nearestDist = Infinity;
+            for (const id in players) {
+                const p = players[id];
+                if (!p.isAI && !p.isDead) {
+                    const d = Math.hypot(p.x - tank.x, p.y - tank.y);
+                    if (d < nearestDist) { nearestDist = d; nearestPlayer = p; }
+                }
+            }
+            if (nearestPlayer) {
+                const directAngle = Math.atan2(nearestPlayer.y - tank.y, nearestPlayer.x - tank.x);
+                tank.targetDirection = directAngle + tank.flankSide * Math.PI / 2;
+            }
+        }
+
+        // Linger: steer body toward last known player position
+        if ((tank.targetLostTimer || 0) > 0 && tank.lastKnownTarget && tank.tier !== 11 && tank.tier !== 12) {
+            tank.targetDirection = Math.atan2(tank.lastKnownTarget.y - tank.y, tank.lastKnownTarget.x - tank.x);
+        }
     }
 
 
@@ -226,18 +353,10 @@ function updateAITank(lobby, lobbyCode, tank, level, players, bullets) {
     //     tank.name = tank.fireCooldown //debug 
     // }
 
-    if (tank.tier >= 4 && tank.tier != 5 && shootThreats.length) {
-        const maxShotsThisFrame = 1;
-        let shots = 0;
-        for (const { bullet, dist } of shootThreats) {
-            const fired = fireAtDangerBullet(
-                lobbyCode, tank, bullet, bullets, level, players, fireCooldown
-            );
-            if (fired && ++shots >= maxShotsThisFrame) break;
-            // Small assist: if very close, help cooldown tick faster
-            if (dist < 6 * PLAYER_SIZE) {
-                tank.fireCooldown = Math.min(tank.fireCooldown, 30);
-            }
+    // Tiers >= 2 can shoot down bullets; exclude laser (5) and cannon (11) which can't usefully intercept
+    if (tank.tier >= 2 && tank.tier !== 5 && tank.tier !== 11 && tank.tier !== 9 && tank.tier !== 13 && shootThreats.length) {
+        for (const { bullet } of shootThreats) {
+            if (fireAtDangerBullet(lobbyCode, tank, bullet, bullets, level, players)) break;
         }
     }
 
@@ -278,68 +397,67 @@ function updateAITank(lobby, lobbyCode, tank, level, players, bullets) {
 function handleAITurret(lobby, lobbyCode, tank, level, players, bullets, shootingRange, turretSpeed, fireCooldown) {
     let playerInSight = null;
 
-    // Check for players in line of sight
-    for (let id in players) {
-        const player = players[id];
-        if (!player.isAI && !player.isDead) {
-            const dx = player.x - tank.x;
-            const dy = player.y - tank.y;
-            const distance = Math.sqrt(dx * dx + dy * dy);
-
-            if (distance <= shootingRange) {
-                const angleToPlayer = Math.atan2(dy, dx);
-
-                // Difference between turret angle and angle to player
-                let diff = ((angleToPlayer - tank.turretAngle + Math.PI) % (2 * Math.PI)) - Math.PI;
-                if (diff < -Math.PI) {
-                    diff += 2 * Math.PI;
+    if (tank.tier === 12) {
+        // Intelligence Tank: omniscient — find nearest player regardless of LOS, lead shot
+        let nearestPlayer = null, nearestDist = Infinity;
+        for (let id in players) {
+            const player = players[id];
+            if (!player.isAI && !player.isDead) {
+                const dist = Math.hypot(player.x - tank.x, player.y - tank.y);
+                if (dist <= shootingRange && dist < nearestDist) {
+                    nearestDist = dist;
+                    nearestPlayer = player;
                 }
+            }
+        }
+        if (nearestPlayer) {
+            // Estimate player velocity from the tank's memory of last known position
+            const vx = nearestPlayer.x - (tank.prevTargetX ?? nearestPlayer.x);
+            const vy = nearestPlayer.y - (tank.prevTargetY ?? nearestPlayer.y);
+            const leadAngle = computeLeadAngle(tank.x, tank.y, BULLET_SPEED, nearestPlayer.x, nearestPlayer.y, vx, vy);
+            tank.prevTargetX = nearestPlayer.x;
+            tank.prevTargetY = nearestPlayer.y;
+            playerInSight = { player: nearestPlayer, angle: leadAngle };
+        }
+    } else {
+        // Standard LOS detection
+        for (let id in players) {
+            const player = players[id];
+            if (!player.isAI && !player.isDead) {
+                const dx = player.x - tank.x;
+                const dy = player.y - tank.y;
+                const distance = Math.sqrt(dx * dx + dy * dy);
 
-                if (Math.abs(diff) < Math.PI / 3) {
-                    // Check if the path to the player is clear (no walls)
-                    if (!detectObstacleAlongRay(tank.x, tank.y, angleToPlayer, distance, level)) {
-                        playerInSight = { player, angle: angleToPlayer };
-                        break;
+                if (distance <= shootingRange) {
+                    const angleToPlayer = Math.atan2(dy, dx);
+
+                    let diff = ((angleToPlayer - tank.turretAngle + Math.PI) % (2 * Math.PI)) - Math.PI;
+                    if (diff < -Math.PI) {
+                        diff += 2 * Math.PI;
+                    }
+
+                    if (Math.abs(diff) < Math.PI / 3) {
+                        if (!detectObstacleAlongRay(tank.x, tank.y, angleToPlayer, distance, level)) {
+                            playerInSight = { player, angle: angleToPlayer };
+                            break;
+                        }
                     }
                 }
             }
         }
     }
 
-    // if (tank.tier === 5) { // Laser Bot logic
-    //     if (tank.isFiringLaser) {
-    //         // Handle laser duration
-    //         tank.laserDuration--;
-    //         const isActive = tank.laserDuration < 20;
-    //         fireLaser(lobby, tank, players, level, isActive);
-
-    //         if (tank.laserDuration <= 0) {
-    //             tank.isFiringLaser = false;
-    //             tank.fireCooldown = fireCooldown; // Reset the cooldown
-    //         }
-    //         return; // Skip other firing logic while laser is active
-    //     }
-
-    //     // Charge up for laser if cooldown is ready
-    //     if (tank.fireCooldown > 0) {
-    //         tank.fireCooldown--;
-    //     } else if (playerInSight) {
-    //         tank.isFiringLaser = true;
-    //         tank.laserDuration = 100; // Reset laser duration
-    //         tank.turretAngle = playerInSight.angle;
-    //     }
-    //     return; // Start firing laser, skip other firing behaviors
-    // }
-
     if (playerInSight) {
-        // return;
-        // Lock onto the player and fire
+        // Record last known position and reset linger timer
+        tank.lastKnownTarget = { x: playerInSight.player.x, y: playerInSight.player.y };
+        tank.targetLostTimer = 180;
 
-        // const dx = playerInSight.player.x - tank.x;
-        // const dy = playerInSight.player.y - tank.y;
-        // const distance = Math.sqrt(dx * dx + dy * dy);
+        // Shield Tank — raise shield facing the player
+        if (tank.tier === 9) {
+            tank.shieldActive = true;
+            tank.shieldFacing = playerInSight.angle;
+        }
 
-        // if (!detectBotInPath(tank.x, tank.y, tank.turretAngle, distance, players, tank.id)) {
         switch (tank.tier) {
             case 3:
                 if (tank.fireCooldown <= 0) {
@@ -388,6 +506,44 @@ function handleAITurret(lobby, lobbyCode, tank, level, players, bullets, shootin
                     tank.fireCooldown = fireCooldown; // Reset cooldown
                 }
                 break;
+            case 10: // Titan — tight triple-shot at rapid fire rate
+                if (tank.fireCooldown <= 0) {
+                    fireBullet(lobbyCode, tank, tank.turretAngle, bullets, level);
+                    fireBullet(lobbyCode, tank, tank.turretAngle - Math.PI / 11, bullets, level);
+                    fireBullet(lobbyCode, tank, tank.turretAngle + Math.PI / 11, bullets, level);
+                    tank.fireCooldown = fireCooldown;
+                }
+                break;
+            case 11: // Cannon — single slow exploding cannonball
+                if (tank.fireCooldown <= 0) {
+                    fireBullet(lobbyCode, tank, tank.turretAngle, bullets, level);
+                    tank.fireCooldown = fireCooldown;
+                }
+                break;
+            case 12: // Intelligence — lead shot, turret already tracks to predicted position
+                if (tank.fireCooldown <= 0) {
+                    fireBullet(lobbyCode, tank, tank.turretAngle, bullets, level);
+                    tank.fireCooldown = fireCooldown;
+                }
+                break;
+            case 13: // Laser Pulse — short-range, frequent laser bursts
+                if (tank.isFiringLaser) {
+                    tank.laserDuration--;
+                    const isActive13 = tank.laserDuration < 25;
+                    fireLaser(lobby, tank, players, level, isActive13);
+                    if (tank.laserDuration <= 0) {
+                        tank.isFiringLaser = false;
+                        tank.fireCooldown = fireCooldown;
+                    }
+                    tank.turretAngle = lerpAngle(tank.turretAngle, playerInSight.angle, 0.15);
+                    tank.turretRotationalVelocity = 0;
+                    return;
+                }
+                if (tank.fireCooldown <= 0) {
+                    tank.isFiringLaser = true;
+                    tank.laserDuration = 55;
+                }
+                break;
             default:
                 if (tank.fireCooldown <= 0) {
                     fireBullet(lobbyCode, tank, tank.turretAngle, bullets, level); // Single shot for other tiers
@@ -395,24 +551,44 @@ function handleAITurret(lobby, lobbyCode, tank, level, players, bullets, shootin
                 }
                 break;
         }
-        tank.turretAngle = lerpAngle(tank.turretAngle, playerInSight.angle, 0.1);
+        if (!tank._defendingThisFrame) {
+            tank.turretAngle = lerpAngle(tank.turretAngle, playerInSight.angle, 0.1);
+        }
         tank.turretRotationalVelocity = 0;
     } else {
-        // Rotate turret randomly if no player is in sight)
-        tank.fireCooldown = fireCooldown / 2
-        tank.turretAngle += tank.turretRotationalVelocity;
-        tank.turnTimer -= 1;
-
         if (tank.tier === 5) {
             tank.isFiringLaser = false;
             tank.laserDuration = 100;
         }
+        if (tank.tier === 13) {
+            tank.isFiringLaser = false;
+            tank.laserDuration = 55;
+        }
+        if (tank.tier === 9) {
+            tank.shieldActive = false;
+        }
 
-        // If movement timer expires or obstacle detected, pick a new direction
-        if (tank.turnTimer <= 0) {
-            let rand = Math.random()
-            tank.turretRotationalVelocity = (rand * rand - 0.5) * turretSpeed;
-            tank.turnTimer = Math.random() * 120 + 60; // Reset movement timer
+        if ((tank.targetLostTimer || 0) > 0) {
+            // Linger: keep tracking toward last known position, but don't fire
+            tank.targetLostTimer--;
+            const lkdx = tank.lastKnownTarget.x - tank.x;
+            const lkdy = tank.lastKnownTarget.y - tank.y;
+            const lkAngle = Math.atan2(lkdy, lkdx);
+            if (!tank._defendingThisFrame) {
+                tank.turretAngle = lerpAngle(tank.turretAngle, lkAngle, turretSpeed);
+            }
+            tank.turretRotationalVelocity = 0;
+        } else {
+            // No information — rotate turret randomly
+            tank.fireCooldown = fireCooldown / 2;
+            tank.turretAngle += tank.turretRotationalVelocity;
+            tank.turnTimer -= 1;
+
+            if (tank.turnTimer <= 0) {
+                let rand = Math.random();
+                tank.turretRotationalVelocity = (rand * rand - 0.5) * turretSpeed;
+                tank.turnTimer = Math.random() * 120 + 60;
+            }
         }
     }
 
@@ -457,6 +633,28 @@ function fireBullet(lobbyCode, tank, angle, bullets, level) {
                 angle: angle,
                 speed: 1.7 * BULLET_SPEED,
                 bounces: 0
+            }
+            break;
+        case 10:
+            newBullet = {
+                id: bullets.length,
+                owner: player.id,
+                x: bulletX,
+                y: bulletY,
+                angle: angle,
+                speed: BULLET_SPEED,
+                bounces: 0
+            }
+            break;
+        case 11: // Rusher — fast single bullet
+            newBullet = {
+                id: bullets.length,
+                owner: player.id,
+                x: bulletX,
+                y: bulletY,
+                angle: angle,
+                speed: 1.4 * BULLET_SPEED,
+                bounces: 0,
             }
             break;
         default:
@@ -510,7 +708,7 @@ function fireLaser(lobby, tank, players, level, isActive) {
                         // Apply damage to the player
                         if (player.shield) {
                             player.shield = false; // Remove shield instead of killing
-                        } else {
+                        } else if (!player.godMode) {
                             player.isDead = true;
                         }
                 }
@@ -536,8 +734,9 @@ function fireLaser(lobby, tank, players, level, isActive) {
         y1: laserY,
         x2: laserEnd.x,
         y2: laserEnd.y,
-        isActive: isActive, // Active state of the laser
-        duration: 2, // Frames to display laser
+        isActive: isActive,
+        duration: 2,
+        color: [255, 50, 0],
     });
 }
 
@@ -727,7 +926,7 @@ function detectNearbyBullet(tank, bullets, range) {
     return null;
 }
 
-function avoidBullet(tank, bullet) {
+function avoidBullet(tank, bullet, level) {
     // Compute the relative direction vector from the tank to the bullet
     const dx = bullet.x - tank.x;
     const dy = bullet.y - tank.y;
@@ -741,8 +940,27 @@ function avoidBullet(tank, bullet) {
     const diff1 = Math.abs(((perpendicular1 - relativeAngle + Math.PI) % (2 * Math.PI)) - Math.PI);
     const diff2 = Math.abs(((perpendicular2 - relativeAngle + Math.PI) % (2 * Math.PI)) - Math.PI);
 
-    // Choose the direction with the larger angular separation
-    return diff1 > diff2 ? perpendicular1 : perpendicular2;
+    // Angular preference (away from bullet)
+    const preferred = diff1 > diff2 ? perpendicular1 : perpendicular2;
+    const fallback = diff1 > diff2 ? perpendicular2 : perpendicular1;
+
+    if (!level) return preferred;
+
+    // Check how far each direction is clear of walls; pick the one with more space
+    const probeShort = 2 * PLAYER_SIZE;
+    const probeLong = 4 * PLAYER_SIZE;
+    const preferredBlocked = detectObstacleAlongRay(tank.x, tank.y, preferred, probeShort, level);
+    const fallbackBlocked = detectObstacleAlongRay(tank.x, tank.y, fallback, probeShort, level);
+
+    if (preferredBlocked && !fallbackBlocked) return fallback;
+    if (!preferredBlocked && fallbackBlocked) return preferred;
+
+    // Both clear or both blocked at short range — check longer range and pick more open direction
+    const preferredBlockedLong = detectObstacleAlongRay(tank.x, tank.y, preferred, probeLong, level);
+    const fallbackBlockedLong = detectObstacleAlongRay(tank.x, tank.y, fallback, probeLong, level);
+    if (preferredBlockedLong && !fallbackBlockedLong) return fallback;
+
+    return preferred;
 }
 
 // Sample nearby tiles to estimate a wall "normal" pointing away from walls
@@ -905,33 +1123,48 @@ function computeInterceptAngle(tank, bullet) {
  *  - cooldown is ready.
  * Returns true if it fired this frame.
  */
-function fireAtDangerBullet(lobbyCode, tank, dangerBullet, bullets, level, players, fireCooldown) {
-    // Aim where we'll meet the bullet
+function fireAtDangerBullet(lobbyCode, tank, dangerBullet, bullets, level, players) {
     const interceptAngle = computeInterceptAngle(tank, dangerBullet);
 
-    // Turn turret quickly toward intercept
-    tank.turretAngle = lerpAngle(tank.turretAngle, interceptAngle, 0.25);
+    // Snap turret toward intercept faster than normal offensive tracking
+    tank.turretAngle = lerpAngle(tank.turretAngle, interceptAngle, 0.40);
     tank.turretRotationalVelocity = 0;
+    tank._defendingThisFrame = true; // suppress offensive turret override this frame
 
-    // Requirements to shoot
-    const distToBullet = Math.hypot(dangerBullet.x - tank.x, dangerBullet.y - tank.y);
-    // const aligned = Math.abs(((interceptAngle - tank.turretAngle + Math.PI) % (2 * Math.PI)) - Math.PI) < Math.PI / 18; // ~10°
-    // const clear = !detectObstacleAlongRay(tank.x, tank.y, interceptAngle, distToBullet, level);
-    // const pathHasBot = detectBotInPath(tank.x, tank.y, interceptAngle, distToBullet, players, tank.id);
-    if (tank.tier !== 5 && tank.fireCooldown <= 0) {
+    // Use a separate defenseCooldown so defensive shots don’t block offensive ones and vice-versa
+    if ((tank.defenseCooldown || 0) <= 0) {
         fireBullet(lobbyCode, tank, tank.turretAngle, bullets, level);
-        // Shorter cooldown for point-defense so it can react again soon
-        tank.fireCooldown = fireCooldown / 2;
-        // console.log('AI shooting down bullet');
-
+        tank.defenseCooldown = 20; // 20-frame independent cooldown for point-defense
         return true;
     }
-
-    // If it’s very close, help the bot get a shot off soon
-    // if (distToBullet < 3 * TILE_SIZE) {
-    //     tank.fireCooldown = Math.max(0, tank.fireCooldown - 1);
-    // }
     return false;
+}
+
+/**
+ * Compute the angle to fire at so a bullet (speed bulletSpeed) intercepts
+ * a moving target. Uses quadratic time-of-flight solution; falls back to
+ * direct aim if no solution exists.
+ */
+function computeLeadAngle(sx, sy, bulletSpeed, tx, ty, tvx, tvy) {
+    const dx = tx - sx, dy = ty - sy;
+    const A = tvx * tvx + tvy * tvy - bulletSpeed * bulletSpeed;
+    const B = 2 * (dx * tvx + dy * tvy);
+    const C = dx * dx + dy * dy;
+
+    let t = null;
+    if (Math.abs(A) < 1e-6) {
+        if (Math.abs(B) > 1e-6) { const tl = -C / B; if (tl > 0) t = tl; }
+    } else {
+        const D = B * B - 4 * A * C;
+        if (D >= 0) {
+            const s = Math.sqrt(D);
+            const t1 = (-B - s) / (2 * A), t2 = (-B + s) / (2 * A);
+            const pos = [t1, t2].filter(tt => tt > 0);
+            if (pos.length) t = Math.min(...pos);
+        }
+    }
+    if (t === null) return Math.atan2(dy, dx);
+    return Math.atan2(dy + tvy * t, dx + tvx * t);
 }
 
 module.exports = {
