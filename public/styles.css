@@ -437,3 +437,82 @@ button[disabled] {
     margin: 6px 0;
     line-height: 1.5;
 }
+
+/* ===== Event Log ===== */
+.event-log-wrap {
+    background: rgba(11, 14, 22, 0.6);
+    border: 1px solid #20273a;
+    border-radius: 14px;
+    padding: 12px 14px;
+}
+
+.event-log-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 12px;
+    color: var(--muted);
+    letter-spacing: .02em;
+    margin-bottom: 8px;
+}
+
+.event-log-header button {
+    font-size: 11px;
+    padding: 3px 9px;
+    border-radius: 8px;
+}
+
+#event-log {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    font-size: 12px;
+    max-height: 160px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    scrollbar-width: thin;
+    scrollbar-color: #2b3450 transparent;
+}
+
+.log-entry {
+    display: grid;
+    grid-template-columns: 54px auto 1fr;
+    gap: 8px;
+    align-items: baseline;
+    padding: 3px 0;
+    border-bottom: 1px solid #141a28;
+    animation: log-in .15s ease;
+}
+
+.log-entry:last-child {
+    border-bottom: none;
+}
+
+@keyframes log-in {
+    from { opacity: 0; transform: translateY(-3px); }
+    to   { opacity: 1; transform: none; }
+}
+
+.log-time {
+    color: #3d4a63;
+    white-space: nowrap;
+}
+
+.log-tag {
+    font-size: 10px;
+    letter-spacing: .04em;
+    padding: 1px 5px;
+    border-radius: 4px;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+
+.log-tag.conn  { background: #0d2b1a; color: #5df098; border: 1px solid #1a4f2e; }
+.log-tag.lobby { background: #0c1e38; color: #6ea8ff; border: 1px solid #1a3a6e; }
+.log-tag.game  { background: #1a1c2e; color: #a8b4d0; border: 1px solid #282e48; }
+.log-tag.error { background: #2e0f0f; color: #ff6b6b; border: 1px solid #5e1f1f; }
+
+.log-msg {
+    color: #cfd7ea;
+}
+

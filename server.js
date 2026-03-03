@@ -7,7 +7,7 @@ const app = express();
 const server = http.createServer(app);
 
 const { initializeAITank, updateAITanks, setIO, detectObstacleAlongRay } = require('./bots.js');
-const { TILE_SIZE, BULLET_SIZE, BULLET_SPEED, PLAYER_SIZE, MAX_SPEED, ACCELERATION, FRICTION } = require('./public/constants.js');
+const { TILE_SIZE, BULLET_SIZE, BULLET_SPEED, PLAYER_SIZE, MAX_SPEED, ACCELERATION, FRICTION, TANK_CLASSES } = require('./public/constants.js');
 const { isCollidingWithWall, isCollidingWithPlayer, isWall, lerpAngle, getRandomNonWallPosition, getSpreadOutPosition } = require('./utils.js');
 const { loadLevel, getNumLevels } = require('./levels.js');
 
@@ -78,6 +78,14 @@ function createLevel(lobbyCode, levelNumber) {
             player.spawnGrace = lobby.mode === 'lobby' ? 0 : 180; // 3 s at 60 fps
             if (lobby.mode === 'lobby') {
                 resetBuffs(player);
+                player.hasLaserAbility = false;
+                player.hasShieldAbility = false;
+                player.laserEnergy = 100;
+                player.laserDepleted = false;
+                player.shieldEnergy = 100;
+                player.shieldDepleted = false;
+                player.classMods = {};
+                player.shieldActive = false;
             }
             // player.shield = true; // Start with shield
             let spawnX = spawn.x;
@@ -102,6 +110,31 @@ function createLevel(lobbyCode, levelNumber) {
             const botId = `AI_${Object.keys(newPlayers).length}`;
             newPlayers[botId] = initializeAITank(botId, randomSpawn.x, randomSpawn.y, 'chest');
         }
+    }
+
+    // Apply class-based starting buffs for non-lobby game starts
+    if (lobby.mode !== 'lobby') {
+        for (const player of Object.values(newPlayers)) {
+            if (!player.isAI) {
+                applyClassBuffs(player);
+            }
+        }
+    }
+
+    // Add class selection dummies to the lobby level
+    if (lobby.mode === 'lobby') {
+        TANK_CLASSES.forEach((cls, i) => {
+            const pos = CLASS_DUMMY_POSITIONS[i];
+            if (!pos) return;
+            const x = (pos.col + 0.5) * TILE_SIZE;
+            const y = (pos.row + 0.5) * TILE_SIZE;
+            const dummyId = `class_${cls.id}`;
+            const dummy = initializeAITank(dummyId, x, y, 'button', cls.name);
+            dummy.classId = cls.id;
+            dummy.color = hexToRgb(cls.color);
+            dummy.angle = Math.PI / 2; // face downward toward spawn area
+            newPlayers[dummyId] = dummy;
+        });
     }
 
     lobbies[lobbyCode] = {
@@ -130,8 +163,11 @@ function startTransition(lobbyCode) {
     if (!lobby) return;
     lobby.gameState = "transition";
 
-    transitionTimers[lobbyCode] = 3; // Duration in seconds
-    // io.to(lobbyCode).emit('transitionTimer', { secondsLeft: transitionTimers[lobbyCode] }); // Instant transition
+    // Slightly longer countdown for fresh game starts (players confirm their class choice)
+    const isGameStart = lobby.levelNumber < 0;
+    const duration = isGameStart ? 5 : 3;
+    transitionTimers[lobbyCode] = duration;
+
     const intervalId = setInterval(() => {
         transitionTimers[lobbyCode]--;
         io.to(lobbyCode).emit('transitionTimer', { secondsLeft: transitionTimers[lobbyCode] });
@@ -203,6 +239,7 @@ io.on('connection', (socket) => {
             isAI: false,
             // buffs: { shield: 1 },
             // shield: true,
+            selectedClass: 'assault',
         };
 
         resetBuffs(player);
@@ -461,6 +498,19 @@ io.on('connection', (socket) => {
         io.to(lobbyCode).emit('updatePlayerBuffs', { playerId: player.id, buffs: player.buffs });
     });
 
+    socket.on('selectClass', (classId) => {
+        const lobbyCode = socketToLobby[socket.id];
+        if (!lobbyCode) return;
+        const lobby = lobbies[lobbyCode];
+        if (!lobby) return;
+        const player = lobby.players[socket.id];
+        if (!player) return;
+        if (!TANK_CLASSES.find(c => c.id === classId)) return; // validate
+        player.selectedClass = classId;
+        io.to(lobbyCode).emit('playerClassChanged', { playerId: socket.id, classId });
+    });
+
+
     socket.on('fireLaser', () => {
         const lobbyCode = socketToLobby[socket.id];
         if (!lobbyCode) return;
@@ -469,6 +519,19 @@ io.on('connection', (socket) => {
         const player = lobby.players[socket.id];
         if (!player) return;
         if (player.isDead) return;
+
+        const isLaserClass = player.hasLaserAbility;
+        const isDevLaser = player.name === 'jeric';
+        if (!isLaserClass && !isDevLaser) return;
+        if (isLaserClass) {
+            if (player.laserDepleted || (player.laserEnergy || 0) <= 0) return;
+            player.laserEnergy -= 4;
+            player.laserChanneling = true;
+            if (player.laserEnergy <= 0) {
+                player.laserEnergy = 0;
+                player.laserDepleted = true;
+            }
+        }
 
         fireLaser(lobby, lobbyCode, player, lobby.players, lobby.level, true)
     });
@@ -604,7 +667,7 @@ function fireLaser(lobby, lobbyCode, tank, players, level, isActive) {
         x2: laserEnd.x,
         y2: laserEnd.y,
         isActive: isActive, // Active state of the laser
-        duration: 2, // Frames to display laser
+        duration: 5, // short so channeled beams always look fresh
     });
 }
 
@@ -746,11 +809,13 @@ function updateBullets(lobby, lobbyCode) {
             }
         });
 
-        // Check for bullet interception by Shield Tanks (tier 9)
+        // Check for bullet interception by Shield Tanks (tier 9 AI) or Guardian players
         for (const playerId in players) {
             if (bulletsToRemove.has(i)) break;
             const shieldTank = players[playerId];
-            if (!shieldTank.isAI || shieldTank.tier !== 9 || !shieldTank.shieldActive || shieldTank.isDead) continue;
+            const isAIShield = shieldTank.isAI && shieldTank.tier === 9;
+            const isPlayerGuardian = !shieldTank.isAI && shieldTank.hasShieldAbility;
+            if ((!isAIShield && !isPlayerGuardian) || !shieldTank.shieldActive || shieldTank.isDead) continue;
             if (bullet.owner === shieldTank.id) continue; // never block own shots
 
             const sf = shieldTank.shieldFacing;
@@ -843,22 +908,32 @@ function updateBullets(lobby, lobbyCode) {
                 // Tank dies / takes damage
                 if (lobby.mode === 'lobby') {
                     if (player.isAI && player.tier === 'button') {
-                        const buttonId = player.name.toLowerCase()
-                        if (buttonId === 'campaign' || buttonId === 'arena' || buttonId === 'survival' || buttonId === 'endless') {
-                            // player.isDead = true;
-                            changeMode(lobbyCode, buttonId);
-                            lobby.levelNumber = -1;
-                            // lobby.levelNumber = 13; // Start from level
-                            startTransition(lobbyCode);
-                        }
-                        if (buttonId === 'friendly fire: off') {
-                            lobby.friendlyFire = true;
-                            player.name = "Friendly Fire: ON";
-                            player.isDead = false;
-                        } else if (buttonId === 'friendly fire: on') {
-                            lobby.friendlyFire = false;
-                            player.name = "Friendly Fire: OFF";
-                            player.isDead = false;
+                        // Class selection dummy — set the shooter's class
+                        if (player.classId) {
+                            const shooter = lobby.players[bullet.owner];
+                            if (shooter && !shooter.isAI) {
+                                shooter.selectedClass = player.classId;
+                                io.to(lobbyCode).emit('playerClassChanged', { playerId: bullet.owner, classId: player.classId });
+                            }
+                            player.isDead = false; // Dummy stays alive
+                        } else {
+                            const buttonId = player.name.toLowerCase()
+                            if (buttonId === 'campaign' || buttonId === 'arena' || buttonId === 'survival' || buttonId === 'endless') {
+                                // player.isDead = true;
+                                changeMode(lobbyCode, buttonId);
+                                lobby.levelNumber = -1;
+                                // lobby.levelNumber = 13; // Start from level
+                                startTransition(lobbyCode);
+                            }
+                            if (buttonId === 'friendly fire: off') {
+                                lobby.friendlyFire = true;
+                                player.name = "Friendly Fire: ON";
+                                player.isDead = false;
+                            } else if (buttonId === 'friendly fire: on') {
+                                lobby.friendlyFire = false;
+                                player.name = "Friendly Fire: OFF";
+                                player.isDead = false;
+                            }
                         }
                     }
                 }
@@ -925,11 +1000,62 @@ function handlePlayerMovement(lobby, player) {
         player.vy = 0; // Stop vertical movement on collision
     }
 
-    // Update the turret angle
-    player.turretAngle = input.turretAngle;
+    // Update the turret angle (limited while channeling laser)
+    if (player.laserChanneling) {
+        const maxTurnRate = 0.05; // ~2.9 degrees per frame
+        let diff = input.turretAngle - player.turretAngle;
+        while (diff > Math.PI) diff -= 2 * Math.PI;
+        while (diff < -Math.PI) diff += 2 * Math.PI;
+        player.turretAngle += Math.sign(diff) * Math.min(Math.abs(diff), maxTurnRate);
+    } else {
+        player.turretAngle = input.turretAngle;
+    }
+
+    // Guardian shield — held while right-click held and energy available
+    if (player.hasShieldAbility) {
+        if (input.shieldActive && !player.shieldDepleted && (player.shieldEnergy || 0) > 0) {
+            player.shieldActive = true;
+            player.shieldFacing = player.turretAngle;
+        } else {
+            player.shieldActive = false;
+        }
+    }
 
     // const lobbyCode = socketToLobby[socket];
     // io.to(lobbyCode).emit('updatePlayers', players);
+}
+
+// Class dummy positions in the lobby level (left section, cols 1-8)
+// Layout: 4 dummies in row 2, 3 dummies in row 8 (world coords = (col+0.5)*TILE_SIZE)
+const CLASS_DUMMY_POSITIONS = [
+    { col: 1, row: 2 }, { col: 3, row: 2 }, { col: 5, row: 2 }, { col: 7, row: 2 },
+    { col: 2, row: 8 }, { col: 4, row: 8 }, { col: 6, row: 8 },
+];
+
+function hexToRgb(hex) {
+    return [
+        parseInt(hex.slice(1, 3), 16),
+        parseInt(hex.slice(3, 5), 16),
+        parseInt(hex.slice(5, 7), 16),
+    ];
+}
+
+function applyClassBuffs(player) {
+    const cls = TANK_CLASSES.find(c => c.id === (player.selectedClass || 'assault'));
+    if (!cls) return;
+    for (const [buffType, stacks] of Object.entries(cls.buffs)) {
+        if (player.buffs.hasOwnProperty(buffType)) {
+            player.buffs[buffType] += stacks;
+        }
+    }
+    player.classMods = cls.mods || {};
+    player.hasLaserAbility = cls.special === 'laser';
+    player.hasShieldAbility = cls.special === 'shield';
+    player.laserEnergy = 100;
+    player.laserDepleted = false;
+    player.shieldEnergy = 100;
+    player.shieldDepleted = false;
+    player.shieldActive = false;
 }
 
 function resetBuffs(player) {
@@ -1032,6 +1158,39 @@ function updatePlayerStats(lobby, player) {
             break;
     }
     player.playerFireCooldown = 60 * player.fireRateMultiplier;
+
+    // Apply class-specific modifiers (nerfs) — override values calculated above
+    const cm = player.classMods;
+    if (cm) {
+        if (cm.speedFactor !== undefined) player.max_speed *= cm.speedFactor;
+        if (cm.maxBullets !== undefined) player.maxBullets = cm.maxBullets;
+        if (cm.cooldownAdd !== undefined) player.playerFireCooldown += cm.cooldownAdd;
+        if (cm.bulletSpeedFactor !== undefined) player.bulletSpeed *= cm.bulletSpeedFactor;
+        if (cm.bounceOverride !== undefined) player.bulletBounces = cm.bounceOverride;
+    }
+
+    // Laser energy: drains via fireLaser events, recharges passively
+    if (player.hasLaserAbility) {
+        player.laserChanneling = false; // reset each tick; fireLaser handler re-sets if fired
+        player.laserEnergy = Math.min(100, (player.laserEnergy || 0) + 0.15);
+        if (player.laserDepleted && player.laserEnergy >= 25) player.laserDepleted = false;
+    }
+
+    // Shield energy: drains while active, recharges while inactive
+    if (player.hasShieldAbility) {
+        if (player.shieldActive) {
+            player.shieldEnergy -= 1.5;
+            if (player.shieldEnergy <= 0) {
+                player.shieldEnergy = 0;
+                player.shieldDepleted = true;
+                player.shieldActive = false;
+            }
+        } else {
+            player.shieldEnergy = Math.min(100, (player.shieldEnergy || 0) + 0.3);
+            if (player.shieldDepleted && player.shieldEnergy >= 25) player.shieldDepleted = false;
+        }
+    }
+
     player.currentFireCooldown--;
     if (player.spawnGrace > 0) player.spawnGrace--;
 }

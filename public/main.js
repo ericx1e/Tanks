@@ -1,6 +1,6 @@
 
-const socket = io.connect('localhost:3000');
-// const socket = io.connect('https://multiplayer-tanks-3fa3c942a132.herokuapp.com/');
+// const socket = io.connect('localhost:3000');
+const socket = io.connect('https://multiplayer-tanks-3fa3c942a132.herokuapp.com/');
 
 // Dev console command: giveBuff('speed', 3)
 window.giveBuff = (buff, count = 1) => socket.emit('devGiveBuff', { buff, count });
@@ -156,3 +156,54 @@ socket.on('lobbyJoined', (data) => {
 
 socket.on('disconnect', () => { showLobbyPanel(); });
 socket.on('error', (err) => { toast(err?.message || 'Something went wrong'); });
+
+// ===== Event Log =====
+function gameLog(tag, msg, type = 'game') {
+    const log = el('event-log');
+    if (!log) return;
+    const now = new Date();
+    const time = now.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const entry = document.createElement('div');
+    entry.className = 'log-entry';
+    entry.innerHTML =
+        `<span class="log-time">${time}</span>` +
+        `<span class="log-tag ${type}">${tag}</span>` +
+        `<span class="log-msg">${msg}</span>`;
+    log.prepend(entry);
+    while (log.children.length > 60) log.lastChild.remove();
+}
+
+el('clear-log').addEventListener('click', () => {
+    const log = el('event-log');
+    while (log.firstChild) log.firstChild.remove();
+});
+
+// Connection
+socket.on('connect', () => gameLog('conn', 'Connected to server', 'conn'));
+socket.on('disconnect', () => gameLog('conn', 'Disconnected', 'error'));
+
+// Lobby
+socket.on('lobbyCreated', (data) => gameLog('lobby', `Lobby ${data.lobbyCode} created`, 'lobby'));
+socket.on('lobbyJoined', (data) => gameLog('lobby', `Joined lobby ${data.lobbyCode}`, 'lobby'));
+socket.on('error', (err) => gameLog('error', err?.message || 'Error', 'error'));
+
+// Game
+socket.on('gameMode', (mode) => gameLog('game', `Mode: ${mode}`));
+socket.on('victory', () => gameLog('game', 'Victory!'));
+socket.on('levelComplete', (data) => gameLog('game', `Level ${data.levelNumber} complete`));
+socket.on('gameOver', () => gameLog('game', 'Game over'));
+socket.on('nextLevel', () => gameLog('game', 'Loading next level…'));
+
+// Sync selected class to server after joining (persists last choice from localStorage)
+const _savedClass = localStorage.getItem('tanks.selectedClass') || 'assault';
+socket.on('lobbyCreated', () => socket.emit('selectClass', _savedClass));
+socket.on('lobbyJoined', () => socket.emit('selectClass', _savedClass));
+
+socket.on('playerClassChanged', ({ playerId, classId }) => {
+    if (playerId === socket.id) {
+        localStorage.setItem('tanks.selectedClass', classId);
+        const cls = typeof TANK_CLASSES !== 'undefined'
+            ? TANK_CLASSES.find(c => c.id === classId) : null;
+        gameLog('game', `Class: ${cls ? cls.name : classId}`);
+    }
+});

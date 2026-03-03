@@ -49,6 +49,8 @@ let localAngle = 0, localTurretAngle = 0;
 let localPredValid = false;
 let currentKeys = { w: false, a: false, s: false, d: false };
 let currentTurretAngle = 0;
+let laserChanneling = false;   // true while right-click held for Laser class
+let guardianShielding = false; // true while right-click held for Guardian class
 const playerInterpBuf = {}; // id -> [{x, y, angle, turretAngle, t}, ...]
 const INTERP_DELAY_MS = 100;
 let bulletState = {}; // id -> {x, y, angle, speed, receivedAt}
@@ -250,6 +252,7 @@ async function setup() {
     if (!gameMount) gameMount = document.getElementById('game-mount') || document.body;
     cnv = createCanvas(1100, 680, WEBGL);
     cnv.parent(gameMount);
+    cnv.elt.addEventListener('contextmenu', e => e.preventDefault());
 
     pixelDensity(1);
 
@@ -567,6 +570,8 @@ function draw() {
     if (gameMode !== 'lobby') drawMinimap();
     if (gameMode !== 'lobby') drawBuffHUD();
     if (gameMode !== 'lobby') drawBulletIndicator();
+    if (gameMode !== 'lobby') drawClassBadge();
+    if (gameMode === 'lobby') drawClassInfoPanel();
 
     pop(); // Restore transformations
 }
@@ -729,6 +734,149 @@ function drawBulletIndicator() {
         ellipse(px, VH - 18, pipR * 2, pipR * 2);
     }
 
+    gl.enable(gl.DEPTH_TEST);
+}
+
+// Draw class badge (bottom-left, above minimap) showing chosen class + laser cooldown.
+function drawClassBadge() {
+    if (!myTank) return;
+
+    const cls = typeof TANK_CLASSES !== 'undefined'
+        ? TANK_CLASSES.find(c => c.id === myTank.selectedClass)
+        : null;
+    if (!cls) return;
+
+    const VH = 250;
+    const VW = VH * (width / height);
+    const badgeW = 108;
+    const x = VW - badgeW - 14; // bottom-right corner
+    const y = VH - 46;
+
+    const gl = drawingContext;
+    gl.disable(gl.DEPTH_TEST);
+
+    // Background pill
+    push();
+    translate(x, y, 0);
+    noStroke();
+    fill(10, 14, 24, 210);
+    rectMode(CORNER);
+    rect(0, 0, badgeW, 26, 8);
+
+    // Class label + name
+    textFont(font);
+    textSize(11);
+    textAlign(LEFT, CENTER);
+    fill(230, 235, 255, 230);
+    text(`${cls.label}  ${cls.name}`, 8, 13);
+    pop();
+
+    // Right-click ability energy bar
+    if (cls.special === 'laser' || cls.special === 'shield') {
+        const isLaser = cls.special === 'laser';
+        const energy = isLaser
+            ? Math.max(0, myTank.laserEnergy ?? 100)
+            : Math.max(0, myTank.shieldEnergy ?? 100);
+        const active = isLaser ? laserChanneling : !!(myTank.shieldActive);
+        const pct = energy / 100;
+
+        // Colors
+        const rA = isLaser ? 255 : 80,  gA = isLaser ? 90 : 180,  bA = isLaser ? 60 : 255;
+        const rI = isLaser ? 160 : 50,  gI = isLaser ? 60 : 100,  bI = isLaser ? 45 : 180;
+        const label = active
+            ? (isLaser ? 'CHANNELING' : 'SHIELD ACTIVE')
+            : (isLaser ? 'RIGHT-CLICK: LASER' : 'RIGHT-CLICK: SHIELD');
+
+        push();
+        translate(x, y + 28, 0);
+        noStroke();
+        rectMode(CORNER);
+
+        // Background
+        fill(isLaser ? color(50, 15, 15, 180) : color(15, 30, 50, 180));
+        rect(0, 0, badgeW, 6, 3);
+
+        // Energy fill
+        fill(active ? color(rA, gA, bA, 230) : color(rI, gI, bI, 160));
+        rect(0, 0, badgeW * pct, 6, 3);
+
+        textFont(font);
+        textSize(9);
+        textAlign(CENTER, CENTER);
+        fill(active ? color(rA, gA, bA, 220) : color(rI + 40, gI + 40, bI + 40, 160));
+        text(label, badgeW / 2, -6);
+        pop();
+    }
+
+    gl.enable(gl.DEPTH_TEST);
+}
+
+// Draw class info panel in lobby mode — shows selected class description + trade-offs
+function drawClassInfoPanel() {
+    if (!myTank || typeof TANK_CLASSES === 'undefined') return;
+    const cls = TANK_CLASSES.find(c => c.id === (myTank.selectedClass || 'assault'));
+    if (!cls) return;
+
+    // Empirically-tuned frustum half-extents for camera(0,0,630) screen-space overlay
+    const VH = 250;
+    const VW = VH * (width / height);
+    const panelW = 260;
+    const panelH = 88;
+    const x = -VW + 14;
+    const y = VH - panelH - 14;
+
+    const gl = drawingContext;
+    gl.disable(gl.DEPTH_TEST);
+
+    push();
+    translate(x, y, 0);
+    noStroke();
+
+    // Panel background
+    fill(8, 12, 22, 210);
+    rectMode(CORNER);
+    rect(0, 0, panelW, panelH, 10);
+
+    // Header: class name
+    textFont(font);
+    textAlign(LEFT, TOP);
+
+    const [cr, cg, cb] = cls.color.match(/\w\w/g).map(h => parseInt(h, 16));
+    fill(cr, cg, cb, 230);
+    textSize(13);
+    text(cls.label + '  ' + cls.name, 10, 10);
+
+    // Description
+    fill(180, 185, 200, 200);
+    textSize(10);
+    // Word-wrap manually by splitting at ~38 chars
+    const words = cls.description.split(' ');
+    let line = '';
+    let lineY = 28;
+    for (const w of words) {
+        const test = line ? line + ' ' + w : w;
+        if (test.length > 38) {
+            text(line, 10, lineY);
+            lineY += 14;
+            line = w;
+        } else {
+            line = test;
+        }
+    }
+    if (line) text(line, 10, lineY);
+
+    // Right-click hint at bottom
+    if (cls.special) {
+        const hint = cls.special === 'shield' ? 'Right-click: hold to deploy shield'
+            : cls.special === 'laser' ? 'Right-click: fire laser beam' : '';
+        if (hint) {
+            fill(120, 180, 255, 180);
+            textSize(9);
+            text(hint, 10, panelH - 14);
+        }
+    }
+
+    pop();
     gl.enable(gl.DEPTH_TEST);
 }
 
@@ -1099,18 +1247,53 @@ function drawTank(tank, isSelf) {
     }
 
     // Draw nametag
-    if (!tank.isAI || tank.tier === 'button') {
+    if (tank.classId) {
+        // ── Class selection dummy ──────────────────────────────────────
+        const cls = typeof TANK_CLASSES !== 'undefined'
+            ? TANK_CLASSES.find(c => c.id === tank.classId) : null;
+        const isSelected = myTank && myTank.selectedClass === tank.classId;
+
+        // Pulsing glow when this is the player's selected class
+        if (isSelected) {
+            push();
+            translate(tank.x, tank.y, PLAYER_SIZE);
+            noStroke();
+            fill(...tank.color, 45 + 25 * Math.sin(frameCount * 0.06));
+            sphere(PLAYER_SIZE * 2.5);
+            pop();
+        }
+
+        // Icon + name label floating above the dummy
         push();
-        translate(tank.x, tank.y, PLAYER_SIZE * 3.5); // Position above the tank
-        // rotateX(-HALF_PI);
-        rotateX(atan2(tank.y - camY, camZ))
+        translate(tank.x, tank.y, PLAYER_SIZE * 4.2);
+        rotateX(atan2(tank.y - camY, camZ));
+        textAlign(CENTER, CENTER);
+        textFont(font);
+        noStroke();
+        if (isSelected) {
+            fill(...tank.color);
+            textSize(16);
+            text(cls ? cls.name : tank.name, 0, 0);
+            textSize(10);
+            fill(...tank.color, 200);
+            text('SELECTED', 0, 18);
+        } else {
+            fill(200, 200, 200);
+            textSize(14);
+            text(cls ? cls.name : tank.name, 0, 0);
+        }
+        pop();
+    } else if (!tank.isAI || tank.tier === 'button') {
+        push();
+        translate(tank.x, tank.y, PLAYER_SIZE * 3.5);
+        rotateX(atan2(tank.y - camY, camZ));
         textAlign(CENTER, CENTER);
         textSize(16);
         fill(255);
         stroke(0);
         strokeWeight(1);
         textFont(font);
-        text(tank.name || "Player", 0, 0); // Show the name, default to "Player"
+        text(tank.name || "Player", 0, 0);
         pop();
     }
 
@@ -1133,10 +1316,16 @@ function drawTank(tank, isSelf) {
         pop()
     }
 
-    // Shield Tank (tier 9) — draw the blocking wall panel
-    if (tank.tier === 9 && tank.shieldActive && !tank.isDead) {
+    // Shield Tank (tier 9 AI) or Guardian player — draw the blocking wall panel
+    const isAIShield = tank.tier === 9;
+    const isGuardianPlayer = !tank.isAI && tank.selectedClass === 'guardian';
+    if ((isAIShield || isGuardianPlayer) && tank.shieldActive && !tank.isDead) {
         const sf = tank.shieldFacing;
         const shieldDist = PLAYER_SIZE * 1.5;
+        // Guardian gets a slightly different color to distinguish from AI
+        const r = isGuardianPlayer ? 80 : 60;
+        const g = isGuardianPlayer ? 180 : 120;
+        const b = isGuardianPlayer ? 255 : 255;
         push();
         translate(
             tank.x + Math.cos(sf) * shieldDist,
@@ -1144,7 +1333,7 @@ function drawTank(tank, isSelf) {
             PLAYER_SIZE
         );
         rotateZ(sf + HALF_PI); // orient panel perpendicular to facing
-        fill(60, 120, 255, 200);
+        fill(r, g, b, 200);
         stroke(160, 210, 255, 240);
         strokeWeight(2);
         box(PLAYER_SIZE * 5, PLAYER_SIZE * 0.35, PLAYER_SIZE * 2.5);
@@ -1818,7 +2007,8 @@ function handleMovement() {
         d: keyIsDown(68),
     };
     currentTurretAngle = atan2(mouseY - height / 2, mouseX - width / 2);
-    socket.emit('playerInput', { keys: currentKeys, turretAngle: currentTurretAngle });
+    if (laserChanneling && myTank?.selectedClass === 'laser') socket.emit('fireLaser');
+    socket.emit('playerInput', { keys: currentKeys, turretAngle: currentTurretAngle, shieldActive: guardianShielding });
 }
 
 function handleTankMovement() {
@@ -1855,21 +2045,32 @@ function handleTankMovement() {
 }
 
 function mousePressed() {
-    if (!lobbyCode) return
-    if (mouseX < 0 || mouseX > width || mouseY < 0 || mouseY > height) {
-        return;
-    }
+    if (!lobbyCode) return;
+    if (mouseX < 0 || mouseX > width || mouseY < 0 || mouseY > height) return;
     const panel = document.getElementById('lobby-controls');
     if (panel && !panel.classList.contains('is-hidden')) return;
-    socket.emit('fireBullet', { angle: myTank.turretAngle });
-    // socket.emit('fireBullet', { angle: myTank.turretAngle - PI / 11 });
-    // socket.emit('fireBullet', { angle: myTank.turretAngle + PI / 11 });
-    // return false;
+
+    if (mouseButton === RIGHT) {
+        if (myTank && myTank.selectedClass === 'guardian') guardianShielding = true;
+        if (myTank && myTank.selectedClass === 'laser') laserChanneling = true;
+        return false; // prevent context menu
+    }
+
+    // Left click — fire normal bullet
+    if (myTank) socket.emit('fireBullet', { angle: myTank.turretAngle });
+}
+
+
+function mouseReleased() {
+    if (mouseButton === RIGHT) {
+        laserChanneling = false;
+        guardianShielding = false;
+    }
 }
 
 function mouseDragged() {
     if (myTank && myTank.name === 'jeric') {
-        socket.emit('fireLaser')
+        socket.emit('fireLaser');
     }
 }
 
