@@ -141,6 +141,52 @@ function drawDrop(x, y, angle, buff) {
             pop();
             pop();
             break;
+        case 'visionRange':
+            noStroke();
+            push();
+            fill(150, 220, 255);
+            sphere(size / 3);
+            for (let i = 0; i < 6; i++) {
+                push();
+                rotateZ(i * PI / 3);
+                translate(size * 0.72, 0, 0);
+                rotateZ(HALF_PI);
+                fill(150, 220, 255, 150);
+                cylinder(size / 14, size * 0.65);
+                pop();
+            }
+            pop();
+            break;
+        case 'piercing':
+            noStroke();
+            push();
+            fill(160, 160, 160);
+            box(size / 5, size * 0.9, size * 0.5);
+            fill(255, 50, 50);
+            translate(size * 0.42, 0, 0);
+            sphere(size / 4);
+            translate(-size * 0.38, 0, 0);
+            rotateZ(HALF_PI);
+            fill(255, 120, 120, 160);
+            cone(size / 10, size * 0.85);
+            pop();
+            break;
+        case 'autoTurret':
+            noStroke();
+            push();
+            // Base plate
+            fill(100, 70, 30);
+            box(size * 0.9, size * 0.9, size * 0.3);
+            // Turret body
+            translate(0, 0, size * 0.35);
+            fill(255, 160, 0);
+            box(size * 0.55, size * 0.7, size * 0.5);
+            // Barrel pointing out
+            translate(0, -size * 0.55, 0);
+            fill(200, 120, 0);
+            box(size * 0.18, size * 0.6, size * 0.18);
+            pop();
+            break;
         default:
             noStroke();
             push();

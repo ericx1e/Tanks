@@ -6,7 +6,7 @@ const { v4: uuidv4 } = require('uuid'); // Generates unique lobby codes
 const app = express();
 const server = http.createServer(app);
 
-const { initializeAITank, updateAITanks, setIO } = require('./bots.js');
+const { initializeAITank, updateAITanks, setIO, detectObstacleAlongRay } = require('./bots.js');
 const { TILE_SIZE, BULLET_SIZE, BULLET_SPEED, PLAYER_SIZE, MAX_SPEED, ACCELERATION, FRICTION } = require('./public/constants.js');
 const { isCollidingWithWall, isCollidingWithPlayer, isWall, lerpAngle, getRandomNonWallPosition, getSpreadOutPosition } = require('./utils.js');
 const { loadLevel, getNumLevels } = require('./levels.js');
@@ -75,6 +75,7 @@ function createLevel(lobbyCode, levelNumber) {
     for (const [id, player] of Object.entries(lobby.players)) {
         if (!player.isAI) {
             player.isDead = false;
+            player.spawnGrace = lobby.mode === 'lobby' ? 0 : 180; // 3 s at 60 fps
             if (lobby.mode === 'lobby') {
                 resetBuffs(player);
             }
@@ -435,6 +436,7 @@ io.on('connection', (socket) => {
                 angle: angle,
                 speed: player.bulletSpeed,
                 bounces: player.bulletBounces,
+                piercing: player.piercing || 0,
             });
 
             io.to(lobbyCode).emit('explosion', {
@@ -444,6 +446,19 @@ io.on('connection', (socket) => {
                 size: BULLET_SIZE / 2,
             });
         }
+    });
+
+    socket.on('devGiveBuff', ({ buff, count = 1 }) => {
+        const lobbyCode = socketToLobby[socket.id];
+        if (!lobbyCode) return;
+        const lobby = lobbies[lobbyCode];
+        if (!lobby) return;
+        const player = lobby.players[socket.id];
+        if (!player || !player.buffs) return;
+        if (!player.buffs.hasOwnProperty(buff)) return;
+        player.buffs[buff] += Math.max(1, Math.floor(count));
+        updatePlayerStats(lobby, player);
+        io.to(lobbyCode).emit('updatePlayerBuffs', { playerId: player.id, buffs: player.buffs });
     });
 
     socket.on('fireLaser', () => {
@@ -524,7 +539,7 @@ function fireLaser(lobby, lobbyCode, tank, players, level, isActive) {
                         // Apply damage to the player
                         if (player.shield) {
                             player.shield = false; // Remove shield instead of killing
-                        } else {
+                        } else if (!player.spawnGrace) {
                             player.isDead = true;
 
 
@@ -605,9 +620,9 @@ function explodeCannonball(lobby, lobbyCode, bullet, bulletsToRemove, i) {
             if (!owner || lobby.friendlyFire || lobby.mode === 'arena' || (player.isAI !== owner.isAI)) {
                 if (player.shield) {
                     player.shield = false;
-                } else if (!player.godMode) {
+                } else if (!player.godMode && !player.spawnGrace) {
                     player.isDead = true;
-                    if ((lobby.mode === 'survival' || lobby.mode === 'endless') && player.tier !== 'chest') {
+                    if ((lobby.mode === 'survival' || lobby.mode === 'endless') && player.tier !== 'chest' && player.isAI) {
                         lobby.tankKills++;
                         if (lobby.tankKills % 5 === 0) spawnDrop(lobbyCode, player.x, player.y);
                     }
@@ -694,7 +709,7 @@ function updateBullets(lobby, lobbyCode) {
                 io.to(lobbyCode).emit('explosion', {
                     x: bullet.x,
                     y: bullet.y,
-                    z: PLAYER_SIZE * 1.4 - BULLET_SIZE,
+                    z: bullet.isTurretBullet ? PLAYER_SIZE * 2.4 : PLAYER_SIZE * 1.4 - BULLET_SIZE,
                     size: BULLET_SIZE,
                     dSize: 0.5
                 });
@@ -708,6 +723,10 @@ function updateBullets(lobby, lobbyCode) {
         // Check for collisions with other bullets
         bullets.forEach((otherBullet, j) => {
             if (i !== j && !bulletsToRemove.has(j)) {
+                // Turret bullets don't collide with the same player's normal bullets
+                if (bullet.owner === otherBullet.owner &&
+                    (bullet.isTurretBullet || otherBullet.isTurretBullet)) return;
+
                 const dx = bullet.x - otherBullet.x;
                 const dy = bullet.y - otherBullet.y;
                 const distance = Math.sqrt(dx * dx + dy * dy);
@@ -764,12 +783,13 @@ function updateBullets(lobby, lobbyCode) {
         // Check for collisions with players
         for (let playerId in players) {
             const player = players[playerId];
+            if (bullet.isTurretBullet && playerId === bullet.owner) continue; // turret never hits its own tank
             if (/*playerId !== bullet.owner && */isCollidingWithPlayer(nextX, nextY, player)) {
                 if (bullet.isCannonball) {
                     explodeCannonball(lobby, lobbyCode, bullet, bulletsToRemove, i);
                     break;
                 }
-                bulletsToRemove.add(i); // Remove bullet
+                if (!bullet.piercing) bulletsToRemove.add(i); // Remove bullet (piercing bullets persist)
 
                 let color = player.id; // indicates human player hit
                 let effect = null;
@@ -798,7 +818,7 @@ function updateBullets(lobby, lobbyCode) {
                         // Apply damage to the player
                         if (player.shield) {
                             player.shield = false; // Remove shield instead of killing
-                        } else if (!player.godMode) {
+                        } else if (!player.godMode && !player.spawnGrace) {
                             player.isDead = true;
                         }
                     // player.isDead = true;
@@ -812,7 +832,7 @@ function updateBullets(lobby, lobbyCode) {
                 }
 
                 if (lobby.mode === 'survival' || lobby.mode === 'endless') {
-                    if (player.tier !== 'chest') {
+                    if (player.tier !== 'chest' && player.isAI) {
                         lobby.tankKills++;
                         if (lobby.tankKills % 5 === 0) {
                             spawnDrop(lobbyCode, player.x, player.y);
@@ -842,6 +862,7 @@ function updateBullets(lobby, lobbyCode) {
                         }
                     }
                 }
+                if (bullet.piercing > 0) { bullet.piercing--; continue; }
                 break;
             }
         }
@@ -919,12 +940,16 @@ function resetBuffs(player) {
         bulletSpeed: 0,
         bulletBounces: 0,
         multiShot: 0,
+        visionRange: 0,
+        piercing: 0,
+        autoTurret: 0,
         currentFireCooldown: 0,
     };
 }
 
 function updatePlayerStats(lobby, player) {
     if (!player.buffs) return;
+    if (player.isDead) return;
 
     player.fireRateMultiplier = 1;
     // player.shield = false;
@@ -984,6 +1009,16 @@ function updatePlayerStats(lobby, player) {
         player.bulletBounces += Math.ceil(Math.sqrt(player.buffs.bulletBounces));
     }
 
+    if (player.buffs.visionRange > 0) {
+        player.visionDistance *= 1 + 0.3 * Math.sqrt(player.buffs.visionRange);
+        player.visionCornerBoost = 1;
+    } else {
+        player.visionCornerBoost = 0;
+    }
+
+    player.piercing = player.buffs.piercing > 0
+        ? Math.ceil(Math.sqrt(player.buffs.piercing)) : 0;
+
     switch (lobby.mode) {
         case 'survival':
             player.bulletSpeed = 0.7 * BULLET_SPEED * player.bulletSpeedMultiplier
@@ -998,8 +1033,95 @@ function updatePlayerStats(lobby, player) {
     }
     player.playerFireCooldown = 60 * player.fireRateMultiplier;
     player.currentFireCooldown--;
+    if (player.spawnGrace > 0) player.spawnGrace--;
 }
 
+function updateAutoTurrets(lobby, lobbyCode) {
+    for (const playerId in lobby.players) {
+        const player = lobby.players[playerId];
+        if (player.isAI || player.isDead) continue;
+        const stacks = player.buffs?.autoTurret || 0;
+        if (stacks === 0) continue;
+
+        const turnRate = 0.05 * Math.sqrt(stacks);
+        const cooldown = Math.round(90 / Math.sqrt(stacks));
+        const bulletRange = 12 * TILE_SIZE;
+        const tankRange = 8 * TILE_SIZE;
+
+        if (player.autoTurretAngle === undefined) player.autoTurretAngle = player.turretAngle;
+        if (player.autoTurretCooldown === undefined) player.autoTurretCooldown = 0;
+        if (player.autoTurretCooldown > 0) player.autoTurretCooldown--;
+
+        // Priority 1: enemy bullet heading toward this player (bullets are in open space, no LOS needed)
+        let targetAngle = null;
+        let bestDist = Infinity;
+        for (const b of lobby.bullets) {
+            if (b.owner === playerId) continue;
+            const owner = lobby.players[b.owner];
+            if (owner && !owner.isAI && lobby.mode !== 'arena') continue;
+            const dx = b.x - player.x;
+            const dy = b.y - player.y;
+            const dist = Math.hypot(dx, dy);
+            if (dist > bulletRange) continue;
+            // Bullet is a threat if moving toward the player
+            const approaching = -dx * Math.cos(b.angle) - dy * Math.sin(b.angle);
+            if (approaching > 0 && dist < bestDist) {
+                bestDist = dist;
+                targetAngle = Math.atan2(dy, dx);
+            }
+        }
+
+        // Priority 2: nearest enemy tank / player with clear line of sight
+        if (targetAngle === null) {
+            let nearestDist = tankRange;
+            for (const id in lobby.players) {
+                if (id === playerId) continue;
+                const t = lobby.players[id];
+                if (t.isDead) continue;
+                if (!t.isAI && lobby.mode !== 'arena') continue;
+                const dx = t.x - player.x;
+                const dy = t.y - player.y;
+                const dist = Math.hypot(dx, dy);
+                if (dist < nearestDist && !detectObstacleAlongRay(player.x, player.y, Math.atan2(dy, dx), dist, lobby.level)) {
+                    nearestDist = dist;
+                    targetAngle = Math.atan2(dy, dx);
+                }
+            }
+        }
+
+        if (targetAngle === null) continue;
+
+        // Rotate turret toward target
+        let diff = targetAngle - player.autoTurretAngle;
+        while (diff > Math.PI) diff -= 2 * Math.PI;
+        while (diff < -Math.PI) diff += 2 * Math.PI;
+        if (Math.abs(diff) <= turnRate) {
+            player.autoTurretAngle = targetAngle;
+        } else {
+            player.autoTurretAngle += Math.sign(diff) * turnRate;
+        }
+
+        // Fire when aimed and cooled down
+        if (player.autoTurretCooldown <= 0 && Math.abs(diff) < 0.25) {
+            const angle = player.autoTurretAngle;
+            // Spawn at turret barrel tip: body offset 0.55 + half barrel 0.325 = 0.875
+            const bx = player.x + Math.cos(angle) * PLAYER_SIZE * 0.875 + player.vx;
+            const by = player.y + Math.sin(angle) * PLAYER_SIZE * 0.875 + player.vy;
+            lobby.bullets.push({
+                id: lobby.bullets.length,
+                owner: playerId,
+                x: bx, y: by,
+                angle,
+                speed: player.bulletSpeed || BULLET_SPEED,
+                bounces: 0,
+                piercing: player.piercing || 0,
+                isTurretBullet: true,
+            });
+            io.to(lobbyCode).emit('explosion', { x: bx, y: by, z: PLAYER_SIZE * 2.4, size: BULLET_SIZE / 2 });
+            player.autoTurretCooldown = cooldown;
+        }
+    }
+}
 
 function spawnSurvivalBots(lobbyCode, n) {
     const lobby = lobbies[lobbyCode];
@@ -1045,6 +1167,9 @@ function spawnDrop(lobbyCode, x, y) {
         'bulletBounces',
         'shield',
         'multiShot',
+        'visionRange',
+        'piercing',
+        'autoTurret',
     ];
 
     // Randomly select a buff
@@ -1088,6 +1213,8 @@ function handlePlayerPickup(lobbyCode, playerId) {
                     shield: 0,
                     bulletSpeed: 0,
                     multiShot: 0,
+                    visionRange: 0,
+                    piercing: 0,
                 };
             }
 
@@ -1155,6 +1282,8 @@ setInterval(() => {
             }
             updatePlayerStats(lobby, player);
         }
+
+        updateAutoTurrets(lobby, lobbyCode);
 
         if (lobby.mode == 'lobby' || lobby.mode == 'campaign' || lobby.mode == 'endless') {
             if (lobby.level && updateAITanks(lobby, lobbyCode, lobby.players, lobby.level, lobby.bullets)) {
@@ -1236,7 +1365,7 @@ setInterval(() => {
             lobby.arenaProgress++;
 
             if (lobby.arenaProgress % 10 == 0) {
-                lobby.spawnTier = Math.min(lobby.spawnTier + 1, 12);
+                lobby.spawnTier = Math.min(lobby.spawnTier + 1, 14);
                 spawnSurvivalBots(lobbyCode, 10);
             }
         }

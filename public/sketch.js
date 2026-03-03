@@ -566,6 +566,7 @@ function draw() {
 
     if (gameMode !== 'lobby') drawMinimap();
     if (gameMode !== 'lobby') drawBuffHUD();
+    if (gameMode !== 'lobby') drawBulletIndicator();
 
     pop(); // Restore transformations
 }
@@ -665,7 +666,7 @@ function drawBuffHUD() {
     const gl = drawingContext;
     gl.disable(gl.DEPTH_TEST);
 
-    const buffTypes = ['speed', 'fireRate', 'bulletSpeed', 'bulletBounces', 'shield', 'multiShot'];
+    const buffTypes = ['speed', 'fireRate', 'bulletSpeed', 'bulletBounces', 'shield', 'multiShot', 'visionRange', 'piercing', 'autoTurret'];
     let slotY = -VH + margin + 10;
 
     for (const buffType of buffTypes) {
@@ -702,6 +703,30 @@ function drawBuffHUD() {
         // gl.disable(gl.DEPTH_TEST);
 
         slotY += slotH;
+    }
+
+    gl.enable(gl.DEPTH_TEST);
+}
+
+function drawBulletIndicator() {
+    if (!myTank || myTank.isDead) return;
+
+    const myBulletCount = bullets.filter(b => b.owner === socket.id && !b.isTurretBullet).length;
+    const maxBullets = myTank.maxBullets || 6;
+
+    const VH = 250;
+    const pipR = 4.5;
+    const gap = 4;
+    const totalW = maxBullets * (pipR * 2 + gap) - gap;
+
+    const gl = drawingContext;
+    gl.disable(gl.DEPTH_TEST);
+
+    noStroke();
+    for (let i = 0; i < maxBullets; i++) {
+        const px = -totalW / 2 + i * (pipR * 2 + gap) + pipR;
+        fill(i < myBulletCount ? color(220, 70, 70, 220) : color(210, 210, 210, 180));
+        ellipse(px, VH - 18, pipR * 2, pipR * 2);
     }
 
     gl.enable(gl.DEPTH_TEST);
@@ -933,6 +958,8 @@ function drawTracks() {
 
 function drawTank(tank, isSelf) {
     const size = PLAYER_SIZE;
+    // Flash during spawn grace period (skip every other 8-frame block)
+    if (tank.spawnGrace > 0 && Math.floor(frameCount / 8) % 2 === 0) return;
     const cloakAlpha = (tank.tier === 8 && tank.cloaked) ? 10 : 255;
     push();
     // Tank base (lower box)
@@ -1027,6 +1054,22 @@ function drawTank(tank, isSelf) {
             }
 
             pop();
+
+            // Auto-turret buff: small independent turret on top
+            if (tank.buffs && tank.buffs.autoTurret > 0 && tank.autoTurretAngle !== undefined) {
+                push();
+                translate(0, 0, size * 1.7); // sit above the main turret
+                rotateZ(PI / 2 + tank.autoTurretAngle - tank.angle);
+                fill(255, 160, 0);
+                stroke(80, 50, 0);
+                strokeWeight(1);
+                box(size * 0.55, size * 0.7, size * 0.55); // turret body
+                noStroke();
+                translate(0, -size * 0.55, 0); // barrel base
+                fill(200, 120, 0);
+                box(size * 0.2, size * 0.65, size * 0.2); // barrel
+                pop();
+            }
         }
     } else {
         push();
@@ -1833,7 +1876,7 @@ function mouseDragged() {
 function drawBullets() {
     bullets.forEach((bullet, i) => {
         const { x, y } = getBulletDisplayPos(i);
-        const bz = PLAYER_SIZE * 1.4 - BULLET_SIZE;
+        const bz = bullet.isTurretBullet ? PLAYER_SIZE * 2.4 : PLAYER_SIZE * 1.4 - BULLET_SIZE;
 
         push();
         translate(x, y, bz);
@@ -1847,6 +1890,19 @@ function drawBullets() {
             pop();
             fill(190, 80, 30);
             sphere(BULLET_SIZE * 3);
+        } else if (bullet.isTurretBullet) {
+            // Small orange turret bullet
+            const bs = BULLET_SIZE * 0.55;
+            push();
+            const cameraPos = new p5.Vector(camX, camY, camZ);
+            const bulletPos = new p5.Vector(x, y, bz);
+            const offset = p5.Vector.sub(cameraPos, bulletPos).normalize().mult(-1.5);
+            translate(offset.x, offset.y, offset.z);
+            fill(80, 40, 0);
+            sphere(bs + 1);
+            pop();
+            fill(255, 160, 0);
+            sphere(bs);
         } else {
             // Standard bullet with outline
             push();
@@ -1870,7 +1926,7 @@ function drawBullets() {
         pop();
 
         // Trail
-        const trailSize = bullet.isCannonball ? BULLET_SIZE * 2.5 : BULLET_SIZE;
+        const trailSize = bullet.isCannonball ? BULLET_SIZE * 2.5 : bullet.isTurretBullet ? BULLET_SIZE * 0.55 : BULLET_SIZE;
         trails.push({
             x, y,
             z: bz,

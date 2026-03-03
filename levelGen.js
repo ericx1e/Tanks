@@ -175,7 +175,7 @@ function connectRooms(g, a, b) {
 const SPAWN_VAL = 'A'.charCodeAt(0) - 'S'.charCodeAt(0) - 1; // = -19
 
 function enemyVal(tier) {
-    return -(Math.min(12, Math.max(0, tier)) + 1); // -1 for tier 0, -13 for tier 12
+    return -(Math.min(13, Math.max(0, tier)) + 1); // -1 for tier 0, -14 for tier 13
 }
 
 // Grid LOS check with 2× tile-step sampling — correctly blocks diagonal sight lines.
@@ -225,7 +225,7 @@ function findSafeSpawn(g, room, enemies) {
 // Returns array of placed enemy grid positions [{ex, ey}].
 function placeEnemies(g, rooms, diff) {
     const count   = Math.floor(3 + diff * 10);
-    const maxTier = Math.min(12, Math.floor(diff * 13 + 0.5));
+    const maxTier = Math.min(13, Math.floor(diff * 14 + 0.5));
     const minTier = Math.max(0, maxTier - 2);
     let placed = 0;
     const positions = [];

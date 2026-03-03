@@ -353,8 +353,8 @@ function updateAITank(lobby, lobbyCode, tank, level, players, bullets) {
     //     tank.name = tank.fireCooldown //debug 
     // }
 
-    // Tiers >= 2 can shoot down bullets; exclude laser (5) and cannon (11) which can't usefully intercept
-    if (tank.tier >= 2 && tank.tier !== 5 && tank.tier !== 11 && tank.tier !== 9 && tank.tier !== 13 && shootThreats.length) {
+    // Tiers >= 4 can shoot down bullets; exclude laser (5) and cannon (11) which can't usefully intercept
+    if (tank.tier >= 4 && tank.tier !== 5 && tank.tier !== 11 && tank.tier !== 9 && tank.tier !== 13 && shootThreats.length) {
         for (const { bullet } of shootThreats) {
             if (fireAtDangerBullet(lobbyCode, tank, bullet, bullets, level, players)) break;
         }
@@ -1172,4 +1172,5 @@ module.exports = {
     initializeAITank,
     // initializeAITanks,
     updateAITanks,
+    detectObstacleAlongRay,
 };
