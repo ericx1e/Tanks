@@ -2,6 +2,9 @@ let players = {};
 let myTank = null;
 let bullets = [];
 let lasers = [];
+let flares = [];
+let companions = {};
+let muzzleFlashes = [];
 let level = [];
 let levelNumber = -1;
 let explosions = [];
@@ -16,6 +19,43 @@ let exploredTiles = null;
 let skipMarkExplored = false; // true for one updatePlayers cycle after a level load
 
 let camX = 0, camY = 0, camZ = 600;
+let groupedWalls = [];
+
+function rebuildGroupedWalls() {
+    groupedWalls = [];
+    if (!level.length) return;
+    const rows = level.length;
+    const cols = level[0].length;
+    const visited = Array.from({ length: rows }, () => Array(cols).fill(false));
+    for (let row = 0; row < rows; row++) {
+        for (let col = 0; col < cols; col++) {
+            if (level[row][col] <= 0 || visited[row][col]) continue;
+            let w = 1;
+            while (col + w < cols && level[row][col + w] > 0 && !visited[row][col + w]) w++;
+            let h = 1;
+            outer: while (row + h < rows) {
+                for (let c = col; c < col + w; c++) {
+                    if (level[row + h][c] === 0 || visited[row + h][c]) break outer;
+                }
+                h++;
+            }
+            for (let r = row; r < row + h; r++)
+                for (let c = col; c < col + w; c++)
+                    visited[r][c] = true;
+            groupedWalls.push({
+                x: col * TILE_SIZE, y: row * TILE_SIZE,
+                width: w * TILE_SIZE, height: h * TILE_SIZE,
+                wallHeight: level[row][col] * WALL_HEIGHT,
+            });
+        }
+    }
+}
+
+// Returns 1.0 at low tank counts, scales down toward 0.15 at high counts.
+function particleScale() {
+    const n = Object.keys(players).length;
+    return Math.max(0.15, 4 / Math.max(4, n));
+}
 
 let shakeIntensity = 0;
 let shakeDuration = 0;
@@ -51,6 +91,23 @@ let currentKeys = { w: false, a: false, s: false, d: false };
 let currentTurretAngle = 0;
 let laserChanneling = false;   // true while right-click held for Laser class
 let guardianShielding = false; // true while right-click held for Guardian class
+let sniperPanning = false;     // true while right-click held for Sniper class
+let sniperPanX = 0, sniperPanY = 0; // smoothed camera pan offset
+
+// Manual key state — clears on blur so keys never get stuck
+const keysHeld = {};
+window.addEventListener('keydown', e => { keysHeld[e.code] = true; });
+window.addEventListener('keyup', e => { delete keysHeld[e.code]; });
+window.addEventListener('blur', () => {
+    Object.keys(keysHeld).forEach(k => delete keysHeld[k]);
+    guardianShielding = false;
+    laserChanneling = false;
+    sniperPanning = false;
+});
+// Raw mouseup to reliably clear right-click state when other buttons are also held
+window.addEventListener('mouseup', e => {
+    if (e.button === 2) { guardianShielding = false; laserChanneling = false; sniperPanning = false; }
+});
 const playerInterpBuf = {}; // id -> [{x, y, angle, turretAngle, t}, ...]
 const INTERP_DELAY_MS = 100;
 let bulletState = {}; // id -> {x, y, angle, speed, receivedAt}
@@ -153,6 +210,7 @@ socket.on('updateLasers', (serverLasers) => {
 socket.on('updateLevel', (data) => {
     level = data.level; // Store the level received from the server
     levelNumber = data.levelNumber;
+    rebuildGroupedWalls();
     tracks.length = 0;
     trackState = {};
     // Reset minimap exploration on every new level
@@ -206,7 +264,13 @@ socket.on('nextLevel', () => {
     // socket.emit('createPlayer')
     gameState = "playing";
     transitionTimeLeft = null;
+    flares = [];
+    companions = {};
 });
+
+socket.on('updateFlares', (data) => { flares = data; });
+socket.on('updateCompanions', (data) => { companions = data; });
+socket.on('muzzleFlash', (data) => { muzzleFlashes.push({ ...data, life: 7 }); });
 
 socket.on('arenaMode', () => {
 
@@ -265,7 +329,7 @@ async function setup() {
     }
 
     frameRate(60);
-    fogLayer = createGraphics(width, height);
+    fogLayer = createGraphics(width * 2, height * 2);
 
     // Dev console helper: type godMode() in the browser console to toggle invincibility
     window.godMode = () => socket.emit('toggleGodMode');
@@ -438,7 +502,7 @@ function draw() {
     drawTracks();
 
     // Draw walls
-    drawWalls2();
+    drawWalls();
 
     drawDrops();
 
@@ -487,8 +551,22 @@ function draw() {
     camX = targetTank.x;
     camY = targetTank.y + 200;
     camZ = 600;
-    let targetX = targetTank.x;
-    let targetY = targetTank.y;
+
+    // Sniper scope pan: smoothly shift camera toward mouse world direction while right-click held
+    const panDist = 220;
+    if (sniperPanning && myTank && myTank.selectedClass === 'sniper') {
+        const panAngle = atan2(mouseY - height / 2, mouseX - width / 2);
+        sniperPanX = lerp(sniperPanX, cos(panAngle) * panDist, 0.07);
+        sniperPanY = lerp(sniperPanY, sin(panAngle) * panDist, 0.07);
+    } else {
+        sniperPanX = lerp(sniperPanX, 0, 0.10);
+        sniperPanY = lerp(sniperPanY, 0, 0.10);
+    }
+    camX += sniperPanX;
+    camY += sniperPanY;
+
+    let targetX = targetTank.x + sniperPanX;
+    let targetY = targetTank.y + sniperPanY;
     let targetZ = 0;
 
     let offsetX = 0;
@@ -526,8 +604,17 @@ function draw() {
 
     drawTrails();
 
+    drawFlares();
+    drawCompanions();
+
     if (isFogOfWar && !allDead) {
         const resolution = visionResolution;
+        // Build flare vision entries to inject into fog
+        const flareVision = flares.map(f => ({
+            x: f.x, y: f.y,
+            visionDistance: f.visionRadius,
+            points: calculateVision(f.x, f.y, level, f.visionRadius, resolution),
+        }));
         if (gameMode == 'lobby') {
             const maxDistance = TILE_SIZE * 100;
             const visiblePoints = calculateVision(targetTank.x, targetTank.y, level, targetTank.visionDistance, resolution);
@@ -541,7 +628,7 @@ function draw() {
             }
         } else {
             const maxDistance = TILE_SIZE * 5;
-            const visiblePoints = calculateSharedVision(players, level, resolution);
+            const visiblePoints = [...calculateSharedVision(players, level, resolution), ...flareVision];
             drawSharedFogOfWar(targetTank.x, targetTank.y, visiblePoints);
             if (!skipMarkExplored) {
                 for (const { x: vx, y: vy, points } of visiblePoints) markExplored(vx, vy, points);
@@ -685,7 +772,7 @@ function drawBuffHUD() {
 
         const iconX = VW - margin - 10;
 
-        // Count badge
+        // Count badge (no depth test — flat HUD text)
         push();
         translate(iconX - 20, slotY, 0);
         fill(255, 255, 255, 220);
@@ -693,19 +780,20 @@ function drawBuffHUD() {
         textFont(font);
         textSize(11);
         textAlign(RIGHT, CENTER);
-        rotateX(0);
         text(`x${count}`, 0, 0);
         pop();
 
-        // 3D drop model icon
-        // gl.enable(gl.DEPTH_TEST);
+        // 3D drop model icon — needs depth test for correct face ordering
+        // Clear scene depth so fog doesn't occlude icons; re-enable for face sorting within the model.
+        gl.clear(gl.DEPTH_BUFFER_BIT);
+        gl.enable(gl.DEPTH_TEST);
         push();
         translate(iconX, slotY, 0);
         scale(iconScale);
         rotateZ(frameCount / 45);
         drawDrop(0, 0, frameCount / 45, buffType);
         pop();
-        // gl.disable(gl.DEPTH_TEST);
+        gl.disable(gl.DEPTH_TEST);
 
         slotY += slotH;
     }
@@ -777,15 +865,24 @@ function drawClassBadge() {
         const energy = isLaser
             ? Math.max(0, myTank.laserEnergy ?? 100)
             : Math.max(0, myTank.shieldEnergy ?? 100);
+        const depleted = isLaser ? !!(myTank.laserDepleted) : !!(myTank.shieldDepleted);
         const active = isLaser ? laserChanneling : !!(myTank.shieldActive);
         const pct = energy / 100;
 
-        // Colors
-        const rA = isLaser ? 255 : 80,  gA = isLaser ? 90 : 180,  bA = isLaser ? 60 : 255;
-        const rI = isLaser ? 160 : 50,  gI = isLaser ? 60 : 100,  bI = isLaser ? 45 : 180;
-        const label = active
-            ? (isLaser ? 'CHANNELING' : 'SHIELD ACTIVE')
-            : (isLaser ? 'RIGHT-CLICK: LASER' : 'RIGHT-CLICK: SHIELD');
+        // Colors — active, idle, depleted
+        const rA = isLaser ? 255 : 80,  gA = isLaser ? 90  : 180, bA = isLaser ? 60  : 255;
+        const rI = isLaser ? 160 : 50,  gI = isLaser ? 60  : 100, bI = isLaser ? 45  : 180;
+
+        let label;
+        if (depleted) {
+            const pulse = 120 + 100 * sin(frameCount * 0.08);
+            label = { text: 'RECHARGING...', r: 160, g: 160, b: 160, a: pulse };
+        } else if (active) {
+            label = { text: isLaser ? 'CHANNELING' : 'SHIELD ACTIVE', r: rA, g: gA, b: bA, a: 220 };
+        } else {
+            label = { text: isLaser ? 'RIGHT-CLICK: LASER' : 'RIGHT-CLICK: SHIELD',
+                      r: rI + 40, g: gI + 40, b: bI + 40, a: 160 };
+        }
 
         push();
         translate(x, y + 28, 0);
@@ -793,18 +890,84 @@ function drawClassBadge() {
         rectMode(CORNER);
 
         // Background
-        fill(isLaser ? color(50, 15, 15, 180) : color(15, 30, 50, 180));
+        fill(depleted ? color(20, 20, 20, 180) : isLaser ? color(50, 15, 15, 180) : color(15, 30, 50, 180));
         rect(0, 0, badgeW, 6, 3);
 
-        // Energy fill
-        fill(active ? color(rA, gA, bA, 230) : color(rI, gI, bI, 160));
-        rect(0, 0, badgeW * pct, 6, 3);
+        if (depleted) {
+            // Dim recharge progress
+            fill(60, 60, 60, 140);
+            rect(0, 0, badgeW * pct, 6, 3);
+            // Tick mark at the 25% re-enable threshold
+            stroke(180, 180, 180, 160);
+            strokeWeight(1);
+            line(badgeW * 0.25, 0, badgeW * 0.25, 6);
+        } else {
+            fill(active ? color(rA, gA, bA, 230) : color(rI, gI, bI, 160));
+            rect(0, 0, badgeW * pct, 6, 3);
+        }
 
+        noStroke();
         textFont(font);
         textSize(9);
         textAlign(CENTER, CENTER);
-        fill(active ? color(rA, gA, bA, 220) : color(rI + 40, gI + 40, bI + 40, 160));
-        text(label, badgeW / 2, -6);
+        fill(label.r, label.g, label.b, label.a);
+        text(label.text, badgeW / 2, -6);
+        pop();
+    } else if (cls.special === 'flare') {
+        const maxCooldown = 300;
+        const cd = Math.max(0, myTank.flareCooldown || 0);
+        const ready = cd === 0;
+        const pct = ready ? 1 : 1 - cd / maxCooldown;
+
+        push();
+        translate(x, y + 28, 0);
+        noStroke();
+        rectMode(CORNER);
+        fill(15, 30, 15, 180);
+        rect(0, 0, badgeW, 6, 3);
+        fill(ready ? color(100, 230, 100, 200) : color(60, 140, 60, 160));
+        rect(0, 0, badgeW * pct, 6, 3);
+        noStroke();
+        textFont(font);
+        textSize(9);
+        textAlign(CENTER, CENTER);
+        if (ready) {
+            fill(100, 230, 100, 200);
+            text('RIGHT-CLICK: FLARE', badgeW / 2, -6);
+        } else {
+            fill(130, 180, 130, 160);
+            text(`FLARE COOLDOWN`, badgeW / 2, -6);
+        }
+        pop();
+    } else if (cls.special === 'barrage') {
+        const maxCooldown = 270;
+        const cd = Math.max(0, myTank.barrageCooldown || 0);
+        const active = !!(myTank.barrageActive);
+        const ready = cd === 0 && !active;
+        const pct = active ? 1 : (ready ? 1 : 1 - cd / maxCooldown);
+
+        push();
+        translate(x, y + 28, 0);
+        noStroke();
+        rectMode(CORNER);
+        fill(20, 15, 35, 180);
+        rect(0, 0, badgeW, 6, 3);
+        fill(active ? color(200, 160, 255, 230) : ready ? color(160, 120, 255, 200) : color(90, 60, 160, 160));
+        rect(0, 0, badgeW * pct, 6, 3);
+        noStroke();
+        textFont(font);
+        textSize(9);
+        textAlign(CENTER, CENTER);
+        if (active) {
+            fill(210, 170, 255, 220 + 35 * sin(frameCount * 0.2));
+            text('FIRING...', badgeW / 2, -6);
+        } else if (ready) {
+            fill(160, 120, 255, 200);
+            text('RIGHT-CLICK: BARRAGE', badgeW / 2, -6);
+        } else {
+            fill(120, 90, 180, 160);
+            text('BARRAGE COOLDOWN', badgeW / 2, -6);
+        }
         pop();
     }
 
@@ -1068,7 +1231,7 @@ function leaveTracksForTank(tank, id) {
             tracks.push({
                 x: cx, y: cy, z,
                 angle: moveAngle,
-                len: TRACK_SPACING / 2,            // segment length
+                len: TRACK_SPACING / 2,
                 width: treadWidth,
                 alpha: 160,
                 life: TRACK_FADE_FRAMES,
@@ -1486,72 +1649,23 @@ function drawChest(tank) {
 }
 
 function drawWalls() {
-    if (!level.length) return; // Ensure the level array is defined
+    if (!groupedWalls.length) return;
 
-    const groupedWalls = [];
-    const rows = level.length;
-    const cols = level[0].length;
-    const visited = Array.from({ length: rows }, () => Array(cols).fill(false));
+    // Viewport culling: only draw walls within visible range of the camera
+    const camCX = myTank ? myTank.x : groupedWalls[0].x;
+    const camCY = myTank ? myTank.y : groupedWalls[0].y;
+    const marginX = 700, marginY = 800;
 
-    // Group wall segments
-    for (let row = 0; row < rows; row++) {
-        for (let col = 0; col < cols; col++) {
-            if (level[row][col] > 0 && !visited[row][col]) {
-                // Find horizontal segment
-                let w = 1;
-                while (
-                    col + w < cols &&
-                    level[row][col + w] > 0 &&
-                    !visited[row][col + w]
-                ) {
-                    w++;
-                }
-
-                // Check if it's part of a vertical block
-                let h = 1;
-                let isRectangle = true;
-                while (row + h < rows) {
-                    for (let c = col; c < col + w; c++) {
-                        if (level[row + h][c] === 0 || visited[row + h][c]) {
-                            isRectangle = false;
-                            break;
-                        }
-                    }
-                    if (!isRectangle) break;
-                    h++;
-                }
-
-                // Mark the entire group as visited
-                for (let r = row; r < row + h; r++) {
-                    for (let c = col; c < col + w; c++) {
-                        visited[r][c] = true;
-                    }
-                }
-
-                // Store the grouped wall segment
-                groupedWalls.push({
-                    x: col * TILE_SIZE,
-                    y: row * TILE_SIZE,
-                    width: w * TILE_SIZE,
-                    height: h * TILE_SIZE,
-                    wallHeight: level[row][col] * WALL_HEIGHT, // Use the first tile's height for the entire block
-                });
-            }
-        }
-    }
-
-    // Render grouped wall segments
     for (const wall of groupedWalls) {
+        if (wall.x + wall.width < camCX - marginX || wall.x > camCX + marginX) continue;
+        if (wall.y + wall.height < camCY - marginY || wall.y > camCY + marginY) continue;
         push();
-        translate(
-            wall.x + wall.width / 2,
-            wall.y + wall.height / 2,
-            wall.wallHeight / 2
-        ); // Center of the wall block
-        fill(120, 80, 40); // Wall color
-        stroke(0); // Outline color
+        translate(wall.x + wall.width / 2, wall.y + wall.height / 2, wall.wallHeight / 2 - 25);
+        fill(120, 80, 40);
+        // stroke(0);
+        noStroke()
         strokeWeight(1);
-        box(wall.width, wall.height, wall.wallHeight); // Render as a single box
+        box(wall.width, wall.height, wall.wallHeight);
         pop();
     }
 }
@@ -1910,7 +2024,8 @@ function drawExplosions() {
 function createExplosion(x, y, z, size, color, effect) {
     // triggerScreenShake(size, 20);
     const particles = [];
-    for (let i = 0; i < 20; i++) { // Number of particles
+    const particleCount = Math.max(3, Math.ceil(20 * particleScale()));
+    for (let i = 0; i < particleCount; i++) { // Number of particles
         const angle = random(TWO_PI);
         const speed = random(size / 4, size / 2); // Random speed
         const vx = speed * cos(angle);
@@ -2001,10 +2116,10 @@ function handleMovement() {
     // Capture input and send to server. Physics prediction runs in applySmoothing()
     // (inside draw()) so it fires exactly once per render frame, not at setInterval rate.
     currentKeys = {
-        w: keyIsDown(87),
-        a: keyIsDown(65),
-        s: keyIsDown(83),
-        d: keyIsDown(68),
+        w: !!keysHeld['KeyW'],
+        a: !!keysHeld['KeyA'],
+        s: !!keysHeld['KeyS'],
+        d: !!keysHeld['KeyD'],
     };
     currentTurretAngle = atan2(mouseY - height / 2, mouseX - width / 2);
     if (laserChanneling && myTank?.selectedClass === 'laser') socket.emit('fireLaser');
@@ -2018,20 +2133,20 @@ function handleTankMovement() {
     let angleChange = 0;
 
     // Capture directional input
-    if (keyIsDown(87)) { // W key (move forward)
+    if (keysHeld['KeyW']) { // W key (move forward)
         dx += Math.cos(myTank.angle) * speed;
         dy += Math.sin(myTank.angle) * speed;
     }
-    if (keyIsDown(83)) { // S key (move backward)
+    if (keysHeld['KeyS']) { // S key (move backward)
         dx -= Math.cos(myTank.angle) * speed;
         dy -= Math.sin(myTank.angle) * speed;
     }
 
     // Capture rotational input
-    if (keyIsDown(65)) { // A key (rotate left)
+    if (keysHeld['KeyA']) { // A key (rotate left)
         angleChange -= 0.05;
     }
-    if (keyIsDown(68)) { // D key (rotate right)
+    if (keysHeld['KeyD']) { // D key (rotate right)
         angleChange += 0.05;
     }
 
@@ -2053,6 +2168,12 @@ function mousePressed() {
     if (mouseButton === RIGHT) {
         if (myTank && myTank.selectedClass === 'guardian') guardianShielding = true;
         if (myTank && myTank.selectedClass === 'laser') laserChanneling = true;
+        if (myTank && myTank.selectedClass === 'sniper') sniperPanning = true;
+        if (myTank && myTank.selectedClass === 'scout') {
+            const angle = atan2(mouseY - height / 2, mouseX - width / 2);
+            socket.emit('flareShot', { angle });
+        }
+        if (myTank && myTank.selectedClass === 'gunner') socket.emit('barrageStart');
         return false; // prevent context menu
     }
 
@@ -2150,7 +2271,7 @@ function drawLasers() {
         let r = PLAYER_SIZE / 2
         if (laser.isActive) {
             fill(255, 50, 0);
-            if (frameCount % 5 == 0) {
+            if (frameCount % 5 == 0 && random() < particleScale()) {
                 createExplosion(laser.x1 + random(-r, r), laser.y1 + random(-r, r), PLAYER_SIZE * 1.4 - BULLET_SIZE + random(-r, r), BULLET_SIZE);
                 createExplosion(laser.x2 + random(-r, r), laser.y2 + random(-r, r), PLAYER_SIZE * 1.4 - BULLET_SIZE + random(-r, r), BULLET_SIZE);
             }
@@ -2162,11 +2283,11 @@ function drawLasers() {
                 trails.push({
                     x: laser.x1 + random(-r, r),
                     y: laser.y1 + random(-r, r),
-                    z: PLAYER_SIZE * 1.4 - BULLET_SIZE + random(-r, r), // Initial explosion height
-                    size: BULLET_SIZE, // Initial explosion size
+                    z: PLAYER_SIZE * 1.4 - BULLET_SIZE + random(-r, r),
+                    size: BULLET_SIZE,
                     dSize: BULLET_SIZE / 10,
-                    alpha: 108, // Initial opacity
-                })
+                    alpha: 108,
+                });
             }
         }
         // strokeWeight(3); // Adjust thickness
@@ -2175,4 +2296,47 @@ function drawLasers() {
         cylinder(2, len)
         pop();
     });
+}
+
+function drawFlares() {
+    for (const flare of flares) {
+        push();
+        const pulse = 0.7 + 0.3 * sin(frameCount * 0.15);
+        translate(flare.x, flare.y, PLAYER_SIZE * 0.8);
+        noStroke();
+        fill(255, 220, 80, 200 * pulse);
+        sphere(BULLET_SIZE * 2);
+        // Glow halo
+        fill(255, 180, 40, 60 * pulse);
+        sphere(BULLET_SIZE * 4);
+        pop();
+    }
+}
+
+function drawCompanions() {
+    const s = PLAYER_SIZE * 0.55; // companion is ~55% of tank size
+    for (const ownerId in companions) {
+        const c = companions[ownerId];
+        if (c.isDead) continue;
+        push();
+        translate(c.x, c.y, s);
+        rotateZ(c.angle);
+        fill(255, 211, 42);
+        stroke(0);
+        strokeWeight(1);
+        box(2 * s, 1.5 * s, s);
+
+        // Turret
+        push();
+        rotateZ(PI / 2 + c.turretAngle - c.angle);
+        translate(0, 0, s);
+        fill(200, 165, 30);
+        box(s, 0.9 * s, s);
+        noStroke();
+        translate(0, -s * 0.85, 0);
+        fill(180, 140, 20);
+        box(s * 0.3, s * 0.85, s * 0.3);
+        pop();
+        pop();
+    }
 }

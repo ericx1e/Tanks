@@ -245,6 +245,31 @@ function placeEnemies(g, rooms, diff) {
     return positions;
 }
 
+// ── Connectivity ──────────────────────────────────────────────────────────────
+
+// BFS from (startX, startY) through non-wall tiles. Returns a Set of reachable
+// tile keys (y * 65536 + x).  Treats negative values (entities) as passable.
+function floodFillReachable(g, startX, startY) {
+    const reachable = new Set();
+    if (!inBounds(g, startX, startY) || g[startY][startX] >= 1) return reachable;
+    const key = (x, y) => y * 65536 + x;
+    const queue = [[startX, startY]];
+    reachable.add(key(startX, startY));
+    const dirs = [[-1,0],[1,0],[0,-1],[0,1]];
+    while (queue.length) {
+        const [x, y] = queue.shift();
+        for (const [dx, dy] of dirs) {
+            const nx = x + dx, ny = y + dy;
+            if (!inBounds(g, nx, ny) || g[ny][nx] >= 1) continue;
+            const k = key(nx, ny);
+            if (reachable.has(k)) continue;
+            reachable.add(k);
+            queue.push([nx, ny]);
+        }
+    }
+    return reachable;
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /**
@@ -286,6 +311,26 @@ function generateLevel(levelIndex, totalLevels) {
 
     // Add interior detail after corridors so wall segments get natural gaps where corridors pass
     rooms.forEach(r => addRoomDetail(g, r));
+
+    // Seal unreachable open tiles before enemy placement.
+    // addRoomDetail can re-wall tiles that corridors carved, disconnecting sections.
+    // Flood-fill from room 0's center; any open tile not reached becomes a wall.
+    {
+        let sx = Math.floor(rooms[0].cx), sy = Math.floor(rooms[0].cy);
+        // Ensure start tile is actually open (detail may have landed on center)
+        if (g[sy][sx] !== 0) {
+            outer: for (let dy = -2; dy <= 2; dy++)
+                for (let dx = -2; dx <= 2; dx++)
+                    if (inBounds(g, sx+dx, sy+dy) && g[sy+dy][sx+dx] === 0) {
+                        sx += dx; sy += dy; break outer;
+                    }
+        }
+        const reachable = floodFillReachable(g, sx, sy);
+        for (let ry = 0; ry < g.length; ry++)
+            for (let rx = 0; rx < g[ry].length; rx++)
+                if (g[ry][rx] === 0 && !reachable.has(ry * 65536 + rx))
+                    g[ry][rx] = 1;
+    }
 
     // Place enemies first so we can find a spawn with no line-of-sight to them
     const enemies = placeEnemies(g, rooms, diff);

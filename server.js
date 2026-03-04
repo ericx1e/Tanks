@@ -50,6 +50,8 @@ function createLobby() {
         levelNumber: -1,
         bullets: [],
         lasers: [],
+        flares: [],
+        companions: {},
         spawn: {},
         mode: 'lobby',
         friendlyFire: false,
@@ -84,8 +86,14 @@ function createLevel(lobbyCode, levelNumber) {
                 player.laserDepleted = false;
                 player.shieldEnergy = 100;
                 player.shieldDepleted = false;
-                player.classMods = {};
                 player.shieldActive = false;
+                player.hasFlareAbility = false;
+                player.flareCooldown = 0;
+                player.hasBarrageAbility = false;
+                player.barrageCooldown = 0;
+                player.barrageActive = false;
+                player.barrageShots = 0;
+                player.classBuffsApplied = false; // reset so next game start applies them once
             }
             // player.shield = true; // Start with shield
             let spawnX = spawn.x;
@@ -112,11 +120,42 @@ function createLevel(lobbyCode, levelNumber) {
         }
     }
 
-    // Apply class-based starting buffs for non-lobby game starts
+    // Apply class-based starting buffs once per game (not on every level)
     if (lobby.mode !== 'lobby') {
         for (const player of Object.values(newPlayers)) {
-            if (!player.isAI) {
+            if (!player.isAI && !player.classBuffsApplied) {
                 applyClassBuffs(player);
+                player.classBuffsApplied = true;
+            }
+        }
+    }
+
+    // Spawn companion mini-tanks for Engineer players each level
+    const newCompanions = {};
+    if (lobby.mode !== 'lobby') {
+        for (const [id, player] of Object.entries(newPlayers)) {
+            if (!player.isAI && player.selectedClass === 'engineer') {
+                // Find a safe spawn cell near the player
+                let cx = player.x, cy = player.y;
+                const offsets = [[0, 0], [40, 0], [-40, 0], [0, 40], [0, -40], [40, 40], [-40, 40], [40, -40], [-40, -40]];
+                for (const [ox, oy] of offsets) {
+                    if (!isCollidingWithWall(player.x + ox, player.y + oy, PLAYER_SIZE * 0.6, level)) {
+                        cx = player.x + ox; cy = player.y + oy; break;
+                    }
+                }
+                const initWander = Math.random() * Math.PI * 2;
+                newCompanions[id] = {
+                    x: cx, y: cy,
+                    vx: 0, vy: 0,
+                    angle: 0, turretAngle: 0,
+                    ownerId: id,
+                    isDead: false,
+                    fireCooldown: 90,
+                    spawnGrace: 60,
+                    wanderAngle: initWander,
+                    wanderTargetAngle: initWander,
+                    wanderTimer: 0,
+                };
             }
         }
     }
@@ -143,6 +182,8 @@ function createLevel(lobbyCode, levelNumber) {
         levelNumber: levelNumber,
         bullets: [],
         lasers: [],
+        flares: [],
+        companions: newCompanions,
         spawn: spawn,
         mode: lobby.mode,
         tankKills: 0, // Track kills
@@ -536,6 +577,41 @@ io.on('connection', (socket) => {
         fireLaser(lobby, lobbyCode, player, lobby.players, lobby.level, true)
     });
 
+    socket.on('flareShot', (data) => {
+        const lobbyCode = socketToLobby[socket.id];
+        if (!lobbyCode) return;
+        const lobby = lobbies[lobbyCode];
+        if (!lobby) return;
+        const player = lobby.players[socket.id];
+        if (!player || player.isDead || !player.hasFlareAbility) return;
+        if ((player.flareCooldown || 0) > 0) return;
+        const angle = data.angle;
+        const speed = 3;
+        lobby.flares.push({
+            x: player.x + Math.cos(angle) * PLAYER_SIZE * 1.5,
+            y: player.y + Math.sin(angle) * PLAYER_SIZE * 1.5,
+            vx: Math.cos(angle) * speed,
+            vy: Math.sin(angle) * speed,
+            life: 480,
+            visionRadius: 4 * TILE_SIZE,
+            stopped: false,
+        });
+        player.flareCooldown = 300;
+    });
+
+    socket.on('barrageStart', () => {
+        const lobbyCode = socketToLobby[socket.id];
+        if (!lobbyCode) return;
+        const lobby = lobbies[lobbyCode];
+        if (!lobby) return;
+        const player = lobby.players[socket.id];
+        if (!player || player.isDead || !player.hasBarrageAbility) return;
+        if (player.barrageCooldown > 0 || player.barrageActive) return;
+        player.barrageActive = true;
+        player.barrageShots = 16;
+        player.barrageTick = 0;
+    });
+
     socket.on('createPlayer', () => {
         const lobby = getLobby()
         lobby.players[socket.id] = createPlayer()
@@ -845,10 +921,32 @@ function updateBullets(lobby, lobbyCode) {
             }
         }
 
+        // Check for collisions with companion mini-tanks (AI bullets destroy them)
+        if (lobby.companions) {
+            for (const ownerId in lobby.companions) {
+                if (bulletsToRemove.has(i)) break;
+                const companion = lobby.companions[ownerId];
+                if (companion.isDead) continue;
+                const bulletOwner = players[bullet.owner];
+                if (!bulletOwner || !bulletOwner.isAI) continue; // only AI bullets harm companion
+                const dx = bullet.x - companion.x;
+                const dy = bullet.y - companion.y;
+                if (Math.hypot(dx, dy) < PLAYER_SIZE * 0.8) {
+                    companion.isDead = true;
+                    bulletsToRemove.add(i);
+                    io.to(lobbyCode).emit('explosion', {
+                        x: companion.x, y: companion.y,
+                        z: PLAYER_SIZE, size: 10, dSize: 2,
+                        color: [255, 211, 42],
+                    });
+                }
+            }
+        }
+
         // Check for collisions with players
         for (let playerId in players) {
             const player = players[playerId];
-            if (bullet.isTurretBullet && playerId === bullet.owner) continue; // turret never hits its own tank
+            if ((bullet.isTurretBullet || bullet.skipOwner) && playerId === bullet.owner) continue;
             if (/*playerId !== bullet.owner && */isCollidingWithPlayer(nextX, nextY, player)) {
                 if (bullet.isCannonball) {
                     explodeCannonball(lobby, lobbyCode, bullet, bulletsToRemove, i);
@@ -1048,14 +1146,20 @@ function applyClassBuffs(player) {
             player.buffs[buffType] += stacks;
         }
     }
-    player.classMods = cls.mods || {};
     player.hasLaserAbility = cls.special === 'laser';
     player.hasShieldAbility = cls.special === 'shield';
+    player.hasFlareAbility = cls.special === 'flare';
+    player.hasBarrageAbility = cls.special === 'barrage';
     player.laserEnergy = 100;
     player.laserDepleted = false;
     player.shieldEnergy = 100;
     player.shieldDepleted = false;
     player.shieldActive = false;
+    player.flareCooldown = 0;
+    player.barrageCooldown = 0;
+    player.barrageActive = false;
+    player.barrageShots = 0;
+    player.barrageTick = 0;
 }
 
 function resetBuffs(player) {
@@ -1065,6 +1169,7 @@ function resetBuffs(player) {
         shield: 0,
         bulletSpeed: 0,
         bulletBounces: 0,
+        maxBullets: 0,
         multiShot: 0,
         visionRange: 0,
         piercing: 0,
@@ -1106,14 +1211,20 @@ function updatePlayerStats(lobby, player) {
             break;
     }
 
-    // Apply buffs with sqrt-based diminishing returns
+    // Apply buffs — sqrt diminishing returns for positive, linear penalty for negative
     if (player.buffs.speed > 0) {
         player.max_speed *= 1 + 0.12 * Math.sqrt(player.buffs.speed);
+    } else if (player.buffs.speed < 0) {
+        player.max_speed *= Math.max(0.3, 1 + player.buffs.speed * 0.15);
     }
 
+    // Fire-rate buff: faster (positive) or slower (negative)
+    const fireRateBulletBonus = player.buffs.fireRate > 0
+        ? Math.ceil(Math.sqrt(player.buffs.fireRate)) : 0;
     if (player.buffs.fireRate > 0) {
         player.fireRateMultiplier = Math.max(0.35, 1 - 0.09 * Math.sqrt(player.buffs.fireRate));
-        player.maxBullets += Math.ceil(Math.sqrt(player.buffs.fireRate));
+    } else if (player.buffs.fireRate < 0) {
+        player.fireRateMultiplier = Math.min(2.5, 1 + Math.sqrt(-player.buffs.fireRate) * 0.15);
     }
 
     if (player.buffs.shield > 0) {
@@ -1125,14 +1236,19 @@ function updatePlayerStats(lobby, player) {
 
     if (player.buffs.bulletSpeed > 0) {
         player.bulletSpeedMultiplier *= 1 + 0.12 * Math.sqrt(player.buffs.bulletSpeed);
+    } else if (player.buffs.bulletSpeed < 0) {
+        player.bulletSpeedMultiplier *= Math.max(0.3, 1 + player.buffs.bulletSpeed * 0.15);
     }
 
     if (player.buffs.multiShot > 0) {
         player.multiShot += Math.ceil(Math.sqrt(player.buffs.multiShot));
     }
 
-    if (player.buffs.bulletBounces > 0) {
-        player.bulletBounces += Math.ceil(Math.sqrt(player.buffs.bulletBounces));
+    if (player.buffs.bulletBounces !== 0) {
+        player.bulletBounces += player.buffs.bulletBounces > 0
+            ? Math.ceil(Math.sqrt(player.buffs.bulletBounces))
+            : player.buffs.bulletBounces;
+        player.bulletBounces = Math.max(0, player.bulletBounces);
     }
 
     if (player.buffs.visionRange > 0) {
@@ -1144,6 +1260,11 @@ function updatePlayerStats(lobby, player) {
 
     player.piercing = player.buffs.piercing > 0
         ? Math.ceil(Math.sqrt(player.buffs.piercing)) : 0;
+
+    // maxBullets buff: additive to base value, clamped to minimum 1
+    if (player.buffs.maxBullets !== 0) {
+        player.maxBullets = Math.max(1, player.maxBullets + player.buffs.maxBullets);
+    }
 
     switch (lobby.mode) {
         case 'survival':
@@ -1159,15 +1280,8 @@ function updatePlayerStats(lobby, player) {
     }
     player.playerFireCooldown = 60 * player.fireRateMultiplier;
 
-    // Apply class-specific modifiers (nerfs) — override values calculated above
-    const cm = player.classMods;
-    if (cm) {
-        if (cm.speedFactor !== undefined) player.max_speed *= cm.speedFactor;
-        if (cm.maxBullets !== undefined) player.maxBullets = cm.maxBullets;
-        if (cm.cooldownAdd !== undefined) player.playerFireCooldown += cm.cooldownAdd;
-        if (cm.bulletSpeedFactor !== undefined) player.bulletSpeed *= cm.bulletSpeedFactor;
-        if (cm.bounceOverride !== undefined) player.bulletBounces = cm.bounceOverride;
-    }
+    // Apply fireRate bullet bonus on top of class base
+    player.maxBullets += fireRateBulletBonus;
 
     // Laser energy: drains via fireLaser events, recharges passively
     if (player.hasLaserAbility) {
@@ -1179,20 +1293,170 @@ function updatePlayerStats(lobby, player) {
     // Shield energy: drains while active, recharges while inactive
     if (player.hasShieldAbility) {
         if (player.shieldActive) {
-            player.shieldEnergy -= 1.5;
+            player.shieldEnergy -= 1.2;
             if (player.shieldEnergy <= 0) {
                 player.shieldEnergy = 0;
                 player.shieldDepleted = true;
                 player.shieldActive = false;
             }
         } else {
-            player.shieldEnergy = Math.min(100, (player.shieldEnergy || 0) + 0.3);
+            player.shieldEnergy = Math.min(100, (player.shieldEnergy || 0) + 0.45);
             if (player.shieldDepleted && player.shieldEnergy >= 25) player.shieldDepleted = false;
         }
     }
 
+    if (player.hasFlareAbility && player.flareCooldown > 0) player.flareCooldown--;
+    if (player.hasBarrageAbility && player.barrageCooldown > 0) player.barrageCooldown--;
+
     player.currentFireCooldown--;
     if (player.spawnGrace > 0) player.spawnGrace--;
+}
+
+function updateFlares(lobby, lobbyCode) {
+    if (!lobby.flares || !lobby.flares.length) return;
+    lobby.flares = lobby.flares.filter(flare => {
+        flare.life--;
+        if (flare.life <= 0) return false;
+        if (!flare.stopped) {
+            const nx = flare.x + flare.vx;
+            const ny = flare.y + flare.vy;
+            if (isCollidingWithWall(nx, ny, BULLET_SIZE, lobby.level)) {
+                flare.stopped = true;
+            } else {
+                flare.x = nx;
+                flare.y = ny;
+            }
+        }
+        return true;
+    });
+    io.to(lobbyCode).emit('updateFlares', lobby.flares);
+}
+
+function updateCompanions(lobby, lobbyCode) {
+    if (!lobby.companions) return;
+    for (const ownerId in lobby.companions) {
+        const companion = lobby.companions[ownerId];
+        if (companion.isDead) continue;
+        const owner = lobby.players[ownerId];
+        if (!owner || owner.isDead) continue;
+
+        if (companion.spawnGrace > 0) { companion.spawnGrace--; continue; }
+
+        // Find nearest enemy to decide between chase and wander modes
+        let nearestEnemy = null, nearestDist = 8 * TILE_SIZE;
+        for (const pid in lobby.players) {
+            const p = lobby.players[pid];
+            if (!p.isAI || p.isDead) continue;
+            const d = Math.hypot(p.x - companion.x, p.y - companion.y);
+            if (d < nearestDist) { nearestDist = d; nearestEnemy = p; }
+        }
+
+        // Wander: pick a new random target direction every 90–180 frames, smoothly lerp toward it
+        companion.wanderTimer = (companion.wanderTimer || 0) - 1;
+        if (companion.wanderTimer <= 0) {
+            companion.wanderTargetAngle = Math.random() * Math.PI * 2;
+            companion.wanderTimer = 90 + Math.floor(Math.random() * 90);
+        }
+        companion.wanderAngle = lerpAngle(companion.wanderAngle, companion.wanderTargetAngle, 0.025);
+
+        // Target: orbit loosely around owner; tighter orbit when an enemy is nearby
+        const wanderRadius = nearestEnemy ? 45 : 90;
+        const wanderX = owner.x + Math.cos(companion.wanderAngle) * wanderRadius;
+        const wanderY = owner.y + Math.sin(companion.wanderAngle) * wanderRadius;
+
+        // Clamp wander target so companion can't stray too far from owner
+        const maxLeash = 4 * TILE_SIZE;
+        const leashDx = wanderX - owner.x;
+        const leashDy = wanderY - owner.y;
+        const leashDist = Math.hypot(leashDx, leashDy);
+        const targetX = leashDist > maxLeash ? owner.x + (leashDx / leashDist) * maxLeash : wanderX;
+        const targetY = leashDist > maxLeash ? owner.y + (leashDy / leashDist) * maxLeash : wanderY;
+
+        const dx = targetX - companion.x;
+        const dy = targetY - companion.y;
+        const dist = Math.hypot(dx, dy);
+
+        if (dist > 12) {
+            const speed = 1.6;
+            const ax = (dx / dist) * speed;
+            const ay = (dy / dist) * speed;
+            companion.vx = companion.vx * 0.82 + ax * 0.18;
+            companion.vy = companion.vy * 0.82 + ay * 0.18;
+            // Smoothly rotate body toward movement direction
+            companion.angle = lerpAngle(companion.angle, Math.atan2(dy, dx), 0.10);
+        } else {
+            companion.vx *= 0.82;
+            companion.vy *= 0.82;
+        }
+
+        const nx = companion.x + companion.vx;
+        const ny = companion.y + companion.vy;
+        if (!isCollidingWithWall(nx, companion.y, PLAYER_SIZE * 0.6, lobby.level)) companion.x = nx;
+        else companion.vx = 0;
+        if (!isCollidingWithWall(companion.x, ny, PLAYER_SIZE * 0.6, lobby.level)) companion.y = ny;
+        else companion.vy = 0;
+
+        // Auto-aim: only track and fire when a clear line of sight exists
+        companion.fireCooldown--;
+        if (nearestEnemy) {
+            const angleToEnemy = Math.atan2(nearestEnemy.y - companion.y, nearestEnemy.x - companion.x);
+            const hasLOS = !detectObstacleAlongRay(companion.x, companion.y, angleToEnemy, nearestDist, lobby.level);
+            if (hasLOS) {
+                companion.turretAngle = lerpAngle(companion.turretAngle, angleToEnemy, 0.18);
+                if (companion.fireCooldown <= 0) {
+                    lobby.bullets.push({
+                        x: companion.x + Math.cos(companion.turretAngle) * PLAYER_SIZE,
+                        y: companion.y + Math.sin(companion.turretAngle) * PLAYER_SIZE,
+                        angle: companion.turretAngle,
+                        speed: BULLET_SPEED * 0.85,
+                        bounces: 1,
+                        piercing: 0,
+                        owner: ownerId,
+                    });
+                    companion.fireCooldown = 90;
+                }
+            }
+        }
+    }
+    io.to(lobbyCode).emit('updateCompanions', lobby.companions);
+}
+
+function updateBarrages(lobby, lobbyCode) {
+    for (const playerId in lobby.players) {
+        const player = lobby.players[playerId];
+        if (!player.barrageActive) continue;
+
+        player.barrageTick--;
+        if (player.barrageTick > 0) continue;
+        player.barrageTick = 3; // one bullet every 3 ticks ≈ 20/sec
+
+        const spread = (Math.random() - 0.5) * 0.08;
+        const angle = player.turretAngle + spread;
+        lobby.bullets.push({
+            x: player.x + Math.cos(angle) * PLAYER_SIZE * 2,
+            y: player.y + Math.sin(angle) * PLAYER_SIZE * 2,
+            angle,
+            speed: (player.bulletSpeed || BULLET_SPEED) * 2,
+            bounces: 0,
+            piercing: 0,
+            owner: playerId,
+            skipOwner: true,
+        });
+
+        io.to(lobbyCode).emit('explosion', {
+            x: player.x + Math.cos(angle) * PLAYER_SIZE * 2,
+            y: player.y + Math.sin(angle) * PLAYER_SIZE * 2,
+            z: PLAYER_SIZE * 1.4 - BULLET_SIZE,
+            size: BULLET_SIZE / 2,
+        });
+
+
+        player.barrageShots--;
+        if (player.barrageShots <= 0) {
+            player.barrageActive = false;
+            player.barrageCooldown = 270; // 4.5s at 60fps
+        }
+    }
 }
 
 function updateAutoTurrets(lobby, lobbyCode) {
@@ -1284,14 +1548,12 @@ function updateAutoTurrets(lobby, lobbyCode) {
 
 function spawnSurvivalBots(lobbyCode, n) {
     const lobby = lobbies[lobbyCode];
-    console.log(lobby.gameState)
     if (!lobby || lobby.mode !== 'survival' || lobby.gameState === "transition") return;
 
     const level = lobby.level;
 
     while (true) {
         ({ x, y } = getRandomNonWallPosition(level))
-        console.log(x, y, level)
         let done = true
         for (const playerId in lobby.players) {
             const player = lobby.players[playerId];
@@ -1379,7 +1641,7 @@ function handlePlayerPickup(lobbyCode, playerId) {
 
             // Update the player's buff count
             if (player.buffs.hasOwnProperty(drop.buff)) {
-                player.buffs[drop.buff] += 1; // Increment the count for this buff type
+                player.buffs[drop.buff] += 1;
             }
 
             // Send updated player buffs to the client
@@ -1443,6 +1705,9 @@ setInterval(() => {
         }
 
         updateAutoTurrets(lobby, lobbyCode);
+        updateBarrages(lobby, lobbyCode);
+        updateFlares(lobby, lobbyCode);
+        updateCompanions(lobby, lobbyCode);
 
         if (lobby.mode == 'lobby' || lobby.mode == 'campaign' || lobby.mode == 'endless') {
             if (lobby.level && updateAITanks(lobby, lobbyCode, lobby.players, lobby.level, lobby.bullets)) {

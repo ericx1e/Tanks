@@ -170,7 +170,7 @@ function drawFogOfWar(playerX, playerY, visiblePoints) {
 
     texture(fogLayer);
     noStroke();
-    plane(width, height);
+    plane(fogLayer.width, fogLayer.height);
     pop();
 }
 
@@ -198,6 +198,6 @@ function drawSharedFogOfWar(viewX, viewY, sharedVisiblePoints) {
 
     texture(fogLayer);
     noStroke();
-    plane(width, height);
+    plane(fogLayer.width, fogLayer.height);
     pop();
 }
