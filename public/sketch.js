@@ -614,6 +614,37 @@ function draw() {
     drawEngineerRallyIndicator();
     drawSniperScopeRay();
 
+    // Compute sniper scope mouse-world reveal
+    let sniperScopeVision = null;
+    if (sniperPanning && myTank && myTank.selectedClass === 'sniper' && !(myTank.sniperShotCooldown > 0)) {
+        const cx = camX, cy = camY, cz = camZ;
+        const tx = targetX, ty = targetY;
+        let fwdX = tx - cx, fwdY = ty - cy, fwdZ = 0 - cz;
+        const fLen = Math.sqrt(fwdX * fwdX + fwdY * fwdY + fwdZ * fwdZ);
+        fwdX /= fLen; fwdY /= fLen; fwdZ /= fLen;
+        let rX = fwdY * 0 - fwdZ * 1, rY = fwdZ * 0 - fwdX * 0, rZ = fwdX * 1 - fwdY * 0;
+        const rLen = Math.sqrt(rX * rX + rY * rY + rZ * rZ);
+        rX /= rLen; rY /= rLen; rZ /= rLen;
+        const uX = rY * fwdZ - rZ * fwdY, uY = rZ * fwdX - rX * fwdZ, uZ = rX * fwdY - rY * fwdX;
+        const fov = Math.PI / 3, h2 = Math.tan(fov / 2), aspect = width / height, scale = 0.75;
+        const mx = -(mouseX - width / 2) / (width / 2) * h2 * aspect * scale;
+        const my = -(mouseY - height / 2) / (height / 2) * h2 * scale;
+        const rdx = mx * rX + my * uX - fwdX;
+        const rdy = mx * rY + my * uY - fwdY;
+        const rdz = mx * rZ + my * uZ - fwdZ;
+        if (rdz !== 0) {
+            const t = -cz / rdz;
+            const wx = cx + t * rdx;
+            const wy = cy + t * rdy;
+            const scopeRadius = TILE_SIZE * 1.5;
+            sniperScopeVision = {
+                x: wx, y: wy,
+                visionDistance: scopeRadius,
+                points: calculateVision(wx, wy, level, scopeRadius, Math.PI / 40),
+            };
+        }
+    }
+
     if (isFogOfWar && !allDead) {
         const resolution = visionResolution;
         // Build flare vision entries to inject into fog
@@ -631,6 +662,7 @@ function draw() {
                 visionDistance: companionVisionRadius,
                 points: calculateVision(c.x, c.y, level, companionVisionRadius, resolution),
             }));
+        const scopeExtra = sniperScopeVision ? [sniperScopeVision] : [];
         if (gameMode == 'lobby') {
             const maxDistance = TILE_SIZE * 100;
             const visiblePoints = calculateVision(targetTank.x, targetTank.y, level, targetTank.visionDistance, resolution);
@@ -639,12 +671,12 @@ function draw() {
             const visiblePoints = calculateVision(targetTank.x, targetTank.y, level, targetTank.visionDistance, resolution);
             drawFogOfWar(targetTank.x, targetTank.y, visiblePoints);
             if (!skipMarkExplored) {
-                const sharedVision = calculateSharedVision(players, level, resolution);
+                const sharedVision = [...calculateSharedVision(players, level, resolution), ...scopeExtra];
                 for (const { x: vx, y: vy, points } of sharedVision) markExplored(vx, vy, points);
             }
         } else {
             const maxDistance = TILE_SIZE * 5;
-            const visiblePoints = [...calculateSharedVision(players, level, resolution), ...flareVision, ...companionVision];
+            const visiblePoints = [...calculateSharedVision(players, level, resolution), ...flareVision, ...companionVision, ...scopeExtra];
             drawSharedFogOfWar(targetTank.x, targetTank.y, visiblePoints);
             if (!skipMarkExplored) {
                 for (const { x: vx, y: vy, points } of visiblePoints) markExplored(vx, vy, points);

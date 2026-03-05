@@ -108,6 +108,15 @@ function createLevel(lobbyCode, levelNumber) {
 
             player.x = spawnX;
             player.y = spawnY;
+            // Reset ability cooldowns on new stage (except engineer companion)
+            if (lobby.mode !== 'lobby') {
+                player.flareCooldown = 0;
+                player.sniperShotCooldown = 0;
+                player.barrageCooldown = 0;
+                player.laserDepleted = false;
+                player.laserEnergy = 100;
+            }
+
             newPlayers[id] = player;
         }
     }
@@ -134,7 +143,7 @@ function createLevel(lobbyCode, levelNumber) {
     const prevCompanions = lobby.companions || {};
     const newCompanions = {};
     if (lobby.mode !== 'lobby') {
-        const offsets = [[0,0],[40,0],[-40,0],[0,40],[0,-40],[40,40],[-40,40],[40,-40],[-40,-40]];
+        const offsets = [[0, 0], [40, 0], [-40, 0], [0, 40], [0, -40], [40, 40], [-40, 40], [40, -40], [-40, -40]];
         for (const [id, player] of Object.entries(newPlayers)) {
             if (!player.isAI && player.selectedClass === 'engineer') {
                 let spawnX = player.x, spawnY = player.y;
@@ -175,7 +184,7 @@ function createLevel(lobbyCode, levelNumber) {
                     idx = 1;
                 }
 
-                player.companionSpawnCooldown = 1800;
+                player.companionSpawnCooldown = 900;
                 player.companionCount = idx;
             }
         }
@@ -495,7 +504,7 @@ io.on('connection', (socket) => {
                 return;
             }
         } else {
-            const playerBulletCount = bullets.filter(bullet => bullet.owner === player.id).length;
+            const playerBulletCount = bullets.filter(bullet => bullet.owner === player.id && !bullet.isTurretBullet).length;
 
             // Enforce the 6-bullet limit
             if (playerBulletCount >= player.maxBullets) {
@@ -918,6 +927,20 @@ function updateBullets(lobby, lobbyCode) {
             if (bullet.x < 0 || bullet.y < 0 || bullet.x > mapW || bullet.y > mapH) {
                 bulletsToRemove.add(i); return;
             }
+            // Destroy enemy bullets it passes through
+            bullets.forEach((other, j) => {
+                if (j === i || bulletsToRemove.has(j)) return;
+                if (other.owner === bullet.owner) return;
+                if (Math.hypot(other.x - bullet.x, other.y - bullet.y) <= BULLET_SIZE * 2.5) {
+                    bulletsToRemove.add(j);
+                    io.to(lobbyCode).emit('explosion', {
+                        x: other.x, y: other.y,
+                        z: PLAYER_SIZE * 1.4 - BULLET_SIZE,
+                        size: BULLET_SIZE * 2, dSize: 1,
+                        color: [255, 200, 80],
+                    });
+                }
+            });
         } else {
             if (horizontalCollision && verticalCollision) {
                 const dx = Math.cos(bullet.angle), dy = Math.sin(bullet.angle);
@@ -1391,14 +1414,14 @@ function updatePlayerStats(lobby, player) {
     // Shield energy: drains while active, recharges while inactive
     if (player.hasShieldAbility) {
         if (player.shieldActive) {
-            player.shieldEnergy -= 1.2;
+            player.shieldEnergy -= 0.6;
             if (player.shieldEnergy <= 0) {
                 player.shieldEnergy = 0;
                 player.shieldDepleted = true;
                 player.shieldActive = false;
             }
         } else {
-            player.shieldEnergy = Math.min(100, (player.shieldEnergy || 0) + 0.45);
+            player.shieldEnergy = Math.min(100, (player.shieldEnergy || 0) + 0.5);
             if (player.shieldDepleted && player.shieldEnergy >= 25) player.shieldDepleted = false;
         }
     }
@@ -1422,7 +1445,18 @@ function updateFlares(lobby, lobbyCode) {
         if (!flare.stopped) {
             const nx = flare.x + flare.vx;
             const ny = flare.y + flare.vy;
-            if (isCollidingWithWall(nx, ny, BULLET_SIZE, lobby.level)) {
+
+            // Check collision with enemy tanks
+            let hitTank = false;
+            for (const tank of Object.values(lobby.players)) {
+                if (!tank.isAI || tank.isDead) continue;
+                if (Math.hypot(tank.x - nx, tank.y - ny) <= PLAYER_SIZE + BULLET_SIZE) {
+                    hitTank = true;
+                    break;
+                }
+            }
+
+            if (isCollidingWithWall(nx, ny, BULLET_SIZE, lobby.level) || hitTank) {
                 flare.stopped = true;
                 // Stun nearby AI on landing
                 const stunRadius = 3 * TILE_SIZE;
@@ -1456,7 +1490,7 @@ function autoSpawnCompanionIfReady(lobby, playerId, player) {
     if (lobby.mode === 'lobby') return;
     if ((player.companionSpawnCooldown || 0) !== 0) return;
     if (!lobby.companions) return;
-    const offsets = [[0,0],[40,0],[-40,0],[0,40],[0,-40],[40,40],[-40,40],[40,-40],[-40,-40]];
+    const offsets = [[0, 0], [40, 0], [-40, 0], [0, 40], [0, -40], [40, 40], [-40, 40], [40, -40], [-40, -40]];
     let spawnX = player.x, spawnY = player.y;
     for (const [ox, oy] of offsets) {
         if (!isCollidingWithWall(player.x + ox, player.y + oy, PLAYER_SIZE * 0.6, lobby.level)) {
@@ -1633,6 +1667,7 @@ function updateCompanions(lobby, lobbyCode) {
                         bounces: 1,
                         piercing: 0,
                         owner: companion.ownerId,
+                        isTurretBullet: true,
                     });
                     companion.fireCooldown = 90;
                 }
