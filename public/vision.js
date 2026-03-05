@@ -96,9 +96,7 @@ function calculateSharedVision(players, level, resolution) {
                 visionDistance: tank.visionDistance,
                 points,
             };
-            if (tank.visionCornerBoost) {
-                entry.tiles = floodFillVisionTiles(tank.x, tank.y, level, tank.visionDistance / 2);
-            }
+            // visionCornerBoost (blurred tile pass) disabled for performance
             sharedVision.push(entry);
         }
     }
@@ -187,11 +185,7 @@ function drawSharedFogOfWar(viewX, viewY, sharedVisiblePoints) {
     const cx = fogLayer.width / 2;
     const cy = fogLayer.height / 2;
 
-    // First pass: BFS tiles at partial alpha (dim glow around corners)
-    for (const { tiles } of sharedVisiblePoints) {
-        if (tiles) _drawVisionTiles(cx, cy, viewX, viewY, tiles);
-    }
-    // Second pass: ray polygons at full alpha (direct line of sight fully clear)
+    // Ray polygons at full alpha (direct line of sight fully clear)
     for (const { x: tankX, y: tankY, points } of sharedVisiblePoints) {
         _drawVisionPolygon(cx, cy, tankX, tankY, viewX, viewY, points);
     }

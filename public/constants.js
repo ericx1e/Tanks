@@ -20,15 +20,16 @@ const TANK_CLASSES = [
     },
     {
         id: 'scout', name: 'Scout', label: '[S]',
-        description: 'Lightning-fast with extended vision. Right-click to launch a flare that reveals the area around it through fog.',
+        description: 'Lightning-fast with extended vision. Right-click to throw a stun flare — reveals fog and blinds nearby enemies for 2.5 seconds.',
         buffs: { speed: 3, visionRange: 2, maxBullets: -3, bulletBounces: -1 },
         special: 'flare',
         color: '#78f5cf',
     },
     {
         id: 'sniper', name: 'Sniper', label: '[SN]',
-        description: 'Piercing high-velocity shots. Very slow movement and slow fire rate.',
+        description: 'Piercing high-velocity shots. Hold right-click to scope; release to fire a wall-piercing shot that passes through everything.',
         buffs: { bulletSpeed: 4, piercing: 2, visionRange: 1, speed: -3, maxBullets: -4, fireRate: -4 },
+        special: 'scope',
         color: '#ff9f43',
     },
     {
@@ -40,8 +41,9 @@ const TANK_CLASSES = [
     },
     {
         id: 'engineer', name: 'Engineer', label: '[E]',
-        description: 'Deploys auto-turrets that intercept bullets and enemies. A companion mini-tank follows you, auto-shoots enemies, and respawns each round.',
+        description: 'Deploys auto-turrets that intercept bullets and enemies. Starts with a companion mini-tank; right-click to spawn another every 30 seconds.',
         buffs: { autoTurret: 5, speed: -2, maxBullets: -3 },
+        special: 'companion',
         color: '#ffd32a',
     },
     {

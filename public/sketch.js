@@ -35,7 +35,7 @@ function rebuildGroupedWalls() {
             let h = 1;
             outer: while (row + h < rows) {
                 for (let c = col; c < col + w; c++) {
-                    if (level[row + h][c] === 0 || visited[row + h][c]) break outer;
+                    if (level[row + h][c] <= 0 || visited[row + h][c]) break outer;
                 }
                 h++;
             }
@@ -93,6 +93,8 @@ let laserChanneling = false;   // true while right-click held for Laser class
 let guardianShielding = false; // true while right-click held for Guardian class
 let sniperPanning = false;     // true while right-click held for Sniper class
 let sniperPanX = 0, sniperPanY = 0; // smoothed camera pan offset
+let engineerRallyPoint = null;
+let engineerRallyTimer = 0;
 
 // Manual key state — clears on blur so keys never get stuck
 const keysHeld = {};
@@ -106,7 +108,10 @@ window.addEventListener('blur', () => {
 });
 // Raw mouseup to reliably clear right-click state when other buttons are also held
 window.addEventListener('mouseup', e => {
-    if (e.button === 2) { guardianShielding = false; laserChanneling = false; sniperPanning = false; }
+    if (e.button === 2) {
+        if (myTank && myTank.selectedClass === 'sniper' && sniperPanning) socket.emit('sniperShot');
+        guardianShielding = false; laserChanneling = false; sniperPanning = false;
+    }
 });
 const playerInterpBuf = {}; // id -> [{x, y, angle, turretAngle, t}, ...]
 const INTERP_DELAY_MS = 100;
@@ -606,6 +611,8 @@ function draw() {
 
     drawFlares();
     drawCompanions();
+    drawEngineerRallyIndicator();
+    drawSniperScopeRay();
 
     if (isFogOfWar && !allDead) {
         const resolution = visionResolution;
@@ -615,6 +622,15 @@ function draw() {
             visionDistance: f.visionRadius,
             points: calculateVision(f.x, f.y, level, f.visionRadius, resolution),
         }));
+        // Build companion vision entries
+        const companionVisionRadius = TILE_SIZE * 3;
+        const companionVision = Object.values(companions)
+            .filter(c => !c.isDead)
+            .map(c => ({
+                x: c.x, y: c.y,
+                visionDistance: companionVisionRadius,
+                points: calculateVision(c.x, c.y, level, companionVisionRadius, resolution),
+            }));
         if (gameMode == 'lobby') {
             const maxDistance = TILE_SIZE * 100;
             const visiblePoints = calculateVision(targetTank.x, targetTank.y, level, targetTank.visionDistance, resolution);
@@ -628,7 +644,7 @@ function draw() {
             }
         } else {
             const maxDistance = TILE_SIZE * 5;
-            const visiblePoints = [...calculateSharedVision(players, level, resolution), ...flareVision];
+            const visiblePoints = [...calculateSharedVision(players, level, resolution), ...flareVision, ...companionVision];
             drawSharedFogOfWar(targetTank.x, targetTank.y, visiblePoints);
             if (!skipMarkExplored) {
                 for (const { x: vx, y: vy, points } of visiblePoints) markExplored(vx, vy, points);
@@ -658,6 +674,7 @@ function draw() {
     if (gameMode !== 'lobby') drawBuffHUD();
     if (gameMode !== 'lobby') drawBulletIndicator();
     if (gameMode !== 'lobby') drawClassBadge();
+    if (gameMode !== 'lobby') drawKDABoard();
     if (gameMode === 'lobby') drawClassInfoPanel();
 
     pop(); // Restore transformations
@@ -870,8 +887,8 @@ function drawClassBadge() {
         const pct = energy / 100;
 
         // Colors — active, idle, depleted
-        const rA = isLaser ? 255 : 80,  gA = isLaser ? 90  : 180, bA = isLaser ? 60  : 255;
-        const rI = isLaser ? 160 : 50,  gI = isLaser ? 60  : 100, bI = isLaser ? 45  : 180;
+        const rA = isLaser ? 255 : 80, gA = isLaser ? 90 : 180, bA = isLaser ? 60 : 255;
+        const rI = isLaser ? 160 : 50, gI = isLaser ? 60 : 100, bI = isLaser ? 45 : 180;
 
         let label;
         if (depleted) {
@@ -880,8 +897,10 @@ function drawClassBadge() {
         } else if (active) {
             label = { text: isLaser ? 'CHANNELING' : 'SHIELD ACTIVE', r: rA, g: gA, b: bA, a: 220 };
         } else {
-            label = { text: isLaser ? 'RIGHT-CLICK: LASER' : 'RIGHT-CLICK: SHIELD',
-                      r: rI + 40, g: gI + 40, b: bI + 40, a: 160 };
+            label = {
+                text: isLaser ? 'RIGHT-CLICK: LASER' : 'RIGHT-CLICK: SHIELD',
+                r: rI + 40, g: gI + 40, b: bI + 40, a: 160
+            };
         }
 
         push();
@@ -969,8 +988,143 @@ function drawClassBadge() {
             text('BARRAGE COOLDOWN', badgeW / 2, -6);
         }
         pop();
+    } else if (cls.special === 'companion') {
+        const maxCooldown = 1800;
+        const cd = Math.max(0, myTank.companionSpawnCooldown || 0);
+        const ready = cd === 0;
+        const pct = ready ? 1 : 1 - cd / maxCooldown;
+
+        push();
+        translate(x, y + 28, 0);
+        noStroke();
+        rectMode(CORNER);
+        fill(30, 25, 10, 180);
+        rect(0, 0, badgeW, 6, 3);
+        fill(ready ? color(255, 211, 42, 200) : color(160, 130, 30, 160));
+        rect(0, 0, badgeW * pct, 6, 3);
+        noStroke();
+        textFont(font);
+        textSize(9);
+        textAlign(CENTER, CENTER);
+        if (ready) {
+            fill(255, 211, 42, 200);
+            text('RIGHT-CLICK: COMPANION', badgeW / 2, -6);
+        } else {
+            fill(180, 160, 60, 160);
+            text('COMPANION COOLDOWN', badgeW / 2, -6);
+        }
+        pop();
+    } else if (cls.special === 'scope') {
+        const maxCooldown = 180;
+        const cd = Math.max(0, myTank.sniperShotCooldown || 0);
+        const ready = cd === 0;
+        const scoped = sniperPanning;
+        const pct = ready ? 1 : 1 - cd / maxCooldown;
+
+        push();
+        translate(x, y + 28, 0);
+        noStroke();
+        rectMode(CORNER);
+        fill(30, 20, 10, 180);
+        rect(0, 0, badgeW, 6, 3);
+        fill(scoped && ready ? color(255, 180, 60, 240) : ready ? color(255, 150, 40, 200) : color(140, 80, 20, 160));
+        rect(0, 0, badgeW * pct, 6, 3);
+        noStroke();
+        textFont(font);
+        textSize(9);
+        textAlign(CENTER, CENTER);
+        if (scoped && ready) {
+            fill(255, 200, 80, 220 + 35 * sin(frameCount * 0.15));
+            text('RELEASE: PIERCE SHOT', badgeW / 2, -6);
+        } else if (ready) {
+            fill(255, 160, 60, 200);
+            text('HOLD RIGHT: SCOPE', badgeW / 2, -6);
+        } else {
+            fill(160, 100, 40, 160);
+            text('SCOPE COOLDOWN', badgeW / 2, -6);
+        }
+        pop();
     }
 
+    gl.enable(gl.DEPTH_TEST);
+}
+
+function drawKDABoard() {
+    const human = Object.values(players).filter(p => !p.isAI);
+    if (!human.length) return;
+
+    const VH = 250;
+    const VW = VH * (width / height);
+    const margin = 12;
+    const rowH = 16;
+    const padX = 8, padY = 6;
+    const cols = { name: 0, k: 90, d: 115, kd: 140 };
+    const boardW = 158;
+    const boardH = padY * 2 + rowH * (human.length + 1); // header + rows
+
+    const bx = -VW + margin;
+    const by = -VH + margin;
+
+    const gl = drawingContext;
+    gl.disable(gl.DEPTH_TEST);
+
+    push();
+    translate(bx, by, 0);
+    noStroke();
+
+    // Background
+    fill(8, 12, 20, 200);
+    rectMode(CORNER);
+    rect(0, 0, boardW, boardH, 6);
+
+    textFont(font);
+    rectMode(CORNER);
+
+    // Header
+    textSize(9);
+    textAlign(LEFT, TOP);
+    fill(160, 170, 200, 180);
+    text('PLAYER', padX + cols.name, padY);
+    textAlign(CENTER, TOP);
+    text('K', padX + cols.k, padY);
+    text('D', padX + cols.d, padY);
+    text('K/D', padX + cols.kd, padY);
+
+    // Divider
+    stroke(80, 90, 120, 120);
+    strokeWeight(1);
+    line(4, padY + rowH - 2, boardW - 4, padY + rowH - 2);
+    noStroke();
+
+    // Rows — sorted by kills desc
+    const sorted = [...human].sort((a, b) => (b.kills || 0) - (a.kills || 0));
+    sorted.forEach((p, i) => {
+        const ry = padY + rowH * (i + 1);
+        const isMe = p.id === socket.id;
+        const k = p.kills || 0;
+        const d = p.deaths || 0;
+        const kd = d === 0 ? k.toFixed(0) : (k / d).toFixed(1);
+
+        if (isMe) {
+            fill(255, 211, 42, 30);
+            rect(2, ry - 1, boardW - 4, rowH - 1, 3);
+        }
+
+        fill(isMe ? color(255, 230, 100, 220) : color(200, 210, 230, 190));
+        textSize(9);
+        textAlign(LEFT, TOP);
+        text(p.name.slice(0, 10), padX + cols.name, ry + 1);
+
+        textAlign(CENTER, TOP);
+        fill(100, 220, 130, 200);
+        text(k, padX + cols.k, ry + 1);
+        fill(220, 100, 100, 200);
+        text(d, padX + cols.d, ry + 1);
+        fill(180, 200, 240, 190);
+        text(kd, padX + cols.kd, ry + 1);
+    });
+
+    pop();
     gl.enable(gl.DEPTH_TEST);
 }
 
@@ -1396,6 +1550,32 @@ function drawTank(tank, isSelf) {
     }
     pop();
 
+    // Stun indicator: orbiting spheres above stunned AI tanks
+    if (tank.isAI && !tank.isDead && (tank.disoriented || 0) > 0) {
+        const fade = Math.min(tank.disoriented / 30, 1);
+        const spin = frameCount * 0.12;
+        push();
+        translate(tank.x, tank.y, PLAYER_SIZE * 3.2);
+        noFill();
+        for (let r = 0; r < 3; r++) {
+            const a = spin + (r * TWO_PI / 3);
+            const rx = Math.cos(a) * PLAYER_SIZE * 0.9;
+            const ry = Math.sin(a) * PLAYER_SIZE * 0.9;
+            push();
+            translate(rx, ry, r * 4);
+            stroke(255, 220, 40, 220 * fade);
+            strokeWeight(2);
+            sphere(PLAYER_SIZE * 0.28);
+            pop();
+        }
+        stroke(255, 200, 0, 100 * fade);
+        strokeWeight(1.5);
+        beginShape();
+        for (let a = 0; a <= TWO_PI; a += 0.2) vertex(cos(a) * PLAYER_SIZE * 1.1, sin(a) * PLAYER_SIZE * 1.1);
+        endShape(CLOSE);
+        pop();
+    }
+
     if (!tank.isDead && tank.speed > 0) {
         for (let i = 0; i < 2; i++) { // Add two particles per frame
             trails.push({
@@ -1732,6 +1912,56 @@ SHIELD_COLOR = [50, 100, 255]
 function drawExplosions() {
     for (let i = explosions.length - 1; i >= 0; i--) {
         const explosion = explosions[i];
+
+        if (explosion.effect === 'stun') {
+            if (!explosion._stunInit) {
+                explosion._stunInit = true;
+                explosion._life = 28;
+                explosion._alpha = 255;
+                // Generate rays at random angles
+                explosion._rays = [];
+                const rayCount = 28;
+                for (let r = 0; r < rayCount; r++) {
+                    explosion._rays.push({
+                        ang: random(TWO_PI),
+                        inner: explosion.size * random(0.2, 0.5),
+                        outer: explosion.size * random(2.8, 5.0),
+                        wid: random(2.5, 5.5),
+                    });
+                }
+            }
+
+            explosion._life--;
+            explosion._alpha = (explosion._life / 28) * 255;
+            if (explosion._life <= 0) { explosions.splice(i, 1); continue; }
+
+            push();
+            translate(explosion.x, explosion.y, explosion.z);
+            noFill();
+            const a = explosion._alpha;
+            // Core flash
+            noStroke();
+            fill(255, 245, 140, a * 0.7);
+            sphere(explosion.size * 1.1 * (explosion._life / 28));
+            // Rays
+            for (const ray of explosion._rays) {
+                stroke(255, 225, 60, a);
+                strokeWeight(ray.wid);
+                line(
+                    Math.cos(ray.ang) * ray.inner, Math.sin(ray.ang) * ray.inner, 0,
+                    Math.cos(ray.ang) * ray.outer, Math.sin(ray.ang) * ray.outer, 0
+                );
+                // Bright inner highlight
+                stroke(255, 255, 200, a * 0.85);
+                strokeWeight(ray.wid * 0.45);
+                line(
+                    Math.cos(ray.ang) * ray.inner, Math.sin(ray.ang) * ray.inner, 0,
+                    Math.cos(ray.ang) * ray.outer * 0.75, Math.sin(ray.ang) * ray.outer * 0.75, 0
+                );
+            }
+            pop();
+            continue;
+        }
 
         if (explosion.effect === 'shield') {
             // Lazy init once
@@ -2174,6 +2404,32 @@ function mousePressed() {
             socket.emit('flareShot', { angle });
         }
         if (myTank && myTank.selectedClass === 'gunner') socket.emit('barrageStart');
+        if (myTank && myTank.selectedClass === 'engineer') {
+            const cx = camX, cy = camY, cz = camZ;
+            const tx = cx + sniperPanX;
+            const ty = cy - 200 + sniperPanY;
+            let fwdX = tx - cx, fwdY = ty - cy, fwdZ = 0 - cz;
+            const fLen = Math.sqrt(fwdX * fwdX + fwdY * fwdY + fwdZ * fwdZ);
+            fwdX /= fLen; fwdY /= fLen; fwdZ /= fLen;
+            let rX = fwdY * 0 - fwdZ * 1, rY = fwdZ * 0 - fwdX * 0, rZ = fwdX * 1 - fwdY * 0;
+            const rLen = Math.sqrt(rX * rX + rY * rY + rZ * rZ);
+            rX /= rLen; rY /= rLen; rZ /= rLen;
+            const uX = rY * fwdZ - rZ * fwdY, uY = rZ * fwdX - rX * fwdZ, uZ = rX * fwdY - rY * fwdX;
+            const fov = Math.PI / 3, h2 = Math.tan(fov / 2), aspect = width / height, scale = 0.75;
+            const mx = -(mouseX - width / 2) / (width / 2) * h2 * aspect * scale;
+            const my = -(mouseY - height / 2) / (height / 2) * h2 * scale;
+            const rdx = mx * rX + my * uX - fwdX;
+            const rdy = mx * rY + my * uY - fwdY;
+            const rdz = mx * rZ + my * uZ - fwdZ;
+            if (rdz !== 0) {
+                const t = -cz / rdz;
+                const worldX = cx + t * rdx;
+                const worldY = cy + t * rdy;
+                socket.emit('companionRally', { x: worldX, y: worldY });
+                engineerRallyPoint = { x: worldX, y: worldY };
+                engineerRallyTimer = 240;
+            }
+        }
         return false; // prevent context menu
     }
 
@@ -2186,6 +2442,7 @@ function mouseReleased() {
     if (mouseButton === RIGHT) {
         laserChanneling = false;
         guardianShielding = false;
+        sniperPanning = false;
     }
 }
 
@@ -2204,7 +2461,23 @@ function drawBullets() {
         translate(x, y, bz);
         noStroke();
 
-        if (bullet.isCannonball) {
+        if (bullet.wallPiercing) {
+            // Sniper pierce shot — bright white-orange elongated glow
+            push();
+            fill(20, 10, 0);
+            sphere(BULLET_SIZE * 1.4);
+            pop();
+            fill(255, 200, 80);
+            sphere(BULLET_SIZE * 1.2);
+            // Streak trail hint
+            const dx = -Math.cos(bullet.angle) * BULLET_SIZE * 3;
+            const dy = -Math.sin(bullet.angle) * BULLET_SIZE * 3;
+            push();
+            translate(dx, dy, 0);
+            fill(255, 140, 20, 120);
+            sphere(BULLET_SIZE * 0.7);
+            pop();
+        } else if (bullet.isCannonball) {
             // Large rust-orange cannonball
             push();
             fill(60, 20, 5);
@@ -2248,13 +2521,13 @@ function drawBullets() {
         pop();
 
         // Trail
-        const trailSize = bullet.isCannonball ? BULLET_SIZE * 2.5 : bullet.isTurretBullet ? BULLET_SIZE * 0.55 : BULLET_SIZE;
+        const trailSize = bullet.wallPiercing ? BULLET_SIZE * 2 : bullet.isCannonball ? BULLET_SIZE * 2.5 : bullet.isTurretBullet ? BULLET_SIZE * 0.55 : BULLET_SIZE;
         trails.push({
             x, y,
             z: bz,
             size: trailSize,
             dSize: trailSize / 15,
-            alpha: 108,
+            alpha: bullet.wallPiercing ? 160 : 108,
         });
     });
 }
@@ -2311,6 +2584,65 @@ function drawFlares() {
         sphere(BULLET_SIZE * 4);
         pop();
     }
+}
+
+
+function drawSniperScopeRay() {
+    if (!sniperPanning || !myTank || myTank.selectedClass !== 'sniper') return;
+    if ((myTank.sniperShotCooldown || 0) > 0) return;
+
+    const angle = myTank.turretAngle;
+    const dx = Math.cos(angle), dy = Math.sin(angle);
+    const maxLen = (level.length + (level[0] ? level[0].length : 0)) * TILE_SIZE;
+
+    // Trace the ray ignoring walls (wall-piercing)
+    const endX = myTank.x + dx * maxLen;
+    const endY = myTank.y + dy * maxLen;
+
+    const pulse = 0.6 + 0.4 * Math.sin(frameCount * 0.2);
+    const z = PLAYER_SIZE * 1.4;
+
+    push();
+    // Outer glow line
+    stroke(255, 160, 30, 60 * pulse);
+    strokeWeight(6);
+    line(myTank.x, myTank.y, z, endX, endY, z);
+    // Core line
+    stroke(255, 220, 100, 200 * pulse);
+    strokeWeight(1.5);
+    line(myTank.x, myTank.y, z, endX, endY, z);
+    pop();
+}
+
+function drawEngineerRallyIndicator() {
+    if (!engineerRallyPoint || !myTank || myTank.selectedClass !== 'engineer') return;
+    engineerRallyTimer--;
+    if (engineerRallyTimer <= 0) { engineerRallyPoint = null; return; }
+
+    const fade = Math.min(engineerRallyTimer / 60, 1);
+    const pulse = (Math.sin(frameCount * 0.12) + 1) * 0.5;
+    const innerR = PLAYER_SIZE * 1.3;
+    const outerR = PLAYER_SIZE * (2.0 + pulse * 0.5);
+    const arm = PLAYER_SIZE * 0.65;
+
+    push();
+    translate(engineerRallyPoint.x, engineerRallyPoint.y, 1);
+    noFill();
+    stroke(255, 211, 42, 220 * fade);
+    strokeWeight(2.5);
+    beginShape();
+    for (let a = 0; a <= TWO_PI; a += 0.22) vertex(cos(a) * innerR, sin(a) * innerR, 0);
+    endShape(CLOSE);
+    stroke(255, 211, 42, 100 * fade);
+    strokeWeight(1.5);
+    beginShape();
+    for (let a = 0; a <= TWO_PI; a += 0.22) vertex(cos(a) * outerR, sin(a) * outerR, 0);
+    endShape(CLOSE);
+    stroke(255, 211, 42, 200 * fade);
+    strokeWeight(2);
+    line(-arm, 0, 0, arm, 0, 0);
+    line(0, -arm, 0, 0, arm, 0);
+    pop();
 }
 
 function drawCompanions() {

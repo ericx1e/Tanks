@@ -130,32 +130,53 @@ function createLevel(lobbyCode, levelNumber) {
         }
     }
 
-    // Spawn companion mini-tanks for Engineer players each level
+    // Carry over living companions; only spawn a fresh one if none survived
+    const prevCompanions = lobby.companions || {};
     const newCompanions = {};
     if (lobby.mode !== 'lobby') {
+        const offsets = [[0,0],[40,0],[-40,0],[0,40],[0,-40],[40,40],[-40,40],[40,-40],[-40,-40]];
         for (const [id, player] of Object.entries(newPlayers)) {
             if (!player.isAI && player.selectedClass === 'engineer') {
-                // Find a safe spawn cell near the player
-                let cx = player.x, cy = player.y;
-                const offsets = [[0, 0], [40, 0], [-40, 0], [0, 40], [0, -40], [40, 40], [-40, 40], [40, -40], [-40, -40]];
+                let spawnX = player.x, spawnY = player.y;
                 for (const [ox, oy] of offsets) {
                     if (!isCollidingWithWall(player.x + ox, player.y + oy, PLAYER_SIZE * 0.6, level)) {
-                        cx = player.x + ox; cy = player.y + oy; break;
+                        spawnX = player.x + ox; spawnY = player.y + oy; break;
                     }
                 }
-                const initWander = Math.random() * Math.PI * 2;
-                newCompanions[id] = {
-                    x: cx, y: cy,
-                    vx: 0, vy: 0,
-                    angle: 0, turretAngle: 0,
-                    ownerId: id,
-                    isDead: false,
-                    fireCooldown: 90,
-                    spawnGrace: 60,
-                    wanderAngle: initWander,
-                    wanderTargetAngle: initWander,
-                    wanderTimer: 0,
-                };
+
+                let idx = 0;
+                for (const comp of Object.values(prevCompanions)) {
+                    if (comp.ownerId !== id || comp.isDead) continue;
+                    let cx = spawnX + (Math.random() - 0.5) * 60;
+                    let cy = spawnY + (Math.random() - 0.5) * 60;
+                    if (isCollidingWithWall(cx, cy, PLAYER_SIZE * 0.6, level)) { cx = spawnX; cy = spawnY; }
+                    newCompanions[`${id}_${idx}`] = {
+                        ...comp, x: cx, y: cy, vx: 0, vy: 0,
+                        spawnGrace: 60, rallyPoint: null,
+                    };
+                    idx++;
+                }
+
+                // No survivors — give one fresh companion
+                if (idx === 0) {
+                    const initWander = Math.random() * Math.PI * 2;
+                    newCompanions[`${id}_0`] = {
+                        x: spawnX, y: spawnY,
+                        vx: 0, vy: 0,
+                        angle: 0, turretAngle: 0,
+                        ownerId: id,
+                        isDead: false,
+                        fireCooldown: 90,
+                        spawnGrace: 60,
+                        wanderAngle: initWander,
+                        wanderTargetAngle: initWander,
+                        wanderTimer: 0,
+                    };
+                    idx = 1;
+                }
+
+                player.companionSpawnCooldown = 1800;
+                player.companionCount = idx;
             }
         }
     }
@@ -230,6 +251,13 @@ function changeMode(lobbyCode, mode) {
         return;
     }
 
+    // Reset KDA for all human players when starting a new run
+    if (mode !== 'lobby') {
+        for (const player of Object.values(lobby.players)) {
+            if (!player.isAI) { player.kills = 0; player.deaths = 0; }
+        }
+    }
+
     lobby.mode = mode;
     io.to(lobbyCode).emit('gameMode', mode);
 }
@@ -281,6 +309,8 @@ io.on('connection', (socket) => {
             // buffs: { shield: 1 },
             // shield: true,
             selectedClass: 'assault',
+            kills: 0,
+            deaths: 0,
         };
 
         resetBuffs(player);
@@ -574,6 +604,9 @@ io.on('connection', (socket) => {
             }
         }
 
+        // Laser recoil — continuous small kick while channeling
+        player.vx -= Math.cos(player.turretAngle) * 0.4;
+        player.vy -= Math.sin(player.turretAngle) * 0.4;
         fireLaser(lobby, lobbyCode, player, lobby.players, lobby.level, true)
     });
 
@@ -597,6 +630,54 @@ io.on('connection', (socket) => {
             stopped: false,
         });
         player.flareCooldown = 300;
+    });
+
+    socket.on('sniperShot', () => {
+        const lobbyCode = socketToLobby[socket.id];
+        if (!lobbyCode) return;
+        const lobby = lobbies[lobbyCode];
+        if (!lobby) return;
+        const player = lobby.players[socket.id];
+        if (!player || player.isDead || !player.hasScopeAbility) return;
+        if ((player.sniperShotCooldown || 0) > 0) return;
+
+        lobby.bullets.push({
+            x: player.x + Math.cos(player.turretAngle) * PLAYER_SIZE * 1.5,
+            y: player.y + Math.sin(player.turretAngle) * PLAYER_SIZE * 1.5,
+            angle: player.turretAngle,
+            speed: BULLET_SPEED * 2.5,
+            bounces: 0,
+            piercing: 99,
+            wallPiercing: true,
+            owner: socket.id,
+        });
+        // Recoil — kick backward from shot direction
+        player.vx -= Math.cos(player.turretAngle) * 3.5;
+        player.vy -= Math.sin(player.turretAngle) * 3.5;
+        player.sniperShotCooldown = 180; // 3 s
+    });
+
+    socket.on('companionRally', (data) => {
+        const lobbyCode = socketToLobby[socket.id];
+        if (!lobbyCode) return;
+        const lobby = lobbies[lobbyCode];
+        if (!lobby || !lobby.companions || lobby.mode === 'lobby') return;
+        const player = lobby.players[socket.id];
+        if (!player || player.isDead || player.selectedClass !== 'engineer') return;
+        if (isCollidingWithWall(data.x, data.y, PLAYER_SIZE * 0.6, lobby.level)) return;
+
+        // Always set rally for existing living companions
+        for (const comp of Object.values(lobby.companions)) {
+            if (comp.ownerId === socket.id && !comp.isDead) {
+                comp.rallyPoint = { x: data.x, y: data.y };
+            }
+        }
+        player.lastRallyPoint = { x: data.x, y: data.y };
+
+        // If cooldown is ready, spawn a new companion at the rally position
+        if ((player.companionSpawnCooldown || 0) <= 0) {
+            spawnCompanionForPlayer(lobby, socket.id, player, data.x, data.y);
+        }
     });
 
     socket.on('barrageStart', () => {
@@ -761,6 +842,10 @@ function explodeCannonball(lobby, lobbyCode, bullet, bulletsToRemove, i) {
                     player.shield = false;
                 } else if (!player.godMode && !player.spawnGrace) {
                     player.isDead = true;
+                    if (player.isAI && player.tier !== 'chest') {
+                        const killer = players[bullet.owner];
+                        if (killer && !killer.isAI) killer.kills = (killer.kills || 0) + 1;
+                    }
                     if ((lobby.mode === 'survival' || lobby.mode === 'endless') && player.tier !== 'chest' && player.isAI) {
                         lobby.tankKills++;
                         if (lobby.tankKills % 5 === 0) spawnDrop(lobbyCode, player.x, player.y);
@@ -815,47 +900,43 @@ function updateBullets(lobby, lobbyCode) {
             verticalCollision = true;
         }
 
-        // Handle collisions
-        if (horizontalCollision && verticalCollision) {
-            // Corner collision: bounce in the direction of the steeper change
-            const dx = Math.cos(bullet.angle);
-            const dy = Math.sin(bullet.angle);
-
-            if (Math.abs(dx) > Math.abs(dy)) {
-                // More horizontal movement, prioritize horizontal bounce
+        // Move bullet and handle wall collisions
+        if (bullet.wallPiercing) {
+            // Pass through walls — just advance straight, cull when off map
+            bullet.x += Math.cos(bullet.angle) * bullet.speed;
+            bullet.y += Math.sin(bullet.angle) * bullet.speed;
+            const mapW = (level[0]?.length || 0) * TILE_SIZE;
+            const mapH = level.length * TILE_SIZE;
+            if (bullet.x < 0 || bullet.y < 0 || bullet.x > mapW || bullet.y > mapH) {
+                bulletsToRemove.add(i); return;
+            }
+        } else {
+            if (horizontalCollision && verticalCollision) {
+                const dx = Math.cos(bullet.angle), dy = Math.sin(bullet.angle);
+                bullet.angle = Math.abs(dx) > Math.abs(dy) ? Math.PI - bullet.angle : -bullet.angle;
+            } else if (horizontalCollision) {
                 bullet.angle = Math.PI - bullet.angle;
-            } else {
-                // More vertical movement, prioritize vertical bounce
+            } else if (verticalCollision) {
                 bullet.angle = -bullet.angle;
             }
-        } else if (horizontalCollision) {
-            // Horizontal bounce
-            bullet.angle = Math.PI - bullet.angle;
-        } else if (verticalCollision) {
-            // Vertical bounce
-            bullet.angle = -bullet.angle;
-        }
-        bullet.x += Math.cos(bullet.angle) * bullet.speed;
-        bullet.y += Math.sin(bullet.angle) * bullet.speed;
+            bullet.x += Math.cos(bullet.angle) * bullet.speed;
+            bullet.y += Math.sin(bullet.angle) * bullet.speed;
 
-        // Reduce bounces or remove bullet if no bounces remain
-        if (horizontalCollision || verticalCollision) {
-            if (bullet.isCannonball) {
-                explodeCannonball(lobby, lobbyCode, bullet, bulletsToRemove, i);
-            } else if (bullet.bounces > 0) {
-                bullet.bounces--;
-            } else {
-                io.to(lobbyCode).emit('explosion', {
-                    x: bullet.x,
-                    y: bullet.y,
-                    z: bullet.isTurretBullet ? PLAYER_SIZE * 2.4 : PLAYER_SIZE * 1.4 - BULLET_SIZE,
-                    size: BULLET_SIZE,
-                    dSize: 0.5
-                });
-
-                bulletsToRemove.add(i);
+            if (horizontalCollision || verticalCollision) {
+                if (bullet.isCannonball) {
+                    explodeCannonball(lobby, lobbyCode, bullet, bulletsToRemove, i);
+                } else if (bullet.bounces > 0) {
+                    bullet.bounces--;
+                } else {
+                    io.to(lobbyCode).emit('explosion', {
+                        x: bullet.x, y: bullet.y,
+                        z: bullet.isTurretBullet ? PLAYER_SIZE * 2.4 : PLAYER_SIZE * 1.4 - BULLET_SIZE,
+                        size: BULLET_SIZE, dSize: 0.5
+                    });
+                    bulletsToRemove.add(i);
+                }
+                return;
             }
-            return;
         }
 
 
@@ -921,14 +1002,15 @@ function updateBullets(lobby, lobbyCode) {
             }
         }
 
-        // Check for collisions with companion mini-tanks (AI bullets destroy them)
+        // Companion mini-tanks: destroyed by AI bullets (no respawn until next round)
         if (lobby.companions) {
             for (const ownerId in lobby.companions) {
                 if (bulletsToRemove.has(i)) break;
                 const companion = lobby.companions[ownerId];
-                if (companion.isDead) continue;
+                if (companion.isDead || companion.spawnGrace > 0) continue;
+                if (bullet.owner === companion.ownerId) continue; // engineer's own bullets don't hurt companion
                 const bulletOwner = players[bullet.owner];
-                if (!bulletOwner || !bulletOwner.isAI) continue; // only AI bullets harm companion
+                if (!bulletOwner || !bulletOwner.isAI) continue; // only AI bullets can kill companion
                 const dx = bullet.x - companion.x;
                 const dy = bullet.y - companion.y;
                 if (Math.hypot(dx, dy) < PLAYER_SIZE * 0.8) {
@@ -983,6 +1065,12 @@ function updateBullets(lobby, lobbyCode) {
                             player.shield = false; // Remove shield instead of killing
                         } else if (!player.godMode && !player.spawnGrace) {
                             player.isDead = true;
+                            if (player.isAI && player.tier !== 'chest' && owner && !owner.isAI) {
+                                owner.kills = (owner.kills || 0) + 1;
+                            }
+                            if (!player.isAI) {
+                                player.deaths = (player.deaths || 0) + 1;
+                            }
                         }
                     // player.isDead = true;
                 }
@@ -1150,6 +1238,7 @@ function applyClassBuffs(player) {
     player.hasShieldAbility = cls.special === 'shield';
     player.hasFlareAbility = cls.special === 'flare';
     player.hasBarrageAbility = cls.special === 'barrage';
+    player.hasScopeAbility = cls.special === 'scope';
     player.laserEnergy = 100;
     player.laserDepleted = false;
     player.shieldEnergy = 100;
@@ -1160,6 +1249,7 @@ function applyClassBuffs(player) {
     player.barrageActive = false;
     player.barrageShots = 0;
     player.barrageTick = 0;
+    player.sniperShotCooldown = 0;
 }
 
 function resetBuffs(player) {
@@ -1307,6 +1397,10 @@ function updatePlayerStats(lobby, player) {
 
     if (player.hasFlareAbility && player.flareCooldown > 0) player.flareCooldown--;
     if (player.hasBarrageAbility && player.barrageCooldown > 0) player.barrageCooldown--;
+    if (player.hasScopeAbility && player.sniperShotCooldown > 0) player.sniperShotCooldown--;
+    if (player.selectedClass === 'engineer' && (player.companionSpawnCooldown || 0) > 0) {
+        player.companionSpawnCooldown--;
+    }
 
     player.currentFireCooldown--;
     if (player.spawnGrace > 0) player.spawnGrace--;
@@ -1322,6 +1416,22 @@ function updateFlares(lobby, lobbyCode) {
             const ny = flare.y + flare.vy;
             if (isCollidingWithWall(nx, ny, BULLET_SIZE, lobby.level)) {
                 flare.stopped = true;
+                // Stun nearby AI on landing
+                const stunRadius = 3 * TILE_SIZE;
+                let anyStunned = false;
+                for (const tank of Object.values(lobby.players)) {
+                    if (!tank.isAI || tank.isDead) continue;
+                    if (Math.hypot(tank.x - flare.x, tank.y - flare.y) <= stunRadius) {
+                        tank.disoriented = 150; // 2.5 s at 60 fps
+                        anyStunned = true;
+                    }
+                }
+                // Rays burst at impact
+                io.to(lobbyCode).emit('explosion', {
+                    x: flare.x, y: flare.y, z: PLAYER_SIZE,
+                    size: anyStunned ? 32 : 18,
+                    effect: 'stun',
+                });
             } else {
                 flare.x = nx;
                 flare.y = ny;
@@ -1332,12 +1442,48 @@ function updateFlares(lobby, lobbyCode) {
     io.to(lobbyCode).emit('updateFlares', lobby.flares);
 }
 
+function autoSpawnCompanionIfReady(lobby, playerId, player) {
+    if (player.isAI || player.isDead) return;
+    if (player.selectedClass !== 'engineer') return;
+    if (lobby.mode === 'lobby') return;
+    if ((player.companionSpawnCooldown || 0) !== 0) return;
+    if (!lobby.companions) return;
+    const offsets = [[0,0],[40,0],[-40,0],[0,40],[0,-40],[40,40],[-40,40],[40,-40],[-40,-40]];
+    let spawnX = player.x, spawnY = player.y;
+    for (const [ox, oy] of offsets) {
+        if (!isCollidingWithWall(player.x + ox, player.y + oy, PLAYER_SIZE * 0.6, lobby.level)) {
+            spawnX = player.x + ox; spawnY = player.y + oy; break;
+        }
+    }
+    spawnCompanionForPlayer(lobby, playerId, player, spawnX, spawnY);
+}
+
+function spawnCompanionForPlayer(lobby, playerId, player, spawnX, spawnY) {
+    const idx = player.companionCount || 1;
+    const initWander = Math.random() * Math.PI * 2;
+    lobby.companions[`${playerId}_${idx}`] = {
+        x: spawnX, y: spawnY,
+        vx: 0, vy: 0,
+        angle: 0, turretAngle: 0,
+        ownerId: playerId,
+        isDead: false,
+        fireCooldown: 90,
+        spawnGrace: 60,
+        rallyPoint: player.lastRallyPoint || null,
+        wanderAngle: initWander,
+        wanderTargetAngle: initWander,
+        wanderTimer: 0,
+    };
+    player.companionCount = idx + 1;
+    player.companionSpawnCooldown = 1800;
+}
+
 function updateCompanions(lobby, lobbyCode) {
     if (!lobby.companions) return;
     for (const ownerId in lobby.companions) {
         const companion = lobby.companions[ownerId];
         if (companion.isDead) continue;
-        const owner = lobby.players[ownerId];
+        const owner = lobby.players[companion.ownerId];
         if (!owner || owner.isDead) continue;
 
         if (companion.spawnGrace > 0) { companion.spawnGrace--; continue; }
@@ -1351,26 +1497,33 @@ function updateCompanions(lobby, lobbyCode) {
             if (d < nearestDist) { nearestDist = d; nearestEnemy = p; }
         }
 
-        // Wander: pick a new random target direction every 90–180 frames, smoothly lerp toward it
-        companion.wanderTimer = (companion.wanderTimer || 0) - 1;
-        if (companion.wanderTimer <= 0) {
-            companion.wanderTargetAngle = Math.random() * Math.PI * 2;
-            companion.wanderTimer = 90 + Math.floor(Math.random() * 90);
+        let targetX, targetY;
+        if (companion.rallyPoint) {
+            targetX = companion.rallyPoint.x;
+            targetY = companion.rallyPoint.y;
+            if (Math.hypot(targetX - companion.x, targetY - companion.y) < 20) companion.rallyPoint = null;
+        } else {
+            // Wander: pick a new random target direction every 90–180 frames, smoothly lerp toward it
+            companion.wanderTimer = (companion.wanderTimer || 0) - 1;
+            if (companion.wanderTimer <= 0) {
+                companion.wanderTargetAngle = Math.random() * Math.PI * 2;
+                companion.wanderTimer = 90 + Math.floor(Math.random() * 90);
+            }
+            companion.wanderAngle = lerpAngle(companion.wanderAngle, companion.wanderTargetAngle, 0.025);
+
+            // Target: orbit loosely around owner; tighter orbit when an enemy is nearby
+            const wanderRadius = nearestEnemy ? 45 : 90;
+            const wanderX = owner.x + Math.cos(companion.wanderAngle) * wanderRadius;
+            const wanderY = owner.y + Math.sin(companion.wanderAngle) * wanderRadius;
+
+            // Clamp wander target so companion can't stray too far from owner
+            const maxLeash = 4 * TILE_SIZE;
+            const leashDx = wanderX - owner.x;
+            const leashDy = wanderY - owner.y;
+            const leashDist = Math.hypot(leashDx, leashDy);
+            targetX = leashDist > maxLeash ? owner.x + (leashDx / leashDist) * maxLeash : wanderX;
+            targetY = leashDist > maxLeash ? owner.y + (leashDy / leashDist) * maxLeash : wanderY;
         }
-        companion.wanderAngle = lerpAngle(companion.wanderAngle, companion.wanderTargetAngle, 0.025);
-
-        // Target: orbit loosely around owner; tighter orbit when an enemy is nearby
-        const wanderRadius = nearestEnemy ? 45 : 90;
-        const wanderX = owner.x + Math.cos(companion.wanderAngle) * wanderRadius;
-        const wanderY = owner.y + Math.sin(companion.wanderAngle) * wanderRadius;
-
-        // Clamp wander target so companion can't stray too far from owner
-        const maxLeash = 4 * TILE_SIZE;
-        const leashDx = wanderX - owner.x;
-        const leashDy = wanderY - owner.y;
-        const leashDist = Math.hypot(leashDx, leashDy);
-        const targetX = leashDist > maxLeash ? owner.x + (leashDx / leashDist) * maxLeash : wanderX;
-        const targetY = leashDist > maxLeash ? owner.y + (leashDy / leashDist) * maxLeash : wanderY;
 
         const dx = targetX - companion.x;
         const dy = targetY - companion.y;
@@ -1382,19 +1535,79 @@ function updateCompanions(lobby, lobbyCode) {
             const ay = (dy / dist) * speed;
             companion.vx = companion.vx * 0.82 + ax * 0.18;
             companion.vy = companion.vy * 0.82 + ay * 0.18;
-            // Smoothly rotate body toward movement direction
             companion.angle = lerpAngle(companion.angle, Math.atan2(dy, dx), 0.10);
         } else {
             companion.vx *= 0.82;
             companion.vy *= 0.82;
         }
 
+        // Repulsion from other companions to prevent stacking
+        for (const otherId in lobby.companions) {
+            if (otherId === ownerId) continue;
+            const other = lobby.companions[otherId];
+            if (other.isDead) continue;
+            const rdx = companion.x - other.x;
+            const rdy = companion.y - other.y;
+            const rdist = Math.hypot(rdx, rdy);
+            const minSep = PLAYER_SIZE * 2.2;
+            if (rdist < minSep && rdist > 0.1) {
+                const push = (minSep - rdist) / minSep * 2.5;
+                companion.vx += (rdx / rdist) * push;
+                companion.vy += (rdy / rdist) * push;
+            }
+        }
+
+        // Wall avoidance: repel from nearby wall tile centers before moving
+        const tileC = companion.x / TILE_SIZE;
+        const tileR = companion.y / TILE_SIZE;
+        for (let dr = -1; dr <= 1; dr++) {
+            for (let dc = -1; dc <= 1; dc++) {
+                const r = Math.floor(tileR + dr);
+                const c = Math.floor(tileC + dc);
+                if (r < 0 || c < 0 || !lobby.level[r] || lobby.level[r][c] <= 0) continue;
+                const wx = (c + 0.5) * TILE_SIZE;
+                const wy = (r + 0.5) * TILE_SIZE;
+                const wdx = companion.x - wx;
+                const wdy = companion.y - wy;
+                const wdist = Math.hypot(wdx, wdy);
+                const repelRange = TILE_SIZE * 1.1;
+                if (wdist < repelRange && wdist > 0.1) {
+                    const strength = (repelRange - wdist) / repelRange * 5;
+                    companion.vx += (wdx / wdist) * strength;
+                    companion.vy += (wdy / wdist) * strength;
+                }
+            }
+        }
+
+        // Wall collision: zero out velocity on hit to allow clean sliding
         const nx = companion.x + companion.vx;
         const ny = companion.y + companion.vy;
-        if (!isCollidingWithWall(nx, companion.y, PLAYER_SIZE * 0.6, lobby.level)) companion.x = nx;
-        else companion.vx = 0;
-        if (!isCollidingWithWall(companion.x, ny, PLAYER_SIZE * 0.6, lobby.level)) companion.y = ny;
-        else companion.vy = 0;
+        if (!isCollidingWithWall(nx, companion.y, PLAYER_SIZE * 0.6, lobby.level)) {
+            companion.x = nx;
+        } else { companion.vx = 0; }
+        if (!isCollidingWithWall(companion.x, ny, PLAYER_SIZE * 0.6, lobby.level)) {
+            companion.y = ny;
+        } else { companion.vy = 0; }
+
+        // Stuck detection: check total displacement every 30 frames
+        companion._stuckPrevX = companion._stuckPrevX ?? companion.x;
+        companion._stuckPrevY = companion._stuckPrevY ?? companion.y;
+        companion._stuckFrames = (companion._stuckFrames ?? 0) + 1;
+        if (companion._stuckFrames >= 30) {
+            const moved = Math.hypot(companion.x - companion._stuckPrevX, companion.y - companion._stuckPrevY);
+            if (moved < 8) {
+                // Barely moved — cancel rally and angle toward owner with a slight random offset
+                companion.rallyPoint = null;
+                companion.wanderTimer = 0;
+                const toOwner = Math.atan2(owner.y - companion.y, owner.x - companion.x);
+                companion.wanderTargetAngle = toOwner + (Math.random() - 0.5) * 1.2;
+                companion.vx = Math.cos(companion.wanderTargetAngle) * 2;
+                companion.vy = Math.sin(companion.wanderTargetAngle) * 2;
+            }
+            companion._stuckPrevX = companion.x;
+            companion._stuckPrevY = companion.y;
+            companion._stuckFrames = 0;
+        }
 
         // Auto-aim: only track and fire when a clear line of sight exists
         companion.fireCooldown--;
@@ -1411,7 +1624,7 @@ function updateCompanions(lobby, lobbyCode) {
                         speed: BULLET_SPEED * 0.85,
                         bounces: 1,
                         piercing: 0,
-                        owner: ownerId,
+                        owner: companion.ownerId,
                     });
                     companion.fireCooldown = 90;
                 }
@@ -1702,6 +1915,7 @@ setInterval(() => {
                 handlePlayerPickup(lobbyCode, playerId);
             }
             updatePlayerStats(lobby, player);
+            autoSpawnCompanionIfReady(lobby, playerId, player);
         }
 
         updateAutoTurrets(lobby, lobbyCode);
@@ -1734,6 +1948,7 @@ setInterval(() => {
                     handlePlayerPickup(lobbyCode, playerId);
                 }
                 updatePlayerStats(lobby, player);
+                autoSpawnCompanionIfReady(lobby, playerId, player);
 
                 if (player.isAI && player.isDead) {
                     delete lobby.players[playerId]

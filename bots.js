@@ -267,6 +267,19 @@ function updateAITank(lobby, lobbyCode, tank, level, players, bullets) {
     tank._defendingThisFrame = false; // reset flag used to suppress turret override
     if (tank.defenseCooldown > 0) tank.defenseCooldown--;
 
+    // Stun: disoriented AI spins randomly and can't fire
+    if ((tank.disoriented || 0) > 0) {
+        tank.disoriented--;
+        tank.targetDirection += 0.18; // spin
+        tank.turretAngle += 0.22;
+        tank.fireCooldown = Math.max(tank.fireCooldown, 10);
+        const newX = tank.x + Math.cos(tank.targetDirection) * speed;
+        const newY = tank.y + Math.sin(tank.targetDirection) * speed;
+        if (!isCollidingWithWall(newX, tank.y, PLAYER_SIZE, level)) tank.x = newX;
+        if (!isCollidingWithWall(tank.x, newY, PLAYER_SIZE, level)) tank.y = newY;
+        return;
+    }
+
     const RANGE = 10 * PLAYER_SIZE;
     const AVOID_DOT = 0.35;
     const SHOOT_DOT = 0.80;
