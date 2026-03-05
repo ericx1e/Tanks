@@ -761,7 +761,12 @@ function fireLaser(lobby, lobbyCode, tank, players, level, isActive) {
                             player.shield = false; // Remove shield instead of killing
                         } else if (!player.spawnGrace) {
                             player.isDead = true;
-
+                            if (player.isAI && player.tier !== 'chest' && !tank.isAI) {
+                                tank.kills = (tank.kills || 0) + 1;
+                            }
+                            if (!player.isAI) {
+                                player.deaths = (player.deaths || 0) + 1;
+                            }
 
                             let color = player.id; // indicates human player hit
                             if (player.isAI) {
@@ -845,6 +850,9 @@ function explodeCannonball(lobby, lobbyCode, bullet, bulletsToRemove, i) {
                     if (player.isAI && player.tier !== 'chest') {
                         const killer = players[bullet.owner];
                         if (killer && !killer.isAI) killer.kills = (killer.kills || 0) + 1;
+                    }
+                    if (!player.isAI) {
+                        player.deaths = (player.deaths || 0) + 1;
                     }
                     if ((lobby.mode === 'survival' || lobby.mode === 'endless') && player.tier !== 'chest' && player.isAI) {
                         lobby.tankKills++;
