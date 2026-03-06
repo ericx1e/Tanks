@@ -59,6 +59,9 @@ function particleScale() {
 
 let shakeIntensity = 0;
 let shakeDuration = 0;
+let killIndicators = []; // { x, y, life, maxLife, text }
+let prevMyKills = 0;
+let skipKillDetection = false;
 
 let lobbyCode = null;
 
@@ -66,6 +69,10 @@ let gameState = "playing"; // Other states: "transition", "waiting"
 let transitionTimer = 0;
 let transitionMessage = '';
 let gameMode = 'lobby';
+
+// Spectate state (persists across draw frames)
+let spectateTargetId = null;
+let spectateCamX = 0, spectateCamY = 0;
 
 // adjustable parameters for vision/raycasting
 let visionResolution = Math.PI / 150; // smaller value gives finer fog edges
@@ -109,7 +116,6 @@ window.addEventListener('blur', () => {
 // Raw mouseup to reliably clear right-click state when other buttons are also held
 window.addEventListener('mouseup', e => {
     if (e.button === 2) {
-        if (myTank && myTank.selectedClass === 'sniper' && sniperPanning) socket.emit('sniperShot');
         guardianShielding = false; laserChanneling = false; sniperPanning = false;
     }
 });
@@ -196,6 +202,22 @@ socket.on('updatePlayers', (serverPlayers) => {
     }
     players = serverPlayers;
     skipMarkExplored = false; // positions are now valid for the current level
+
+    // Detect kill — spawn indicator above player tank
+    const me = serverPlayers[socket.id];
+    if (me) {
+        const newKills = me.kills || 0;
+        if (!skipKillDetection && newKills > prevMyKills) {
+            const msgs = ['HIT'];
+            killIndicators.push({
+                x: me.x, y: me.y,
+                life: 40, maxLife: 40,
+                text: msgs[Math.floor(Math.random() * msgs.length)],
+            });
+        }
+        prevMyKills = newKills;
+        skipKillDetection = false;
+    }
 });
 
 socket.on('updateBullets', (serverBullets) => {
@@ -210,6 +232,13 @@ socket.on('updateBullets', (serverBullets) => {
 
 socket.on('updateLasers', (serverLasers) => {
     lasers = serverLasers;
+});
+
+socket.on('tilesUpdated', (tiles) => {
+    for (const { row, col } of tiles) {
+        if (level[row]) level[row][col] = 0;
+    }
+    rebuildGroupedWalls();
 });
 
 socket.on('updateLevel', (data) => {
@@ -230,7 +259,7 @@ socket.on('updateLevel', (data) => {
 socket.on('explosion', (data) => {
     createExplosion(data.x, data.y, data.z, data.size, data.color, data.effect)
     if (data.size > BULLET_SIZE + 1) {
-        triggerScreenShake(data.size / 10, 5);
+        triggerScreenShake(data.size / 7, Math.min(14, Math.round(data.size / 4)));
     }
     // explosions.push({
     //     x: data.x,
@@ -271,6 +300,9 @@ socket.on('nextLevel', () => {
     transitionTimeLeft = null;
     flares = [];
     companions = {};
+    spectateTargetId = null;
+    killIndicators = [];
+    skipKillDetection = true;
 });
 
 socket.on('updateFlares', (data) => { flares = data; });
@@ -525,6 +557,25 @@ function draw() {
         }
     }
 
+    // Kill indicators — short punchy pop above player tank
+    killIndicators = killIndicators.filter(k => k.life > 0);
+    for (const k of killIndicators) {
+        const t = k.life / k.maxLife;
+        const rise = (1 - t) * PLAYER_SIZE * 2;
+        const a = t * 255;
+        push();
+        translate(k.x, k.y, PLAYER_SIZE * 4 + rise);
+        rotateX(atan2(k.y - camY, camZ));
+        noStroke();
+        textFont(font);
+        textSize(PLAYER_SIZE * 0.9);
+        textAlign(CENTER, CENTER);
+        fill(255, 220, 60, a);
+        text(k.text, 0, 0);
+        pop();
+        k.life--;
+    }
+
     // Define the viewing volume for the orthogonal camera
     // const left = -width / 2;
     // const right = width / 2;
@@ -542,27 +593,49 @@ function draw() {
 
     let targetTank = myTank;
     let allDead = false;
+    let isSpectating = false;
+
     if (myTank && myTank.isDead) {
-        // Find the first living player to spectate
-        targetTank = Object.values(players).find(player => !player.isDead && !player.isAI);
-        if (!targetTank) {
-            // If no living players, stop camera movement or use a default position
+        isSpectating = true;
+        // Stable-ordered list of spectatable living players
+        const spectatable = Object.entries(players)
+            .filter(([id, p]) => !p.isAI && !p.isDead && id !== socket.id)
+            .sort((a, b) => a[0].localeCompare(b[0]));
+
+        if (spectatable.length === 0) {
             allDead = true;
             targetTank = myTank;
+        } else {
+            // If current target died or was never set, pick first and snap camera to them
+            if (!spectatable.find(([id]) => id === spectateTargetId)) {
+                spectateTargetId = spectatable[0][0];
+                spectateCamX = spectatable[0][1].x;
+                spectateCamY = spectatable[0][1].y;
+            }
+            targetTank = players[spectateTargetId] || spectatable[0][1];
         }
-    }
 
-    // Set up camera
-    camX = targetTank.x;
-    camY = targetTank.y + 200;
-    camZ = 600;
+        // Smooth camera pan toward spectated player
+        spectateCamX += (targetTank.x - spectateCamX) * 0.10;
+        spectateCamY += (targetTank.y - spectateCamY) * 0.10;
+        camX = spectateCamX;
+        camY = spectateCamY + 200;
+        camZ = 600;
+    } else {
+        // Normal live camera
+        camX = targetTank.x;
+        camY = targetTank.y + 200;
+        camZ = 600;
+    }
 
     // Sniper scope pan: smoothly shift camera toward mouse world direction while right-click held
     const panDist = 220;
     if (sniperPanning && myTank && myTank.selectedClass === 'sniper') {
         const panAngle = atan2(mouseY - height / 2, mouseX - width / 2);
-        sniperPanX = lerp(sniperPanX, cos(panAngle) * panDist, 0.07);
-        sniperPanY = lerp(sniperPanY, sin(panAngle) * panDist, 0.07);
+        const mouseDist = Math.hypot(mouseX - width / 2, mouseY - height / 2);
+        const scaledDist = panDist * Math.min(1, mouseDist / (Math.min(width, height) * 0.35));
+        sniperPanX = lerp(sniperPanX, cos(panAngle) * scaledDist, 0.07);
+        sniperPanY = lerp(sniperPanY, sin(panAngle) * scaledDist, 0.07);
     } else {
         sniperPanX = lerp(sniperPanX, 0, 0.10);
         sniperPanY = lerp(sniperPanY, 0, 0.10);
@@ -616,7 +689,7 @@ function draw() {
 
     // Compute sniper scope mouse-world reveal
     let sniperScopeVision = null;
-    if (sniperPanning && myTank && myTank.selectedClass === 'sniper' && !(myTank.sniperShotCooldown > 0)) {
+    if (sniperPanning && myTank && myTank.selectedClass === 'sniper') {
         const cx = camX, cy = camY, cz = camZ;
         const tx = targetX, ty = targetY;
         let fwdX = tx - cx, fwdY = ty - cy, fwdZ = 0 - cz;
@@ -637,11 +710,12 @@ function draw() {
             const wx = cx + t * rdx;
             const wy = cy + t * rdy;
             const scopeRadius = TILE_SIZE * 1.5;
-            sniperScopeVision = {
-                x: wx, y: wy,
-                visionDistance: scopeRadius,
-                points: calculateVision(wx, wy, level, scopeRadius, Math.PI / 40),
-            };
+            const circlePoints = [];
+            for (let i = 0; i <= 32; i++) {
+                const a = (i / 32) * Math.PI * 2;
+                circlePoints.push({ x: wx + Math.cos(a) * scopeRadius, y: wy + Math.sin(a) * scopeRadius });
+            }
+            sniperScopeVision = { x: wx, y: wy, visionDistance: scopeRadius, points: circlePoints };
         }
     }
 
@@ -708,6 +782,26 @@ function draw() {
     if (gameMode !== 'lobby') drawClassBadge();
     if (gameMode !== 'lobby') drawKDABoard();
     if (gameMode === 'lobby') drawClassInfoPanel();
+
+    // Spectate overlay
+    if (isSpectating && !allDead && targetTank) {
+        const VH = height / 2;
+        const gl = drawingContext;
+        gl.disable(gl.DEPTH_TEST);
+        textAlign(CENTER, CENTER);
+        textFont(font);
+        fill(0, 0, 0, 120);
+        noStroke();
+        rectMode(CENTER);
+        rect(0, -VH + 46, 320, 50, 8);
+        textSize(18);
+        fill(255, 220, 50);
+        text(`SPECTATING  ${targetTank.name || 'Player'}`, 0, -VH + 38);
+        textSize(13);
+        fill(180, 180, 180);
+        text('TAB — switch player', 0, -VH + 60);
+        gl.enable(gl.DEPTH_TEST);
+    }
 
     pop(); // Restore transformations
 }
@@ -807,7 +901,7 @@ function drawBuffHUD() {
     const gl = drawingContext;
     gl.disable(gl.DEPTH_TEST);
 
-    const buffTypes = ['speed', 'fireRate', 'bulletSpeed', 'bulletBounces', 'shield', 'multiShot', 'visionRange', 'piercing', 'autoTurret'];
+    const buffTypes = ['speed', 'fireRate', 'bulletSpeed', 'bulletBounces', 'shield', 'multiShot', 'visionRange', 'piercing', 'autoTurret', 'explosive', 'homing', 'regen', 'chain', 'orbit'];
     let slotY = -VH + margin + 10;
 
     for (const buffType of buffTypes) {
@@ -1046,6 +1140,26 @@ function drawClassBadge() {
             text('COMPANION COOLDOWN', badgeW / 2, -6);
         }
         pop();
+    } else if (cls.special === 'cannon') {
+        const maxCooldown = 600;
+        const cd = Math.max(0, myTank.cannonCooldown || 0);
+        const ready = cd === 0;
+        const pct = ready ? 1 : 1 - cd / maxCooldown;
+        push();
+        translate(x, y + 28, 0);
+        noStroke(); rectMode(CORNER);
+        fill(35, 18, 5, 180); rect(0, 0, badgeW, 6, 3);
+        fill(ready ? color(230, 120, 30, 210) : color(140, 70, 20, 160));
+        rect(0, 0, badgeW * pct, 6, 3);
+        noStroke(); textFont(font); textSize(9); textAlign(CENTER, CENTER);
+        if (ready) {
+            fill(255, 150, 50, 200 + 35 * sin(frameCount * 0.1));
+            text('RIGHT-CLICK: CANNONBALL', badgeW / 2, -6);
+        } else {
+            fill(180, 100, 40, 160);
+            text('CANNON COOLDOWN', badgeW / 2, -6);
+        }
+        pop();
     } else if (cls.special === 'scope') {
         const maxCooldown = 180;
         const cd = Math.max(0, myTank.sniperShotCooldown || 0);
@@ -1067,13 +1181,54 @@ function drawClassBadge() {
         textAlign(CENTER, CENTER);
         if (scoped && ready) {
             fill(255, 200, 80, 220 + 35 * sin(frameCount * 0.15));
-            text('RELEASE: PIERCE SHOT', badgeW / 2, -6);
+            text('LEFT-CLICK: PIERCE SHOT', badgeW / 2, -6);
         } else if (ready) {
             fill(255, 160, 60, 200);
             text('HOLD RIGHT: SCOPE', badgeW / 2, -6);
         } else {
             fill(160, 100, 40, 160);
             text('SCOPE COOLDOWN', badgeW / 2, -6);
+        }
+        pop();
+    }
+
+    // Regen buff progress bar — shown below ability bar when shield is regenerating
+    if ((myTank.buffs?.regen || 0) > 0 && !myTank.shield && !myTank.isDead) {
+        const stacks = myTank.buffs.regen;
+        const period = Math.round(900 / Math.sqrt(stacks));
+        const timer = myTank._regenTimer ?? period;
+        const pct = Math.max(0, Math.min(1, 1 - timer / period));
+        const nearReady = pct > 0.85;
+
+        // Determine Y: place below ability bar if one is shown, otherwise at same slot
+        const hasAbilityBar = cls && ['laser', 'shield', 'flare', 'barrage', 'companion', 'cannon', 'scope'].includes(cls.special);
+        const regenY = y + (hasAbilityBar ? 46 : 28);
+
+        push();
+        translate(x, regenY, 0);
+        noStroke();
+        rectMode(CORNER);
+
+        // Track background
+        fill(10, 20, 45, 180);
+        rect(0, 0, badgeW, 6, 3);
+
+        // Fill
+        const pulse = nearReady ? (180 + 75 * sin(frameCount * 0.18)) : 160;
+        fill(nearReady ? color(120, 200, 255, pulse) : color(50, 110, 200, 150));
+        rect(0, 0, badgeW * pct, 6, 3);
+
+        // Label
+        noStroke();
+        textFont(font);
+        textSize(9);
+        textAlign(CENTER, CENTER);
+        if (nearReady) {
+            fill(150, 220, 255, pulse);
+            text('SHIELD INCOMING!', badgeW / 2, -6);
+        } else {
+            fill(80, 150, 220, 160);
+            text('SHIELD REGEN', badgeW / 2, -6);
         }
         pop();
     }
@@ -1239,6 +1394,21 @@ function keyPressed() {
         // alternate between fine and coarse ray resolution
         visionResolution = (visionResolution === PI / 150 ? PI / 300 : PI / 150);
         clearVisionCache();
+    }
+    // Tab: cycle spectate target while dead
+    if (keyCode === 9 && myTank && myTank.isDead) {
+        const spectatable = Object.entries(players)
+            .filter(([id, p]) => !p.isAI && !p.isDead && id !== socket.id)
+            .sort((a, b) => a[0].localeCompare(b[0]))
+            .map(([id]) => id);
+        if (spectatable.length > 1) {
+            const curIdx = spectatable.indexOf(spectateTargetId);
+            spectateTargetId = spectatable[(curIdx + 1) % spectatable.length];
+            // Snap camera to new target so the pan starts from their position
+            const t = players[spectateTargetId];
+            if (t) { spectateCamX = t.x; spectateCamY = t.y; }
+        }
+        return false; // prevent Tab from shifting browser focus
     }
 }
 
@@ -1476,13 +1646,32 @@ function drawTank(tank, isSelf) {
         } else {
             stroke(0, 0, 0, cloakAlpha)
             strokeWeight(1.5)
-            box(2 * size, 1.5 * size, size); // Tank base dimensions
-            box(1.8 * size, 1.7 * size, size * 0.8); // Treads
+            if (tank.tier === 11) {
+                box(2.6 * size, 2.0 * size, size);        // Wide Harbinger hull
+                box(2.4 * size, 2.3 * size, size * 0.75); // Extra-wide treads
+            } else if (tank.tier === 15) {
+                box(3.2 * size, 2.6 * size, size * 1.2);  // Massive Sovereign hull
+                box(3.0 * size, 3.0 * size, size * 0.8);  // Wide treads
+            } else if (tank.tier === 16) {
+                box(2.8 * size, 1.8 * size, size * 1.1);  // Long Phantom hull
+                box(2.6 * size, 2.1 * size, size * 0.75); // Treads
+            } else {
+                box(2 * size, 1.5 * size, size); // Tank base dimensions
+                box(1.8 * size, 1.7 * size, size * 0.8); // Treads
+            }
 
             push();
             rotateZ(PI / 2 + tank.turretAngle - tank.angle); // Rotate turret independently
             translate(0, 0, size);
-            box(size, 1.15 * size, size); // Slightly smaller box
+            if (tank.tier === 11) {
+                box(1.5 * size, 1.7 * size, size * 1.1); // Wider Harbinger turret
+            } else if (tank.tier === 15) {
+                box(1.8 * size, 1.5 * size, size * 1.3); // Sovereign turret
+            } else if (tank.tier === 16) {
+                box(1.3 * size, 1.3 * size, size * 1.1); // Phantom turret
+            } else {
+                box(size, 1.15 * size, size); // Slightly smaller box
+            }
             // fill(50); // Different color for the turret
             noStroke();
 
@@ -1522,8 +1711,28 @@ function drawTank(tank, isSelf) {
                     drawBarrel(-size / 3.5);
                     pop();
                     break;
-                case 11: // Rusher — single centered barrel
+                case 11: // Harbinger — 5 spread barrels matching ±40° firing arc
+                    for (let s = -2; s <= 2; s++) {
+                        push();
+                        rotate(s * PI / 9);
+                        drawBarrel(0);
+                        pop();
+                    }
+                    break;
+                case 15: // Sovereign — twin heavy barrels
+                    drawBarrel(size / 3.5);
+                    drawBarrel(-size / 3.5);
+                    break;
+                case 16: // Phantom Sniper — extra-long single barrel (standard + connected extension)
                     drawBarrel(0);
+                    push();
+                    // Standard barrel tip ends at -1.25*size (center at -0.5*size, half-length 0.75*size)
+                    // Extension center must be at -1.25 - 0.40 = -1.65*size to connect flush
+                    translate(0, -size * 1.65, 0);
+                    fill(...tank.color, cloakAlpha);
+                    noStroke();
+                    cylinder(size * 0.09, size * 0.80);
+                    pop();
                     break;
                 case 5:
                 case 13: // Laser tanks — wide emitter barrel
@@ -1581,6 +1790,76 @@ function drawTank(tank, isSelf) {
         pop();
     }
     pop();
+
+    // Phantom Sniper charging — laser sight warning line
+    if (tank.isAI && !tank.isDead && tank.tier === 16 && tank.sniperCharging) {
+        const chargeProgress = 1 - (tank.sniperChargeTimer || 0) / 70;
+        const pulse = 0.5 + 0.5 * Math.sin(frameCount * 0.4);
+        const sightLen = TILE_SIZE * 20;
+        const tx = tank.x + Math.cos(tank.turretAngle) * sightLen;
+        const ty = tank.y + Math.sin(tank.turretAngle) * sightLen;
+        push();
+        strokeWeight(2 + chargeProgress * 3);
+        stroke(255, 30, 30, 120 + 120 * pulse);
+        noFill();
+        line(tank.x, tank.y, PLAYER_SIZE * 2, tx, ty, PLAYER_SIZE * 2);
+        // Charging glow circle at tank
+        noStroke();
+        fill(255, 50, 50, 60 + 80 * pulse);
+        translate(tank.x, tank.y, PLAYER_SIZE * 2);
+        sphere(PLAYER_SIZE * (0.8 + chargeProgress * 1.2));
+        pop();
+    }
+
+    // Sovereign orbiting shield walls
+    if (tank.isAI && !tank.isDead && tank.tier === 15) {
+        const orbRadius = PLAYER_SIZE * 3.2;
+        const orbAngle = tank.orbAngle || 0;
+        for (let r = 0; r < 4; r++) {
+            const a = orbAngle + r * Math.PI / 2;
+            const ox = Math.cos(a) * orbRadius;
+            const oy = Math.sin(a) * orbRadius;
+            push();
+            translate(tank.x + ox, tank.y + oy, PLAYER_SIZE * 1.6);
+            // Align panel perpendicular to the outward normal (same as shield tank)
+            rotateZ(a + HALF_PI);
+            // Glow backing
+            fill(100, 180, 255, 55);
+            noStroke();
+            box(PLAYER_SIZE * 2.8, PLAYER_SIZE * 0.35, PLAYER_SIZE * 2.5);
+            // Bright face
+            fill(180, 220, 255, 210);
+            stroke(140, 200, 255, 240);
+            strokeWeight(2);
+            box(PLAYER_SIZE * 2.8, PLAYER_SIZE * 0.2, PLAYER_SIZE * 2.2);
+            pop();
+        }
+    }
+
+    // Player orbit buff — orbiting wall panels (sovereign style)
+    if (!tank.isAI && !tank.isDead && (tank.buffs?.orbit || 0) > 0) {
+        const numOrbs = tank.buffs.orbit;
+        const orbRadius = PLAYER_SIZE * 2.4;
+        const orbAngle = tank.orbAngle || 0;
+        for (let r = 0; r < numOrbs; r++) {
+            const a = orbAngle + r * (TWO_PI / numOrbs);
+            const ox = Math.cos(a) * orbRadius;
+            const oy = Math.sin(a) * orbRadius;
+            push();
+            translate(tank.x + ox, tank.y + oy, PLAYER_SIZE * 1.6);
+            rotateZ(a + HALF_PI);
+            // Glow backing
+            fill(80, 220, 140, 55);
+            noStroke();
+            box(PLAYER_SIZE * 2.0, PLAYER_SIZE * 0.35, PLAYER_SIZE * 2.0);
+            // Bright face
+            fill(140, 255, 180, 210);
+            stroke(100, 220, 150, 240);
+            strokeWeight(2);
+            box(PLAYER_SIZE * 2.0, PLAYER_SIZE * 0.2, PLAYER_SIZE * 1.8);
+            pop();
+        }
+    }
 
     // Stun indicator: orbiting spheres above stunned AI tanks
     if (tank.isAI && !tank.isDead && (tank.disoriented || 0) > 0) {
@@ -1673,6 +1952,11 @@ function drawTank(tank, isSelf) {
     }
 
     if (tank.shield) {
+        // Scale the bubble to enclose each tank's hull
+        const shieldR = tank.tier === 15 ? size * 2.4
+            : tank.tier === 11 ? size * 2.1
+                : (tank.tier === 10 || tank.tier === 14 || tank.tier === 16) ? size * 2.0
+                    : size * 1.6;
         push();
         translate(tank.x, tank.y, PLAYER_SIZE);
         fill(50, 100, 255, 100);
@@ -1680,13 +1964,13 @@ function drawTank(tank, isSelf) {
             fill(50, 100, 255, cloakAlpha);
         }
         noStroke();
-        sphere(PLAYER_SIZE * 1.6);
+        sphere(shieldR);
 
         rotateX(atan2(tank.y - camY, camZ))
         textAlign(CENTER, CENTER);
         textSize(16);
         if (tank.buffs && tank.buffs.shield) {
-            text(tank.buffs.shield + 1, PLAYER_SIZE * 1.6 + 20, 0)
+            text(tank.buffs.shield + 1, shieldR + 20, 0)
         }
         pop()
     }
@@ -1944,6 +2228,84 @@ SHIELD_COLOR = [50, 100, 255]
 function drawExplosions() {
     for (let i = explosions.length - 1; i >= 0; i--) {
         const explosion = explosions[i];
+
+        if (explosion.effect === 'harbinger_ring') {
+            if (!explosion._hInit) {
+                explosion._hInit = true;
+                explosion._life = 40;
+                explosion._maxLife = 40;
+                explosion._ringR = explosion.size * 0.3;
+                explosion._maxRingR = explosion.size * 3.5;
+            }
+            explosion._life--;
+            if (explosion._life <= 0) { explosions.splice(i, 1); continue; }
+            const t = 1 - explosion._life / explosion._maxLife;
+            const alpha = explosion._life / explosion._maxLife;
+            const ringR = explosion._ringR + (explosion._maxRingR - explosion._ringR) * t;
+            push();
+            translate(explosion.x, explosion.y, explosion.z);
+            // Core flash
+            noStroke();
+            fill(220, 80, 220, 200 * (1 - t));
+            sphere(explosion.size * 0.8 * (1 - t));
+            // Expanding ring
+            noFill();
+            stroke(220, 60, 220, 255 * alpha);
+            strokeWeight(4 * alpha);
+            beginShape();
+            for (let a = 0; a <= TWO_PI; a += 0.18) vertex(cos(a) * ringR, sin(a) * ringR);
+            endShape(CLOSE);
+            // Secondary faint ring
+            stroke(255, 140, 255, 140 * alpha);
+            strokeWeight(2 * alpha);
+            beginShape();
+            for (let a = 0; a <= TWO_PI; a += 0.18) vertex(cos(a) * ringR * 0.65, sin(a) * ringR * 0.65);
+            endShape(CLOSE);
+            // 12 radial spokes
+            for (let r = 0; r < 12; r++) {
+                const a = (r / 12) * TWO_PI;
+                stroke(255, 100, 255, 180 * alpha);
+                strokeWeight(1.5);
+                line(0, 0, cos(a) * ringR * 0.55, sin(a) * ringR * 0.55);
+            }
+            pop();
+            continue;
+        }
+
+        if (explosion.effect === 'harbinger_pulse') {
+            if (!explosion._pInit) {
+                explosion._pInit = true;
+                explosion._life = 28;
+                explosion._maxLife = 28;
+                explosion._maxR = explosion.size * 4.5;
+            }
+            explosion._life--;
+            if (explosion._life <= 0) { explosions.splice(i, 1); continue; }
+            const tp = 1 - explosion._life / explosion._maxLife;
+            const ap = explosion._life / explosion._maxLife;
+            const rp = explosion._maxR * tp;
+            push();
+            translate(explosion.x, explosion.y, explosion.z);
+            noFill();
+            // Outer shockwave ring
+            stroke(180, 40, 255, 255 * ap);
+            strokeWeight(5 * ap);
+            beginShape();
+            for (let a = 0; a <= TWO_PI; a += 0.14) vertex(cos(a) * rp, sin(a) * rp);
+            endShape(CLOSE);
+            // Inner ghost ring
+            stroke(220, 120, 255, 160 * ap);
+            strokeWeight(2 * ap);
+            beginShape();
+            for (let a = 0; a <= TWO_PI; a += 0.14) vertex(cos(a) * rp * 0.7, sin(a) * rp * 0.7);
+            endShape(CLOSE);
+            // Central flash
+            noStroke();
+            fill(200, 80, 255, 180 * (1 - tp));
+            sphere(explosion.size * 0.5 * (1 - tp));
+            pop();
+            continue;
+        }
 
         if (explosion.effect === 'stun') {
             if (!explosion._stunInit) {
@@ -2436,6 +2798,7 @@ function mousePressed() {
             socket.emit('flareShot', { angle });
         }
         if (myTank && myTank.selectedClass === 'gunner') socket.emit('barrageStart');
+        if (myTank && myTank.selectedClass === 'artillerist') socket.emit('cannonShot');
         if (myTank && myTank.selectedClass === 'engineer') {
             const cx = camX, cy = camY, cz = camZ;
             const tx = cx + sniperPanX;
@@ -2465,8 +2828,12 @@ function mousePressed() {
         return false; // prevent context menu
     }
 
-    // Left click — fire normal bullet
-    if (myTank) socket.emit('fireBullet', { angle: myTank.turretAngle });
+    // Left click — fire piercing shot if scoped and ready, otherwise normal bullet
+    if (myTank && myTank.selectedClass === 'sniper' && sniperPanning && !(myTank.sniperShotCooldown > 0)) {
+        socket.emit('sniperShot');
+    } else if (myTank) {
+        socket.emit('fireBullet', { angle: myTank.turretAngle });
+    }
 }
 
 
@@ -2509,14 +2876,6 @@ function drawBullets() {
             fill(255, 140, 20, 120);
             sphere(BULLET_SIZE * 0.7);
             pop();
-        } else if (bullet.isCannonball) {
-            // Large rust-orange cannonball
-            push();
-            fill(60, 20, 5);
-            sphere(BULLET_SIZE * 3 + 2);
-            pop();
-            fill(190, 80, 30);
-            sphere(BULLET_SIZE * 3);
         } else if (bullet.isTurretBullet) {
             // Small orange turret bullet
             const bs = BULLET_SIZE * 0.55;
@@ -2531,7 +2890,10 @@ function drawBullets() {
             fill(255, 160, 0);
             sphere(bs);
         } else {
-            // Standard bullet with outline
+            // Standard bullet rendering — also used for cannonballs (just larger)
+            const bs = bullet.isHeavyCannonball ? BULLET_SIZE * 2.2
+                : bullet.isCannonball ? BULLET_SIZE * 1.5
+                    : BULLET_SIZE;
             push();
             const cameraPos = new p5.Vector(camX, camY, camZ);
             const bulletPos = new p5.Vector(x, y, bz);
@@ -2539,21 +2901,29 @@ function drawBullets() {
             const offset = viewDirection.mult(-2);
             translate(offset.x, offset.y, offset.z);
             fill(0);
-            sphere(BULLET_SIZE + 1);
+            sphere(bs + 1);
             if (bullet.owner && players[bullet.owner] && players[bullet.owner].isAI) {
-                fill(255, 0, 0, 100);
+                fill(255, 0, 0, 110);
                 translate(offset.x, offset.y, offset.z);
-                sphere(BULLET_SIZE + 2);
+                sphere(bs + 2);
             }
             pop();
             fill(150);
-            sphere(BULLET_SIZE);
+            sphere(bs);
+        }
+
+        // Harbinger-captured bullet: purple pulsing aura (only on redirected player bullets)
+        if (bullet.harbingerCaptured) {
+            const pulse = 0.5 + 0.5 * Math.sin(frameCount * 0.22);
+            noStroke();
+            fill(180, 40, 255, 90 + 90 * pulse);
+            sphere(BULLET_SIZE * (1.7 + 0.4 * pulse));
         }
 
         pop();
 
         // Trail
-        const trailSize = bullet.wallPiercing ? BULLET_SIZE * 2 : bullet.isCannonball ? BULLET_SIZE * 2.5 : bullet.isTurretBullet ? BULLET_SIZE * 0.55 : BULLET_SIZE;
+        const trailSize = bullet.wallPiercing ? BULLET_SIZE * 2 : bullet.isHeavyCannonball ? BULLET_SIZE * 2.2 : bullet.isCannonball ? BULLET_SIZE * 1.5 : bullet.isTurretBullet ? BULLET_SIZE * 0.55 : BULLET_SIZE;
         trails.push({
             x, y,
             z: bz,
@@ -2621,7 +2991,7 @@ function drawFlares() {
 
 function drawSniperScopeRay() {
     if (!sniperPanning || !myTank || myTank.selectedClass !== 'sniper') return;
-    if ((myTank.sniperShotCooldown || 0) > 0) return;
+    const shotReady = !(myTank.sniperShotCooldown > 0);
 
     const angle = myTank.turretAngle;
     const dx = Math.cos(angle), dy = Math.sin(angle);
@@ -2633,14 +3003,15 @@ function drawSniperScopeRay() {
 
     const pulse = 0.6 + 0.4 * Math.sin(frameCount * 0.2);
     const z = PLAYER_SIZE * 1.4;
+    const r = shotReady ? 255 : 150, g2 = shotReady ? 160 : 150, b = shotReady ? 30 : 150;
 
     push();
     // Outer glow line
-    stroke(255, 160, 30, 60 * pulse);
+    stroke(r, g2, b, (shotReady ? 60 : 30) * pulse);
     strokeWeight(6);
     line(myTank.x, myTank.y, z, endX, endY, z);
     // Core line
-    stroke(255, 220, 100, 200 * pulse);
+    stroke(r, shotReady ? 220 : 180, b, (shotReady ? 200 : 80) * pulse);
     strokeWeight(1.5);
     line(myTank.x, myTank.y, z, endX, endY, z);
     pop();

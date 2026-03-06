@@ -187,6 +187,117 @@ function drawDrop(x, y, angle, buff) {
             box(size * 0.18, size * 0.6, size * 0.18);
             pop();
             break;
+        case 'explosive':
+            noStroke();
+            // Main bomb body
+            fill(40, 40, 40);
+            sphere(size * 0.55);
+            // Fuse on top
+            fill(200, 150, 50);
+            push();
+            translate(0, 0, size * 0.55);
+            cylinder(size * 0.06, size * 0.35);
+            pop();
+            // Spark burst lines radiating outward
+            for (let i = 0; i < 6; i++) {
+                push();
+                rotateZ(i * PI / 3);
+                translate(size * 0.52, 0, 0);
+                fill(255, 200, 0);
+                sphere(size * 0.13);
+                pop();
+            }
+            break;
+        case 'homing':
+            noStroke();
+            // Outer ring
+            fill(255, 50, 50, 180);
+            torus(size * 0.62, size * 0.09);
+            // Inner ring
+            fill(255, 100, 100, 210);
+            torus(size * 0.35, size * 0.08);
+            // Center crosshair dot
+            fill(255, 50, 50);
+            sphere(size * 0.13);
+            // Two cross lines
+            push();
+            fill(255, 80, 80, 160);
+            box(size * 1.3, size * 0.06, size * 0.06);
+            box(size * 0.06, size * 1.3, size * 0.06);
+            pop();
+            break;
+        case 'orbit':
+            noStroke();
+            // Center core
+            fill(140, 255, 180);
+            sphere(size * 0.16);
+            // Two mini wall panels orbiting (sovereign style)
+            for (let i = 0; i < 2; i++) {
+                push();
+                rotateZ(i * PI);
+                translate(size * 0.58, 0, 0);
+                rotateZ(HALF_PI);
+                fill(80, 220, 140, 70);
+                box(size * 0.85, size * 0.2, size * 0.85);
+                fill(140, 255, 180, 210);
+                stroke(100, 220, 150, 200);
+                strokeWeight(1);
+                box(size * 0.85, size * 0.1, size * 0.75);
+                pop();
+            }
+            break;
+        case 'chain':
+            noStroke();
+            // Center orb
+            fill(255, 180, 0);
+            sphere(size * 0.22);
+            // Three bullets radiating outward like a chain reaction
+            for (let i = 0; i < 3; i++) {
+                push();
+                rotateZ(i * TWO_PI / 3);
+                translate(size * 0.55, 0, 0);
+                fill(255, 220, 60);
+                sphere(size * 0.16);
+                // Small trailing connector
+                translate(-size * 0.22, 0, 0);
+                fill(255, 200, 0, 160);
+                rotateZ(HALF_PI);
+                cylinder(size * 0.05, size * 0.38);
+                pop();
+            }
+            break;
+        case 'regen':
+            noStroke();
+            // Blue shield bubble
+            fill(80, 160, 255, 140);
+            sphere(size * 0.72);
+            // White plus sign on top
+            fill(255, 255, 255, 230);
+            push();
+            translate(0, 0, size * 0.05);
+            box(size * 0.18, size * 0.65, size * 0.18);
+            box(size * 0.65, size * 0.18, size * 0.18);
+            pop();
+            break;
+        case null:
+        case undefined:
+            // Mystery crate — brown box with question mark
+            noStroke();
+            fill(140, 90, 40);
+            box(size * 0.95, size * 0.95, size * 0.75);
+            fill(100, 60, 20);
+            box(size * 1.0, size * 0.14, size * 0.14);
+            box(size * 0.14, size * 1.0, size * 0.14);
+            push();
+            translate(0, 0, size * 0.45);
+            rotateX(atan2(camZ, 0.001));
+            fill(255, 220, 50);
+            textFont(font);
+            textSize(size * 1.1);
+            textAlign(CENTER, CENTER);
+            text('?', 0, 0);
+            pop();
+            break;
         default:
             noStroke();
             push();

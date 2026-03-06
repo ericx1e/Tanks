@@ -1,6 +1,8 @@
 
-// const socket = io.connect('localhost:3000');
-const socket = io.connect('https://multiplayer-tanks-3fa3c942a132.herokuapp.com/');
+const socket = io.connect(
+    location.hostname === 'localhost' ? 'localhost:3000'
+    : 'https://multiplayer-tanks-3fa3c942a132.herokuapp.com/'
+);
 
 // Dev console command: giveBuff('speed', 3)
 window.giveBuff = (buff, count = 1) => socket.emit('devGiveBuff', { buff, count });

@@ -10,7 +10,7 @@ function setIO(ioInstance) {
 
 // Initialize AI tanks
 
-const colorList = [[100, 100, 100], [200, 100, 100], [200, 200, 100], [100, 200, 100], [200, 100, 200], [50, 150, 220], [200, 100, 50], [150, 100, 100], [190, 210, 240], [60, 100, 220], [30, 15, 50], [190, 80, 30], [220, 30, 90], [50, 200, 210]]
+const colorList = [[100, 100, 100], [200, 100, 100], [200, 200, 100], [100, 200, 100], [200, 100, 200], [50, 150, 220], [200, 100, 50], [150, 100, 100], [190, 210, 240], [60, 100, 220], [30, 15, 50], [200, 30, 200], [220, 30, 90], [50, 200, 210], [170, 110, 20], [100, 180, 255], [40, 90, 40]]
 
 function initializeAITank(id, x, y, tier, buttonType) {
     let tank = {
@@ -68,12 +68,29 @@ function initializeAITank(id, x, y, tier, buttonType) {
         tank.buffs = { shield: 3 };
     }
     if (tier == 11) {
-        // Cannon — slow, fires exploding cannonballs
+        // Harbinger — heavy spread artillery with ring burst
+        tank.ringCooldown = 100;
+        tank.buffs = { shield: 5 };
     }
     if (tier == 12) {
         tank.flankSide = 1;
         tank.flankTimer = 150;
         tank.buffs = { shield: 1 };
+    }
+    if (tier == 14) {
+        tank.cannonCooldown = 0;
+        tank.buffs = { shield: 1 };
+    }
+    if (tier == 15) {
+        // Sovereign — massive, orbiting orb shield, cannonball artillery
+        tank.orbAngle = 0;
+        tank.buffs = { shield: 4 };
+    }
+    if (tier == 16) {
+        // Phantom Sniper — omniscient, charges up and fires piercing wallPiercing shot
+        tank.sniperCharging = false;
+        tank.sniperChargeTimer = 0;
+        tank.buffs = { shield: 2 };
     }
     if (tier == 13) {
         tank = {
@@ -141,6 +158,39 @@ function updateAITanks(lobby, lobbyCode, players, level, bullets) {
 
 // Update a single AI tank
 function updateAITank(lobby, lobbyCode, tank, level, players, bullets) {
+    // Sovereign orbs — outward-facing shield walls that intercept incoming bullets
+    if (tank.tier === 15) {
+        tank.orbAngle = ((tank.orbAngle || 0) + 0.04) % (Math.PI * 2);
+        const orbRadius = PLAYER_SIZE * 3.2;
+        const wallHalfWidth = PLAYER_SIZE * 1.4;
+        const wallHalfDepth = PLAYER_SIZE * 0.6;
+        // Splice in-place so the bullets array reference stays valid for fireBullet calls below
+        for (let k = bullets.length - 1; k >= 0; k--) {
+            const b = bullets[k];
+            if (b.owner === tank.id) continue;
+            let intercepted = false;
+            for (let r = 0; r < 4; r++) {
+                const a = tank.orbAngle + r * Math.PI / 2;
+                const ox = tank.x + Math.cos(a) * orbRadius;
+                const oy = tank.y + Math.sin(a) * orbRadius;
+                const dx = b.x - ox;
+                const dy = b.y - oy;
+                const along = dx * Math.cos(a) + dy * Math.sin(a);
+                const perp  = -dx * Math.sin(a) + dy * Math.cos(a);
+                if (Math.abs(along) > wallHalfDepth) continue;
+                if (Math.abs(perp) > wallHalfWidth) continue;
+                const inward = Math.cos(b.angle) * Math.cos(a) + Math.sin(b.angle) * Math.sin(a);
+                if (inward >= 0) continue;
+                intercepted = true;
+                io.to(lobbyCode).emit('explosion', {
+                    x: ox, y: oy, z: PLAYER_SIZE * 1.5,
+                    size: PLAYER_SIZE * 0.8, dSize: 1.2, color: [100, 180, 255],
+                });
+                break;
+            }
+            if (intercepted) bullets.splice(k, 1);
+        }
+    }
     let shootingRange = PLAYER_SIZE * 18; // Range for shooting players
     let turretSpeed = 0.12; // Speed of turret rotation
     let fireCooldown = 90; // Frames between shots
@@ -205,11 +255,11 @@ function updateAITank(lobby, lobbyCode, tank, level, players, bullets) {
             fireCooldown = 26;
             turretSpeed = 0.50;
             break;
-        case 11: // Rusher — fast aggressive hunter, rushes the player down
-            speed = 1.5 * AI_TANK_SPEED;
-            shootingRange = PLAYER_SIZE * 20;
-            fireCooldown = 50;
-            turretSpeed = 0.22;
+        case 11: // Harbinger — heavy spread artillery with ring burst
+            speed = 0.85 * AI_TANK_SPEED;
+            shootingRange = PLAYER_SIZE * 22;
+            fireCooldown = 45;
+            turretSpeed = 0.16;
             break;
         case 12: // Intelligence — fast, omniscient, flanks and leads shots
             speed = 1.8 * AI_TANK_SPEED;
@@ -222,6 +272,24 @@ function updateAITank(lobby, lobbyCode, tank, level, players, bullets) {
             shootingRange = PLAYER_SIZE * 20;
             fireCooldown = 90;
             turretSpeed = 0.22;
+            break;
+        case 14: // Cannoneer — slow, fires explosive cannonballs
+            speed = 0.55 * AI_TANK_SPEED;
+            shootingRange = PLAYER_SIZE * 28;
+            fireCooldown = 110;
+            turretSpeed = 0.10;
+            break;
+        case 15: // Sovereign — massive boss, orbiting orb shield, heavy cannonballs
+            speed = 0.45 * AI_TANK_SPEED;
+            shootingRange = PLAYER_SIZE * 32;
+            fireCooldown = 130;
+            turretSpeed = 0.08;
+            break;
+        case 16: // Phantom Sniper — slow, omniscient, charges up piercing shot
+            speed = 0.35 * AI_TANK_SPEED;
+            shootingRange = PLAYER_SIZE * 40;
+            fireCooldown = 220;
+            turretSpeed = 0.06;
             break;
         case 'button':
             speed = 0;
@@ -318,21 +386,6 @@ function updateAITank(lobby, lobbyCode, tank, level, players, bullets) {
 
         tank._dodgeTimer = Math.max(0, (tank._dodgeTimer || 0) - 1);
 
-        // Rusher: charge directly at the nearest player at all times
-        if (tank.tier === 11) {
-            let nearestPlayer = null, nearestDist = Infinity;
-            for (const id in players) {
-                const p = players[id];
-                if (!p.isAI && !p.isDead) {
-                    const d = Math.hypot(p.x - tank.x, p.y - tank.y);
-                    if (d < nearestDist) { nearestDist = d; nearestPlayer = p; }
-                }
-            }
-            if (nearestPlayer) {
-                tank.targetDirection = Math.atan2(nearestPlayer.y - tank.y, nearestPlayer.x - tank.x);
-            }
-        }
-
         // Intelligence Tank: when not dodging, flank the nearest player
         if (tank.tier === 12) {
             let nearestPlayer = null, nearestDist = Infinity;
@@ -350,7 +403,7 @@ function updateAITank(lobby, lobbyCode, tank, level, players, bullets) {
         }
 
         // Linger: steer body toward last known player position
-        if ((tank.targetLostTimer || 0) > 0 && tank.lastKnownTarget && tank.tier !== 11 && tank.tier !== 12) {
+        if ((tank.targetLostTimer || 0) > 0 && tank.lastKnownTarget && tank.tier !== 12) {
             tank.targetDirection = Math.atan2(tank.lastKnownTarget.y - tank.y, tank.lastKnownTarget.x - tank.x);
         }
     }
@@ -367,7 +420,7 @@ function updateAITank(lobby, lobbyCode, tank, level, players, bullets) {
     // }
 
     // Tiers >= 4 can shoot down bullets; exclude laser (5) and cannon (11) which can't usefully intercept
-    if (tank.tier >= 4 && tank.tier !== 5 && tank.tier !== 11 && tank.tier !== 9 && tank.tier !== 13 && shootThreats.length) {
+    if (tank.tier >= 4 && tank.tier !== 5 && tank.tier !== 11 && tank.tier !== 9 && tank.tier !== 13 && tank.tier !== 14 && tank.tier !== 15 && tank.tier !== 16 && shootThreats.length) {
         for (const { bullet } of shootThreats) {
             if (fireAtDangerBullet(lobbyCode, tank, bullet, bullets, level, players)) break;
         }
@@ -432,6 +485,27 @@ function handleAITurret(lobby, lobbyCode, tank, level, players, bullets, shootin
             tank.prevTargetY = nearestPlayer.y;
             playerInSight = { player: nearestPlayer, angle: leadAngle };
         }
+    } else if (tank.tier === 16) {
+        // Phantom Sniper: omniscient — finds nearest player, leads with sniper bullet speed
+        let nearestPlayer = null, nearestDist = Infinity;
+        for (let id in players) {
+            const player = players[id];
+            if (!player.isAI && !player.isDead) {
+                const dist = Math.hypot(player.x - tank.x, player.y - tank.y);
+                if (dist <= shootingRange && dist < nearestDist) {
+                    nearestDist = dist;
+                    nearestPlayer = player;
+                }
+            }
+        }
+        if (nearestPlayer) {
+            const vx = nearestPlayer.x - (tank.prevTargetX ?? nearestPlayer.x);
+            const vy = nearestPlayer.y - (tank.prevTargetY ?? nearestPlayer.y);
+            const leadAngle = computeLeadAngle(tank.x, tank.y, BULLET_SPEED * 3.0, nearestPlayer.x, nearestPlayer.y, vx, vy);
+            tank.prevTargetX = nearestPlayer.x;
+            tank.prevTargetY = nearestPlayer.y;
+            playerInSight = { player: nearestPlayer, angle: leadAngle };
+        }
     } else {
         // Standard LOS detection
         for (let id in players) {
@@ -460,6 +534,37 @@ function handleAITurret(lobby, lobbyCode, tank, level, players, bullets, shootin
         }
     }
 
+    // Harbinger pulse/ring fires regardless of line-of-sight
+    if (tank.tier === 11) {
+        tank.ringCooldown = (tank.ringCooldown ?? 100) - 1;
+        if (tank.ringCooldown <= 0) {
+            // Pulse: capture nearby player bullets — change owner so they damage players, reverse & slow
+            const pulseRadius = TILE_SIZE * 3.5;
+            bullets.forEach(b => {
+                if (b.owner === tank.id) return;
+                const bulletOwner = players[b.owner];
+                if (!bulletOwner || bulletOwner.isAI) return; // only capture player bullets
+                if (Math.hypot(b.x - tank.x, b.y - tank.y) > pulseRadius) return;
+                b.owner = tank.id;
+                b.harbingerCaptured = true;
+                b.speed *= 0.65;
+                // Deflect radially outward from the Harbinger's center
+                b.angle = Math.atan2(b.y - tank.y, b.x - tank.x);
+            });
+            tank.ringCooldown = 100;
+            io.to(lobbyCode).emit('explosion', {
+                x: tank.x, y: tank.y, z: PLAYER_SIZE * 1.5,
+                size: PLAYER_SIZE * 2.5, dSize: 2.5, color: [200, 30, 200],
+                effect: 'harbinger_pulse',
+            });
+            io.to(lobbyCode).emit('explosion', {
+                x: tank.x, y: tank.y, z: PLAYER_SIZE * 1.5,
+                size: PLAYER_SIZE * 2.5, dSize: 2.5, color: [200, 30, 200],
+                effect: 'harbinger_ring',
+            });
+        }
+    }
+
     if (playerInSight) {
         // Record last known position and reset linger timer
         tank.lastKnownTarget = { x: playerInSight.player.x, y: playerInSight.player.y };
@@ -469,6 +574,7 @@ function handleAITurret(lobby, lobbyCode, tank, level, players, bullets, shootin
         if (tank.tier === 9) {
             tank.shieldActive = true;
             tank.shieldFacing = playerInSight.angle;
+            tank.shieldLinger = 90; // persist 1.5s after losing sight
         }
 
         switch (tank.tier) {
@@ -527,9 +633,11 @@ function handleAITurret(lobby, lobbyCode, tank, level, players, bullets, shootin
                     tank.fireCooldown = fireCooldown;
                 }
                 break;
-            case 11: // Cannon — single slow exploding cannonball
+            case 11: // Harbinger — 5-shot spread (pulse/ring handled above, always fires)
                 if (tank.fireCooldown <= 0) {
-                    fireBullet(lobbyCode, tank, tank.turretAngle, bullets, level);
+                    for (let s = -2; s <= 2; s++) {
+                        fireBullet(lobbyCode, tank, tank.turretAngle + s * (Math.PI / 9), bullets, level);
+                    }
                     tank.fireCooldown = fireCooldown;
                 }
                 break;
@@ -557,6 +665,42 @@ function handleAITurret(lobby, lobbyCode, tank, level, players, bullets, shootin
                     tank.laserDuration = 55;
                 }
                 break;
+            case 14: // Cannoneer — fires a heavy cannonball
+                if (tank.fireCooldown <= 0) {
+                    fireBullet(lobbyCode, tank, tank.turretAngle, bullets, level);
+                    tank.fireCooldown = fireCooldown;
+                    io.to(lobbyCode).emit('explosion', {
+                        x: tank.x + Math.cos(tank.turretAngle) * PLAYER_SIZE * 1.5,
+                        y: tank.y + Math.sin(tank.turretAngle) * PLAYER_SIZE * 1.5,
+                        z: PLAYER_SIZE * 1.4, size: BULLET_SIZE * 1.5, dSize: 1, color: [170, 110, 20],
+                    });
+                }
+                break;
+            case 15: // Sovereign — fires twin heavy cannonballs slightly spread
+                if (tank.fireCooldown <= 0) {
+                    fireBullet(lobbyCode, tank, tank.turretAngle - 0.12, bullets, level);
+                    fireBullet(lobbyCode, tank, tank.turretAngle + 0.12, bullets, level);
+                    tank.fireCooldown = fireCooldown;
+                    io.to(lobbyCode).emit('explosion', {
+                        x: tank.x + Math.cos(tank.turretAngle) * PLAYER_SIZE * 2,
+                        y: tank.y + Math.sin(tank.turretAngle) * PLAYER_SIZE * 2,
+                        z: PLAYER_SIZE * 1.4, size: BULLET_SIZE * 2, dSize: 1.5, color: [100, 180, 255],
+                    });
+                }
+                break;
+            case 16: // Phantom Sniper — charge up then fire a piercing wallPiercing shot
+                if (tank.sniperCharging) {
+                    tank.sniperChargeTimer--;
+                    if (tank.sniperChargeTimer <= 0) {
+                        tank.sniperCharging = false;
+                        fireBullet(lobbyCode, tank, tank.turretAngle, bullets, level);
+                        tank.fireCooldown = fireCooldown;
+                    }
+                } else if (tank.fireCooldown <= 0) {
+                    tank.sniperCharging = true;
+                    tank.sniperChargeTimer = 70;
+                }
+                break;
             default:
                 if (tank.fireCooldown <= 0) {
                     fireBullet(lobbyCode, tank, tank.turretAngle, bullets, level); // Single shot for other tiers
@@ -564,7 +708,7 @@ function handleAITurret(lobby, lobbyCode, tank, level, players, bullets, shootin
                 }
                 break;
         }
-        if (!tank._defendingThisFrame) {
+        if (!tank._defendingThisFrame && !tank.sniperCharging) {
             tank.turretAngle = lerpAngle(tank.turretAngle, playerInSight.angle, 0.1);
         }
         tank.turretRotationalVelocity = 0;
@@ -577,8 +721,18 @@ function handleAITurret(lobby, lobbyCode, tank, level, players, bullets, shootin
             tank.isFiringLaser = false;
             tank.laserDuration = 55;
         }
+        if (tank.tier === 16 && tank.sniperCharging) {
+            // Cancel charge if no target in range
+            tank.sniperCharging = false;
+            tank.sniperChargeTimer = 0;
+        }
         if (tank.tier === 9) {
-            tank.shieldActive = false;
+            if ((tank.shieldLinger || 0) > 0) {
+                tank.shieldLinger--;
+                // Keep shield active while lingering
+            } else {
+                tank.shieldActive = false;
+            }
         }
 
         if ((tank.targetLostTimer || 0) > 0) {
@@ -659,15 +813,60 @@ function fireBullet(lobbyCode, tank, angle, bullets, level) {
                 bounces: 0
             }
             break;
-        case 11: // Rusher — fast single bullet
+        case 11: // Harbinger spread bullet — slower, no bounce
             newBullet = {
                 id: bullets.length,
                 owner: player.id,
                 x: bulletX,
                 y: bulletY,
                 angle: angle,
-                speed: 1.4 * BULLET_SPEED,
+                speed: BULLET_SPEED * 0.7,
                 bounces: 0,
+            }
+            break;
+        case 14: // Cannoneer — slow heavy cannonball
+            newBullet = {
+                id: bullets.length,
+                owner: player.id,
+                x: bulletX,
+                y: bulletY,
+                angle: angle,
+                speed: BULLET_SPEED * 1.3,
+                bounces: 0,
+                isCannonball: true,
+                isHeavyCannonball: true,
+                hp: 2,
+                splashRadius: PLAYER_SIZE * 2.5,
+                explosionSize: BULLET_SIZE * 4,
+            }
+            break;
+        case 15: // Sovereign — massive cannonball with large splash
+            newBullet = {
+                id: bullets.length,
+                owner: player.id,
+                x: bulletX,
+                y: bulletY,
+                angle: angle,
+                speed: BULLET_SPEED * 1.5,
+                bounces: 0,
+                isCannonball: true,
+                isHeavyCannonball: true,
+                hp: 3,
+                splashRadius: PLAYER_SIZE * 3.5,
+                explosionSize: BULLET_SIZE * 6,
+            }
+            break;
+        case 16: // Phantom Sniper — fast piercing wallPiercing shot
+            newBullet = {
+                id: bullets.length,
+                owner: player.id,
+                x: bulletX,
+                y: bulletY,
+                angle: angle,
+                speed: BULLET_SPEED * 3.0,
+                bounces: 0,
+                wallPiercing: true,
+                hp: 4,
             }
             break;
         default:

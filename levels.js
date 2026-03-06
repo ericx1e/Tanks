@@ -47,7 +47,7 @@ function loadLevel(lobby, levelNumber) {
       level = allCampaignLevels[levelNumber] || [[]];
       break;
     case 'endless':
-      level = generateBSPLevel(levelNumber, Infinity);
+      level = generateBSPLevel(levelNumber, Infinity, true);
       break;
     case 'arena': {
       const size = Math.max(1, Math.floor(30 * Math.sqrt(Math.max(1, numPlayers))));

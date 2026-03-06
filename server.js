@@ -113,6 +113,7 @@ function createLevel(lobbyCode, levelNumber) {
                 player.flareCooldown = 0;
                 player.sniperShotCooldown = 0;
                 player.barrageCooldown = 0;
+                player.cannonCooldown = 0;
                 player.laserDepleted = false;
                 player.laserEnergy = 100;
             }
@@ -234,9 +235,7 @@ function startTransition(lobbyCode) {
     if (!lobby) return;
     lobby.gameState = "transition";
 
-    // Slightly longer countdown for fresh game starts (players confirm their class choice)
-    const isGameStart = lobby.levelNumber < 0;
-    const duration = isGameStart ? 5 : 3;
+    const duration = 3;
     transitionTimers[lobbyCode] = duration;
 
     const intervalId = setInterval(() => {
@@ -545,6 +544,11 @@ io.on('connection', (socket) => {
                 return;
             }
 
+            const isArtillerist = player.selectedClass === 'artillerist' && lobby.mode !== 'lobby';
+            const explosiveStacks = player.buffs?.explosive || 0;
+            const isExplosive = !isArtillerist && explosiveStacks > 0;
+            // Each explosive stack multiplies splash by +50% (sqrt diminishing returns)
+            const splashMult = explosiveStacks > 0 ? 1 + 0.5 * Math.sqrt(explosiveStacks) : 1;
             bullets.push({
                 id: bullets.length,
                 owner: socket.id,
@@ -552,9 +556,23 @@ io.on('connection', (socket) => {
                 y: bulletY,
                 angle: angle,
                 speed: player.bulletSpeed,
-                bounces: player.bulletBounces,
-                piercing: player.piercing || 0,
+                bounces: isArtillerist ? 0 : player.bulletBounces,
+                isCannonball: isArtillerist || undefined,
+                hasSplash: isExplosive || undefined,
+                hp: isArtillerist ? 2 : 1 + (player.piercing || 0),
+                // Artillerist: explosive stacks grow their cannonball splash
+                // Explosive class: stacks scale the mini-splash radius
+                splashRadius: isArtillerist ? PLAYER_SIZE * 3.5 * splashMult
+                    : isExplosive ? PLAYER_SIZE * 3.5 * splashMult
+                        : undefined,
+                explosionSize: isArtillerist ? BULLET_SIZE * 6 * splashMult
+                    : isExplosive ? BULLET_SIZE * 5 * splashMult
+                        : undefined,
             });
+            if (isArtillerist) {
+                player.vx -= Math.cos(angle) * 2.5;
+                player.vy -= Math.sin(angle) * 2.5;
+            }
 
             io.to(lobbyCode).emit('explosion', {
                 x: bulletX,
@@ -656,14 +674,47 @@ io.on('connection', (socket) => {
             angle: player.turretAngle,
             speed: BULLET_SPEED * 2.5,
             bounces: 0,
-            piercing: 99,
             wallPiercing: true,
+            hp: 5,
             owner: socket.id,
         });
         // Recoil — kick backward from shot direction
         player.vx -= Math.cos(player.turretAngle) * 3.5;
         player.vy -= Math.sin(player.turretAngle) * 3.5;
-        player.sniperShotCooldown = 180; // 3 s
+        player.sniperShotCooldown = 120; // 2 s
+    });
+
+    socket.on('cannonShot', () => {
+        const lobbyCode = socketToLobby[socket.id];
+        if (!lobbyCode) return;
+        const lobby = lobbies[lobbyCode];
+        if (!lobby || lobby.mode === 'lobby') return;
+        const player = lobby.players[socket.id];
+        if (!player || player.isDead || !player.hasCannonAbility) return;
+        if ((player.cannonCooldown || 0) > 0) return;
+
+        const angle = player.turretAngle;
+        const ox = Math.cos(angle) * PLAYER_SIZE * 1.5;
+        const oy = Math.sin(angle) * PLAYER_SIZE * 1.5;
+        lobby.bullets.push({
+            id: lobby.bullets.length,
+            owner: socket.id,
+            x: player.x + ox,
+            y: player.y + oy,
+            angle,
+            speed: BULLET_SPEED * 2.8,
+            bounces: 1,
+            isCannonball: true,
+            isHeavyCannonball: true,
+            hp: 2,
+            splashRadius: PLAYER_SIZE * 6,
+            explosionSize: BULLET_SIZE * 10,
+        });
+        player.cannonCooldown = 600; // 10 s
+        io.to(lobbyCode).emit('explosion', {
+            x: player.x + ox, y: player.y + oy,
+            z: PLAYER_SIZE * 1.4, size: BULLET_SIZE * 1.5, dSize: 1, color: [230, 120, 30],
+        });
     });
 
     socket.on('companionRally', (data) => {
@@ -766,8 +817,13 @@ function fireLaser(lobby, lobbyCode, tank, players, level, isActive) {
                     if (true || lobby.mode !== 'lobby' || player.isAI) // No player damage in lobby
 
                         // Apply damage to the player
-                        if (player.shield) {
+                        if ((player.laserShieldCooldown || 0) > 0) {
+                            // Cooldown active — block all laser damage (prevents insta-kill after shield strip)
+                            done = true;
+                            break;
+                        } else if (player.shield) {
                             player.shield = false; // Remove shield instead of killing
+                            player.laserShieldCooldown = 30; // 0.5 s cooldown to prevent immediate follow-up damage
                         } else if (!player.spawnGrace) {
                             player.isDead = true;
                             if (player.isAI && player.tier !== 'chest' && !tank.isAI) {
@@ -775,6 +831,11 @@ function fireLaser(lobby, lobbyCode, tank, players, level, isActive) {
                             }
                             if (!player.isAI) {
                                 player.deaths = (player.deaths || 0) + 1;
+                            }
+
+                            // Chest killed by laser — spawn drop (same as bullet kill)
+                            if (player.tier === 'chest' && !tank.isAI) {
+                                spawnDrop(lobbyCode, player.x, player.y, tank);
                             }
 
                             let color = player.id; // indicates human player hit
@@ -843,14 +904,14 @@ function fireLaser(lobby, lobbyCode, tank, players, level, isActive) {
 }
 
 function explodeCannonball(lobby, lobbyCode, bullet, bulletsToRemove, i) {
-    const splashRadius = PLAYER_SIZE * 3.5;
+    const splashRadius = bullet.splashRadius || PLAYER_SIZE * 4;
     const players = lobby.players;
     for (const playerId in players) {
         const player = players[playerId];
         if (player.isDead) continue;
         if (Math.hypot(player.x - bullet.x, player.y - bullet.y) > splashRadius) continue;
+        const owner = players[bullet.owner];
         if (lobby.mode !== 'lobby' || player.isAI) {
-            const owner = players[bullet.owner];
             if (!owner || lobby.friendlyFire || lobby.mode === 'arena' || (player.isAI !== owner.isAI)) {
                 if (player.shield) {
                     player.shield = false;
@@ -863,34 +924,96 @@ function explodeCannonball(lobby, lobbyCode, bullet, bulletsToRemove, i) {
                     if (!player.isAI) {
                         player.deaths = (player.deaths || 0) + 1;
                     }
-                    if ((lobby.mode === 'survival' || lobby.mode === 'endless') && player.tier !== 'chest' && player.isAI) {
+                    if (lobby.mode === 'survival' && player.tier !== 'chest' && player.isAI) {
                         lobby.tankKills++;
-                        if (lobby.tankKills % 5 === 0) spawnDrop(lobbyCode, player.x, player.y);
+                        if (lobby.tankKills % 5 === 0) spawnDrop(lobbyCode, player.x, player.y, owner);
                     }
                 }
             }
         }
-        if (player.tier === 'chest') spawnDrop(lobbyCode, player.x, player.y);
+        if (player.tier === 'chest') spawnDrop(lobbyCode, player.x, player.y, owner);
     }
+    // Destroy interior walls in splash radius (cannoneer heavy cannon only)
+    if (bullet.isHeavyCannonball && lobby.level) {
+        const level = lobby.level;
+        const rows = level.length;
+        const cols = level[0]?.length || 0;
+        const minRow = Math.max(1, Math.floor((bullet.y - splashRadius) / TILE_SIZE));
+        const maxRow = Math.min(rows - 2, Math.ceil((bullet.y + splashRadius) / TILE_SIZE));
+        const minCol = Math.max(1, Math.floor((bullet.x - splashRadius) / TILE_SIZE));
+        const maxCol = Math.min(cols - 2, Math.ceil((bullet.x + splashRadius) / TILE_SIZE));
+        const destroyedTiles = [];
+        for (let r = minRow; r <= maxRow; r++) {
+            for (let c = minCol; c <= maxCol; c++) {
+                if (!level[r] || level[r][c] <= 0) continue;
+                const wx = (c + 0.5) * TILE_SIZE;
+                const wy = (r + 0.5) * TILE_SIZE;
+                if (Math.hypot(wx - bullet.x, wy - bullet.y) > splashRadius) continue;
+                level[r][c] = 0;
+                destroyedTiles.push({ row: r, col: c });
+            }
+        }
+        if (destroyedTiles.length > 0) {
+            io.to(lobbyCode).emit('tilesUpdated', destroyedTiles);
+        }
+    }
+
+    // Destroy bullets caught in the explosion
+    lobby.bullets.forEach((b, j) => {
+        if (j === i || bulletsToRemove.has(j)) return;
+        if (Math.hypot(b.x - bullet.x, b.y - bullet.y) <= splashRadius) {
+            bulletsToRemove.add(j);
+        }
+    });
     bulletsToRemove.add(i);
     io.to(lobbyCode).emit('explosion', {
         x: bullet.x,
         y: bullet.y,
         z: PLAYER_SIZE * 1.4 - BULLET_SIZE,
-        size: BULLET_SIZE * 6,
-        dSize: 2,
-        color: [190, 80, 30],
+        size: bullet.explosionSize || BULLET_SIZE * 4,
+        dSize: 1.5,
     });
 }
 
 function updateBullets(lobby, lobbyCode) {
     const bulletsToRemove = new Set();
+    const hitThisTick = new Set(); // bullets that already took damage this tick (prevents multi-hit in one frame)
     const bullets = lobby.bullets
     const players = lobby.players
     const level = lobby.level
     if (!level) return;
 
     bullets.forEach((bullet, i) => {
+        // Homing: curve player bullets toward nearest AI enemy
+        if (!bullet.isCannonball && !bullet.wallPiercing && !bullet.isTurretBullet && !bullet.hasSplash) {
+            const owner = players[bullet.owner];
+            if (owner && !owner.isAI && (owner.buffs?.homing || 0) > 0) {
+                let nearestDist = TILE_SIZE * 10, nearestAngle = null;
+                for (const pid in players) {
+                    const t = players[pid];
+                    if (!t.isAI || t.isDead) continue;
+                    const d = Math.hypot(t.x - bullet.x, t.y - bullet.y);
+                    if (d < nearestDist) { nearestDist = d; nearestAngle = Math.atan2(t.y - bullet.y, t.x - bullet.x); }
+                }
+                if (nearestAngle !== null) {
+                    const turnRate = 0.05 * Math.sqrt(owner.buffs.homing);
+                    let diff = nearestAngle - bullet.angle;
+                    while (diff > Math.PI) diff -= 2 * Math.PI;
+                    while (diff < -Math.PI) diff += 2 * Math.PI;
+                    bullet.angle += Math.sign(diff) * Math.min(Math.abs(diff), turnRate);
+                }
+            }
+        }
+
+        // Tick slowed timer
+        if (bullet.slowed) {
+            bullet.slowedTimer--;
+            if (bullet.slowedTimer <= 0) {
+                bullet.speed = bullet._baseSpeed;
+                bullet.slowed = false;
+            }
+        }
+
         // Predict the new position of the bullet
         const nextX = bullet.x + Math.cos(bullet.angle) * bullet.speed;
         const nextY = bullet.y + Math.sin(bullet.angle) * bullet.speed;
@@ -927,20 +1050,6 @@ function updateBullets(lobby, lobbyCode) {
             if (bullet.x < 0 || bullet.y < 0 || bullet.x > mapW || bullet.y > mapH) {
                 bulletsToRemove.add(i); return;
             }
-            // Destroy enemy bullets it passes through
-            bullets.forEach((other, j) => {
-                if (j === i || bulletsToRemove.has(j)) return;
-                if (other.owner === bullet.owner) return;
-                if (Math.hypot(other.x - bullet.x, other.y - bullet.y) <= BULLET_SIZE * 2.5) {
-                    bulletsToRemove.add(j);
-                    io.to(lobbyCode).emit('explosion', {
-                        x: other.x, y: other.y,
-                        z: PLAYER_SIZE * 1.4 - BULLET_SIZE,
-                        size: BULLET_SIZE * 2, dSize: 1,
-                        color: [255, 200, 80],
-                    });
-                }
-            });
         } else {
             if (horizontalCollision && verticalCollision) {
                 const dx = Math.cos(bullet.angle), dy = Math.sin(bullet.angle);
@@ -973,28 +1082,28 @@ function updateBullets(lobby, lobbyCode) {
 
         // Check for collisions with other bullets
         bullets.forEach((otherBullet, j) => {
-            if (i !== j && !bulletsToRemove.has(j)) {
-                // Turret bullets don't collide with the same player's normal bullets
-                if (bullet.owner === otherBullet.owner &&
-                    (bullet.isTurretBullet || otherBullet.isTurretBullet)) return;
+            if (bulletsToRemove.has(i) || hitThisTick.has(i)) return;
+            if (i === j || bulletsToRemove.has(j) || hitThisTick.has(j)) return;
+            // Same owner bullets never collide with each other
+            if (bullet.owner === otherBullet.owner) return;
+            const dx = bullet.x - otherBullet.x;
+            const dy = bullet.y - otherBullet.y;
+            if (dx * dx + dy * dy >= (2 * BULLET_SIZE) * (2 * BULLET_SIZE)) return;
 
-                const dx = bullet.x - otherBullet.x;
-                const dy = bullet.y - otherBullet.y;
-                const distance = Math.sqrt(dx * dx + dy * dy);
+            // Generic hp system: each bullet deals 1 damage to the other
+            bullet.hp = (bullet.hp ?? 1) - 1;
+            otherBullet.hp = (otherBullet.hp ?? 1) - 1;
+            if (bullet.hp <= 0) bulletsToRemove.add(i); else hitThisTick.add(i);
+            if (otherBullet.hp <= 0) bulletsToRemove.add(j); else hitThisTick.add(j);
 
-                // If the distance is less than the sum of their radii, they collide
-                if (distance < 2 * BULLET_SIZE) {
-                    bulletsToRemove.add(i); // Mark both bullets for removal
-                    bulletsToRemove.add(j);
-                    io.to(lobbyCode).emit('explosion', {
-                        x: (bullet.x + otherBullet.x) / 2,
-                        y: (bullet.y + otherBullet.y) / 2,
-                        z: PLAYER_SIZE * 1.4 - BULLET_SIZE,
-                        size: BULLET_SIZE,
-                        dSize: 0.5
-                    });
-                }
-            }
+            const cannonInvolved = bullet.isCannonball || bullet.isHeavyCannonball || otherBullet.isCannonball || otherBullet.isHeavyCannonball;
+            io.to(lobbyCode).emit('explosion', {
+                x: (bullet.x + otherBullet.x) / 2,
+                y: (bullet.y + otherBullet.y) / 2,
+                z: PLAYER_SIZE * 1.4 - BULLET_SIZE,
+                size: cannonInvolved ? BULLET_SIZE * 2.5 : BULLET_SIZE,
+                dSize: cannonInvolved ? 1.0 : 0.5,
+            });
         });
 
         // Check for bullet interception by Shield Tanks (tier 9 AI) or Guardian players
@@ -1060,12 +1169,18 @@ function updateBullets(lobby, lobbyCode) {
         for (let playerId in players) {
             const player = players[playerId];
             if ((bullet.isTurretBullet || bullet.skipOwner) && playerId === bullet.owner) continue;
+            // wallPiercing bullets from AI tanks (e.g. Phantom Sniper) pass through other AI tanks
+            if (bullet.wallPiercing && player.isAI) {
+                const bOwner = players[bullet.owner];
+                if (bOwner && bOwner.isAI) continue;
+            }
             if (/*playerId !== bullet.owner && */isCollidingWithPlayer(nextX, nextY, player)) {
-                if (bullet.isCannonball) {
+                if (bullet.isCannonball || bullet.hasSplash) {
                     explodeCannonball(lobby, lobbyCode, bullet, bulletsToRemove, i);
                     break;
                 }
-                if (!bullet.piercing) bulletsToRemove.add(i); // Remove bullet (piercing bullets persist)
+                bullet.hp = (bullet.hp ?? 1) - 1;
+                if (bullet.hp <= 0) bulletsToRemove.add(i);
 
                 let color = player.id; // indicates human player hit
                 let effect = null;
@@ -1098,6 +1213,32 @@ function updateBullets(lobby, lobbyCode) {
                             player.isDead = true;
                             if (player.isAI && player.tier !== 'chest' && owner && !owner.isAI) {
                                 owner.kills = (owner.kills || 0) + 1;
+                                // Chain buff: fire bullets at nearby living enemies
+                                const chainStacks = owner.buffs?.chain || 0;
+                                if (chainStacks > 0 && !bullet.isChainBullet) {
+                                    const chainCount = chainStacks;
+                                    const targets = Object.values(players)
+                                        .filter(t => t.isAI && !t.isDead && t !== player)
+                                        .sort((a, b) => Math.hypot(a.x - player.x, a.y - player.y) - Math.hypot(b.x - player.x, b.y - player.y))
+                                        .slice(0, chainCount);
+                                    for (const target of targets) {
+                                        const cAngle = Math.atan2(target.y - player.y, target.x - player.x);
+                                        bullets.push({
+                                            id: bullets.length + Math.random(),
+                                            owner: bullet.owner,
+                                            x: player.x,
+                                            y: player.y,
+                                            angle: cAngle,
+                                            speed: owner.bulletSpeed || BULLET_SPEED,
+                                            bounces: 0,
+                                            hp: 1,
+                                            isChainBullet: true,
+                                            hasSplash: bullet.hasSplash,
+                                            splashRadius: bullet.splashRadius,
+                                            explosionSize: bullet.explosionSize,
+                                        });
+                                    }
+                                }
                             }
                             if (!player.isAI) {
                                 player.deaths = (player.deaths || 0) + 1;
@@ -1109,15 +1250,16 @@ function updateBullets(lobby, lobbyCode) {
                 if (player.tier == 'chest') {
                     const bulletOwner = lobby.players[bullet.owner];
                     if (!bulletOwner || !bulletOwner.isAI) {
-                        spawnDrop(lobbyCode, player.x, player.y);
+                        spawnDrop(lobbyCode, player.x, player.y, bulletOwner);
                     }
                 }
 
-                if (lobby.mode === 'survival' || lobby.mode === 'endless') {
+                if (lobby.mode === 'survival') {
                     if (player.tier !== 'chest' && player.isAI) {
                         lobby.tankKills++;
                         if (lobby.tankKills % 5 === 0) {
-                            spawnDrop(lobbyCode, player.x, player.y);
+                            const bulletOwner = lobby.players[bullet.owner];
+                            spawnDrop(lobbyCode, player.x, player.y, bulletOwner);
                         }
                     }
                 }
@@ -1154,7 +1296,7 @@ function updateBullets(lobby, lobbyCode) {
                         }
                     }
                 }
-                if (bullet.piercing > 0) { bullet.piercing--; continue; }
+                if (bullet.hp > 0) continue; // still has hp, pierces to next target
                 break;
             }
         }
@@ -1246,7 +1388,7 @@ function handlePlayerMovement(lobby, player) {
 // Layout: 4 dummies in row 2, 3 dummies in row 8 (world coords = (col+0.5)*TILE_SIZE)
 const CLASS_DUMMY_POSITIONS = [
     { col: 1, row: 2 }, { col: 3, row: 2 }, { col: 5, row: 2 }, { col: 7, row: 2 },
-    { col: 2, row: 8 }, { col: 4, row: 8 }, { col: 6, row: 8 },
+    { col: 2, row: 8 }, { col: 4, row: 8 }, { col: 6, row: 8 }, { col: 8, row: 8 },
 ];
 
 function hexToRgb(hex) {
@@ -1270,6 +1412,7 @@ function applyClassBuffs(player) {
     player.hasFlareAbility = cls.special === 'flare';
     player.hasBarrageAbility = cls.special === 'barrage';
     player.hasScopeAbility = cls.special === 'scope';
+    player.hasCannonAbility = cls.special === 'cannon';
     player.laserEnergy = 100;
     player.laserDepleted = false;
     player.shieldEnergy = 100;
@@ -1281,6 +1424,7 @@ function applyClassBuffs(player) {
     player.barrageShots = 0;
     player.barrageTick = 0;
     player.sniperShotCooldown = 0;
+    player.cannonCooldown = 0;
 }
 
 function resetBuffs(player) {
@@ -1295,6 +1439,11 @@ function resetBuffs(player) {
         visionRange: 0,
         piercing: 0,
         autoTurret: 0,
+        explosive: 0,  // bullets deal small splash on player hit
+        // homing: 0,     // bullets curve toward nearest enemy
+        regen: 0,      // passively restores shield over time
+        chain: 0,      // killing an enemy fires chain bullets at nearby enemies
+        orbit: 0,      // orbiting orbs that intercept incoming bullets
         currentFireCooldown: 0,
     };
 }
@@ -1353,6 +1502,22 @@ function updatePlayerStats(lobby, player) {
             player.shield = true;
             player.buffs.shield--;
         }
+    }
+
+    if ((player.laserShieldCooldown || 0) > 0) {
+        player.laserShieldCooldown--;
+    }
+
+    // Regen: passively restore shield after a cooldown period
+    if ((player.buffs.regen || 0) > 0 && !player.shield && !player.spawnGrace) {
+        const period = Math.round(900 / Math.sqrt(player.buffs.regen)); // ~15s, 10s, 7.5s...
+        player._regenTimer = ((player._regenTimer ?? period) - 1);
+        if (player._regenTimer <= 0) {
+            player.shield = true;
+            player._regenTimer = period;
+        }
+    } else if (player.shield) {
+        player._regenTimer = null; // reset so next cycle starts fresh
     }
 
     if (player.buffs.bulletSpeed > 0) {
@@ -1429,6 +1594,7 @@ function updatePlayerStats(lobby, player) {
     if (player.hasFlareAbility && player.flareCooldown > 0) player.flareCooldown--;
     if (player.hasBarrageAbility && player.barrageCooldown > 0) player.barrageCooldown--;
     if (player.hasScopeAbility && player.sniperShotCooldown > 0) player.sniperShotCooldown--;
+    if (player.hasCannonAbility && player.cannonCooldown > 0) player.cannonCooldown--;
     if (player.selectedClass === 'engineer' && (player.companionSpawnCooldown || 0) > 0) {
         player.companionSpawnCooldown--;
     }
@@ -1694,7 +1860,7 @@ function updateBarrages(lobby, lobbyCode) {
             angle,
             speed: (player.bulletSpeed || BULLET_SPEED) * 2,
             bounces: 0,
-            piercing: 0,
+            hp: 1 + (player.piercing || 0),
             owner: playerId,
             skipOwner: true,
         });
@@ -1793,7 +1959,7 @@ function updateAutoTurrets(lobby, lobbyCode) {
                 angle,
                 speed: player.bulletSpeed || BULLET_SPEED,
                 bounces: 0,
-                piercing: player.piercing || 0,
+                hp: 1 + (player.piercing || 0),
                 isTurretBullet: true,
             });
             io.to(lobbyCode).emit('explosion', { x: bx, y: by, z: PLAYER_SIZE * 2.4, size: BULLET_SIZE / 2 });
@@ -1832,36 +1998,80 @@ function spawnSurvivalBots(lobbyCode, n) {
     io.to(lobbyCode).emit('updatePlayers', lobby.players);
 }
 
-function spawnDrop(lobbyCode, x, y) {
+function updatePlayerOrbits(lobby, lobbyCode) {
+    const players = lobby.players;
+    const bullets = lobby.bullets;
+    for (const playerId in players) {
+        const player = players[playerId];
+        if (player.isAI || player.isDead) continue;
+        const stacks = player.buffs?.orbit || 0;
+        if (stacks === 0) continue;
+
+        player.orbAngle = ((player.orbAngle || 0) + 0.035) % (Math.PI * 2);
+        const numOrbs = stacks;
+        const orbRadius = PLAYER_SIZE * 2.4;
+        const hitRadius = PLAYER_SIZE * 0.72;
+
+        for (let k = bullets.length - 1; k >= 0; k--) {
+            const b = bullets[k];
+            if (b.owner === playerId || b.isTurretBullet) continue;
+            let intercepted = false;
+            for (let r = 0; r < numOrbs; r++) {
+                const a = player.orbAngle + r * (Math.PI * 2 / numOrbs);
+                const ox = player.x + Math.cos(a) * orbRadius;
+                const oy = player.y + Math.sin(a) * orbRadius;
+                if (Math.hypot(b.x - ox, b.y - oy) < hitRadius) {
+                    intercepted = true;
+                    io.to(lobbyCode).emit('explosion', {
+                        x: ox, y: oy, z: PLAYER_SIZE,
+                        size: PLAYER_SIZE * 0.6, dSize: 0.9, color: [80, 220, 140],
+                    });
+                    break;
+                }
+            }
+            if (intercepted) bullets.splice(k, 1);
+        }
+    }
+}
+
+// Weighted buff selection based on the player's current stacks.
+// Buffs that are less useful in large quantities get reduced weight after each stack.
+function pickWeightedBuff(player) {
+    const b = player?.buffs || {};
+    const w = (base, stacks, decay = 2) => Math.max(0.5, base - stacks * decay);
+    const weights = {
+        speed: 5,
+        fireRate: 5,
+        bulletSpeed: 5,
+        shield: 5,
+        piercing: 5,
+        autoTurret: 5,
+        explosive: 5,
+        homing: 5,
+        bulletBounces: w(5, b.bulletBounces || 0, 2),   // rapidly less useful after 2
+        multiShot: w(5, b.multiShot || 0, 1.5),
+        visionRange: w(5, b.visionRange || 0, 2),
+        regen: w(5, b.regen || 0, 2),
+        chain: 5,
+        orbit: w(5, b.orbit || 0, 0.8), // diminishing — each extra orb is very powerful
+    };
+    const entries = Object.entries(weights);
+    const total = entries.reduce((s, [, v]) => s + v, 0);
+    let r = Math.random() * total;
+    for (const [buff, v] of entries) {
+        r -= v;
+        if (r <= 0) return buff;
+    }
+    return 'speed';
+}
+
+function spawnDrop(lobbyCode, x, y, player) {
     const lobby = lobbies[lobbyCode];
     if (!lobby) return;
 
-    // Define possible buffs
-    const buffs = [
-        'speed',
-        'fireRate',
-        'bulletSpeed',
-        'bulletBounces',
-        'shield',
-        'multiShot',
-        'visionRange',
-        'piercing',
-        'autoTurret',
-    ];
-
-    // Randomly select a buff
-    const buff = buffs[Math.floor(Math.random() * buffs.length)];
-
-    // Add drop to the lobby
-    lobby.drops.push({
-        id: uuidv4(),
-        x: x,
-        y: y,
-        buff: buff
-    });
-
-    // Notify clients of the new drop
-    // io.to(lobbyCode).emit('spawnDrop', lobby.drops);
+    // Pick buff at spawn time so it's visible on the ground
+    const buff = pickWeightedBuff(player);
+    lobby.drops.push({ id: uuidv4(), x, y, buff });
     io.to(lobbyCode).emit('updateDrops', lobby.drops);
 }
 
@@ -1872,48 +2082,25 @@ function handlePlayerPickup(lobbyCode, playerId) {
     const player = lobby.players[playerId];
     if (!player || player.isDead) return;
 
-    // Check for nearby drops
     const remainingDrops = [];
     if (!lobby.drops) return;
     for (let i = 0; i < lobby.drops.length; i++) {
-        const drop = lobby.drops[i]
+        const drop = lobby.drops[i];
         const dx = drop.x - player.x;
         const dy = drop.y - player.y;
         const distance = Math.sqrt(dx * dx + dy * dy);
 
         if (distance < PLAYER_SIZE * 2) {
-            // Apply the buff to the player and update their buff counts
-            if (!player.buffs) {
-                player.buffs = {
-                    speed: 0,
-                    fireRate: 0,
-                    shield: 0,
-                    bulletSpeed: 0,
-                    multiShot: 0,
-                    visionRange: 0,
-                    piercing: 0,
-                };
+            const buff = drop.buff;
+            if (buff && player.buffs && player.buffs.hasOwnProperty(buff)) {
+                player.buffs[buff] += 1;
             }
-
-            // Update the player's buff count
-            if (player.buffs.hasOwnProperty(drop.buff)) {
-                player.buffs[drop.buff] += 1;
-            }
-
-            // Send updated player buffs to the client
             io.to(lobbyCode).emit('updatePlayerBuffs', { playerId: player.id, buffs: player.buffs });
-
-
-            // lobby.drops.splice(i, 1); // Remove the drop
-
-            // Notify the client about the pickup
-            // io.to(lobbyCode).emit('pickup', { playerId, buff: drop.buff });
         } else {
             remainingDrops.push(drop);
         }
     }
 
-    // Update the drops in the lobby
     lobby.drops = remainingDrops;
     io.to(lobbyCode).emit('updateDrops', lobby.drops);
 }
@@ -1942,11 +2129,9 @@ setInterval(() => {
             }
         }
 
-        lobby.lasers.forEach((laser, index) => {
+        lobby.lasers = lobby.lasers.filter(laser => {
             laser.duration--;
-            if (laser.duration <= 0) {
-                lobby.lasers.splice(index, 1);
-            }
+            return laser.duration > 0;
         });
 
         io.to(lobbyCode).emit('updateLasers', lobby.lasers);
@@ -1962,6 +2147,7 @@ setInterval(() => {
         }
 
         updateAutoTurrets(lobby, lobbyCode);
+        updatePlayerOrbits(lobby, lobbyCode);
         updateBarrages(lobby, lobbyCode);
         updateFlares(lobby, lobbyCode);
         updateCompanions(lobby, lobbyCode);
@@ -1985,16 +2171,10 @@ setInterval(() => {
         if (lobby.mode == 'survival') {
             updateAITanks(lobby, lobbyCode, lobby.players, lobby.level, lobby.bullets)
 
+            // Remove dead AI tanks (player stats already updated in the main loop above)
             for (const playerId in lobby.players) {
-                const player = lobby.players[playerId]
-                if (!player.isAI) {
-                    handlePlayerPickup(lobbyCode, playerId);
-                }
-                updatePlayerStats(lobby, player);
-                autoSpawnCompanionIfReady(lobby, playerId, player);
-
-                if (player.isAI && player.isDead) {
-                    delete lobby.players[playerId]
+                if (lobby.players[playerId].isAI && lobby.players[playerId].isDead) {
+                    delete lobby.players[playerId];
                 }
             }
         }

@@ -28,7 +28,7 @@ const TANK_CLASSES = [
     {
         id: 'sniper', name: 'Sniper', label: '[SN]',
         description: 'Piercing high-velocity shots. Hold right-click to scope; release to fire a wall-piercing shot that passes through everything.',
-        buffs: { bulletSpeed: 4, piercing: 2, visionRange: 1, speed: -3, maxBullets: -4, fireRate: -4 },
+        buffs: { bulletSpeed: 4, piercing: 2, visionRange: 2, speed: -3, maxBullets: -4, fireRate: -4 },
         special: 'scope',
         color: '#ff9f43',
     },
@@ -59,6 +59,13 @@ const TANK_CLASSES = [
         buffs: { multiShot: 2, fireRate: 3, bulletSpeed: -2, bulletBounces: -1 },
         special: 'barrage',
         color: '#a29bfe',
+    },
+    {
+        id: 'artillerist', name: 'Artillerist', label: '[AT]',
+        description: 'Every shot is a mini-shell that explodes on impact with a small blast. Right-click to launch a heavy cannonball with a massive explosion radius.',
+        buffs: { fireRate: -2, speed: -1, maxBullets: -2 },
+        special: 'cannon',
+        color: '#e67e22',
     },
 ];
 
