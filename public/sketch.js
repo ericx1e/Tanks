@@ -107,12 +107,15 @@ let engineerRallyTimer = 0;
 const keysHeld = {};
 window.addEventListener('keydown', e => { keysHeld[e.code] = true; });
 window.addEventListener('keyup', e => { delete keysHeld[e.code]; });
-window.addEventListener('blur', () => {
+function clearAllInput() {
     Object.keys(keysHeld).forEach(k => delete keysHeld[k]);
     guardianShielding = false;
     laserChanneling = false;
     sniperPanning = false;
-});
+    socket.emit('playerInput', { keys: { w: false, a: false, s: false, d: false }, turretAngle: 0, shieldActive: false });
+}
+window.addEventListener('blur', clearAllInput);
+document.addEventListener('visibilitychange', () => { if (document.hidden) clearAllInput(); });
 // Raw mouseup to reliably clear right-click state when other buttons are also held
 window.addEventListener('mouseup', e => {
     if (e.button === 2) {
@@ -234,6 +237,13 @@ socket.on('updateLasers', (serverLasers) => {
     lasers = serverLasers;
 });
 
+let chainRays = [];
+socket.on('chainRays', (data) => {
+    for (const t of data.targets) {
+        chainRays.push({ x1: data.x, y1: data.y, x2: t.x, y2: t.y, life: 18 });
+    }
+});
+
 socket.on('tilesUpdated', (tiles) => {
     for (const { row, col } of tiles) {
         if (level[row]) level[row][col] = 0;
@@ -259,7 +269,7 @@ socket.on('updateLevel', (data) => {
 socket.on('explosion', (data) => {
     createExplosion(data.x, data.y, data.z, data.size, data.color, data.effect)
     if (data.size > BULLET_SIZE + 1) {
-        triggerScreenShake(data.size / 7, Math.min(14, Math.round(data.size / 4)));
+        triggerScreenShake(data.size / 12, Math.min(8, Math.round(data.size / 7)));
     }
     // explosions.push({
     //     x: data.x,
@@ -302,6 +312,7 @@ socket.on('nextLevel', () => {
     companions = {};
     spectateTargetId = null;
     killIndicators = [];
+    chainRays = [];
     skipKillDetection = true;
 });
 
@@ -677,6 +688,7 @@ function draw() {
     drawBullets();
 
     drawLasers();
+    drawChainRays();
 
     drawExplosions();
 
@@ -737,21 +749,22 @@ function draw() {
                 points: calculateVision(c.x, c.y, level, companionVisionRadius, resolution),
             }));
         const scopeExtra = sniperScopeVision ? [sniperScopeVision] : [];
+        // When spectating, anchor the fog plane to the camera so it covers the full view
+        const fogX = isSpectating ? spectateCamX : targetTank.x;
+        const fogY = isSpectating ? spectateCamY : targetTank.y;
         if (gameMode == 'lobby') {
-            const maxDistance = TILE_SIZE * 100;
             const visiblePoints = calculateVision(targetTank.x, targetTank.y, level, targetTank.visionDistance, resolution);
-            drawFogOfWar(targetTank.x, targetTank.y, visiblePoints);
+            drawFogOfWar(fogX, fogY, visiblePoints, targetTank.x, targetTank.y);
         } else if (gameMode == 'arena') {
             const visiblePoints = calculateVision(targetTank.x, targetTank.y, level, targetTank.visionDistance, resolution);
-            drawFogOfWar(targetTank.x, targetTank.y, visiblePoints);
+            drawFogOfWar(fogX, fogY, visiblePoints, targetTank.x, targetTank.y);
             if (!skipMarkExplored) {
                 const sharedVision = [...calculateSharedVision(players, level, resolution), ...scopeExtra];
                 for (const { x: vx, y: vy, points } of sharedVision) markExplored(vx, vy, points);
             }
         } else {
-            const maxDistance = TILE_SIZE * 5;
             const visiblePoints = [...calculateSharedVision(players, level, resolution), ...flareVision, ...companionVision, ...scopeExtra];
-            drawSharedFogOfWar(targetTank.x, targetTank.y, visiblePoints);
+            drawSharedFogOfWar(fogX, fogY, visiblePoints);
             if (!skipMarkExplored) {
                 for (const { x: vx, y: vy, points } of visiblePoints) markExplored(vx, vy, points);
             }
@@ -901,7 +914,7 @@ function drawBuffHUD() {
     const gl = drawingContext;
     gl.disable(gl.DEPTH_TEST);
 
-    const buffTypes = ['speed', 'fireRate', 'bulletSpeed', 'bulletBounces', 'shield', 'multiShot', 'visionRange', 'piercing', 'autoTurret', 'explosive', 'homing', 'regen', 'chain', 'orbit'];
+    const buffTypes = ['speed', 'fireRate', 'bulletSpeed', 'bulletBounces', 'shield', 'multiShot', 'visionRange', 'piercing', 'autoTurret', 'explosive', 'homing', 'regen', 'chain', 'orbit', 'haste'];
     let slotY = -VH + margin + 10;
 
     for (const buffType of buffTypes) {
@@ -1190,6 +1203,41 @@ function drawClassBadge() {
             text('SCOPE COOLDOWN', badgeW / 2, -6);
         }
         pop();
+    } else if (cls.special === 'pillage') {
+        const charge = myTank.pillageCharge || 0;
+        const ready = charge >= 100;
+        const overflow = Math.max(0, charge - 100);
+        const basePct = Math.min(1, charge / 100);
+        const overflowPct = Math.min(1, overflow / 100);
+        const pulse = 200 + 35 * sin(frameCount * 0.12);
+
+        push();
+        translate(x, y + 28, 0);
+        noStroke();
+        rectMode(CORNER);
+        // Track
+        fill(15, 30, 15, 180);
+        rect(0, 0, badgeW, 6, 3);
+        // Base fill
+        fill(ready ? color(80, 220, 120, pulse) : color(40, 130, 70, 160));
+        rect(0, 0, badgeW * basePct, 6, 3);
+        // Overflow layer — bright white-green shimmer on top
+        if (overflow > 0) {
+            fill(200, 255, 210, 180 + 60 * sin(frameCount * 0.25));
+            rect(0, 0, badgeW * overflowPct, 6, 3);
+        }
+        noStroke();
+        textFont(font);
+        textSize(9);
+        textAlign(CENTER, CENTER);
+        if (ready) {
+            fill(100, 255, 140, pulse);
+            text(`RIGHT-CLICK: PILLAGE  ${Math.floor(charge)}%`, badgeW / 2, -6);
+        } else {
+            fill(80, 170, 100, 160);
+            text(`PILLAGE  ${Math.floor(charge)}%`, badgeW / 2, -6);
+        }
+        pop();
     }
 
     // Regen buff progress bar — shown below ability bar when shield is regenerating
@@ -1201,7 +1249,7 @@ function drawClassBadge() {
         const nearReady = pct > 0.85;
 
         // Determine Y: place below ability bar if one is shown, otherwise at same slot
-        const hasAbilityBar = cls && ['laser', 'shield', 'flare', 'barrage', 'companion', 'cannon', 'scope'].includes(cls.special);
+        const hasAbilityBar = cls && ['laser', 'shield', 'flare', 'barrage', 'companion', 'cannon', 'scope', 'pillage'].includes(cls.special);
         const regenY = y + (hasAbilityBar ? 46 : 28);
 
         push();
@@ -1719,20 +1767,11 @@ function drawTank(tank, isSelf) {
                         pop();
                     }
                     break;
-                case 15: // Sovereign — twin heavy barrels
-                    drawBarrel(size / 3.5);
-                    drawBarrel(-size / 3.5);
+                case 15: // Sovereign — single massive barrel
+                    drawBarrel(0, 1.4, 1.8);
                     break;
-                case 16: // Phantom Sniper — extra-long single barrel (standard + connected extension)
-                    drawBarrel(0);
-                    push();
-                    // Standard barrel tip ends at -1.25*size (center at -0.5*size, half-length 0.75*size)
-                    // Extension center must be at -1.25 - 0.40 = -1.65*size to connect flush
-                    translate(0, -size * 1.65, 0);
-                    fill(...tank.color, cloakAlpha);
-                    noStroke();
-                    cylinder(size * 0.09, size * 0.80);
-                    pop();
+                case 16: // Phantom Sniper — extra-long barrel
+                    drawBarrel(0, 2.0, 0.8);
                     break;
                 case 5:
                 case 13: // Laser tanks — wide emitter barrel
@@ -1771,9 +1810,7 @@ function drawTank(tank, isSelf) {
                 strokeWeight(1);
                 box(size * 0.55, size * 0.7, size * 0.55); // turret body
                 noStroke();
-                translate(0, -size * 0.55, 0); // barrel base
-                fill(200, 120, 0);
-                box(size * 0.2, size * 0.65, size * 0.2); // barrel
+                drawBarrel(0, 0.7, 0.8, tank.autoTurretAngle, [255, 160, 0]);
                 pop();
             }
         }
@@ -1999,59 +2036,65 @@ function drawTank(tank, isSelf) {
         pop();
     }
 
-    function drawBarrel(x) {
-        push();
-        translate(x, -size / 2, 0)
+    function drawBarrel(x, lengthMult = 1, widthMult = 1, angle = tank.turretAngle, color = null) {
+        const barrelRadius = 0.15 * size * widthMult;
+        const barrelLength = 1.5 * size * lengthMult;
+        const tipRadius = 0.20 * size * widthMult;
+        // Keep the back of the barrel fixed at the turret edge regardless of length
+        const centerY = 0.25 * size - 0.75 * size * lengthMult;
 
-        push();
-        const cameraPos = new p5.Vector(camX, camY, camZ); // Camera position
-        const angle = tank.turretAngle;
-        const barrelX = tank.x + (1.5 * size) * Math.cos(angle);
-        const barrelY = tank.y + (1.5 * size) * Math.sin(angle);
-        const barrelZ = size; // Height of the barrel
-        const barrelPos = new p5.Vector(barrelX, barrelY, barrelZ);
-        let viewDirection = p5.Vector.sub(cameraPos, barrelPos).normalize(); // Direction from bullet to camera
-        // Offset the outline behind the bullet
-        let offset = viewDirection.mult(-2); // Move slightly behind the bullet
-        rotateZ(-(PI / 2 + tank.turretAngle));
-        translate(offset.x, offset.y, offset.z); // Apply the offset
-        rotateZ(PI / 2 + tank.turretAngle);
+        const cameraPos = new p5.Vector(camX, camY, camZ);
 
-        fill(0, 0, 0, cloakAlpha); // Semi-transparent black for the outline
-        cylinder(0.15 * size + 1, 1.5 * size);
-
-        pop();
-
-        cylinder(0.15 * size, 1.5 * size);
-
-        push();
-        translate(0, -3 / 4 * size, 0)
-
-        push();
-        const barrelTipX = tank.x + (1.5 * size) * Math.cos(tank.turretAngle);
-        const barrelTipY = tank.y - 5 / 4 * size + (1.5 * size) * Math.sin(tank.turretAngle);
-        const barrelTipZ = size; // Height of the barrel
-        const barrelTipPos = new p5.Vector(barrelTipX, barrelTipY, barrelTipZ);
-        viewDirection = p5.Vector.sub(cameraPos, barrelTipPos).normalize(); // Direction from bullet to camera
-        // Offset the outline behind the bullet
-        offset = viewDirection.mult(-2); // Move slightly behind the bullet
-        rotateZ(-(PI / 2 + tank.turretAngle));
-        translate(offset.x, offset.y, offset.z); // Apply the offset
-        rotateZ(PI / 2 + tank.turretAngle);
-
-        fill(0, 0, 0, cloakAlpha); // Semi-transparent black for the outline
-        cylinder(0.20 * size + 1, 0.20 * size + 1.9);
-
-        if (tank.isAI) {
-            fill(...tank.color, cloakAlpha); // AI tank color
-        } else {
-            fill(isSelf ? 'blue' : 'red'); // Differentiate self vs others
+        // Helper: compute camera-facing outline offset at a world position
+        function outlineOffset(wx, wy) {
+            const pos = new p5.Vector(wx, wy, size);
+            return p5.Vector.sub(cameraPos, pos).normalize().mult(-2);
         }
 
-        cylinder(0.05 * size + 1, 0.20 * size + 2);
+        push();
+        translate(x, centerY, 0);
+
+        // Barrel body outline
+        push();
+        const bodyOffset = outlineOffset(
+            tank.x + (1.5 * size) * Math.cos(angle),
+            tank.y + (1.5 * size) * Math.sin(angle)
+        );
+        rotateZ(-(PI / 2 + angle));
+        translate(bodyOffset.x, bodyOffset.y, bodyOffset.z);
+        rotateZ(PI / 2 + angle);
+        fill(0, 0, 0, cloakAlpha);
+        cylinder(barrelRadius + 1, barrelLength);
         pop();
 
-        cylinder(0.20 * size);
+        cylinder(barrelRadius, barrelLength);
+
+        // Tip flare
+        push();
+        translate(0, -0.75 * size * lengthMult, 0);
+
+        push();
+        const tipOffset = outlineOffset(
+            tank.x + (1.5 * size) * Math.cos(angle),
+            tank.y - 5 / 4 * size + (1.5 * size) * Math.sin(angle)
+        );
+        rotateZ(-(PI / 2 + angle));
+        translate(tipOffset.x, tipOffset.y, tipOffset.z);
+        rotateZ(PI / 2 + angle);
+        fill(0, 0, 0, cloakAlpha);
+        cylinder(tipRadius + 1, 0.20 * size + 1.9);
+        pop();
+
+        if (color !== null) {
+            fill(...color, cloakAlpha);
+        } else if (tank.isAI) {
+            fill(...tank.color, cloakAlpha);
+        } else {
+            fill(isSelf ? 'blue' : 'red');
+        }
+        cylinder(tipRadius * 0.25 + 1, 0.20 * size + 2);
+
+        cylinder(tipRadius);
         pop();
         pop();
     }
@@ -2799,6 +2842,7 @@ function mousePressed() {
         }
         if (myTank && myTank.selectedClass === 'gunner') socket.emit('barrageStart');
         if (myTank && myTank.selectedClass === 'artillerist') socket.emit('cannonShot');
+        if (myTank && myTank.selectedClass === 'assault' && (myTank.pillageCharge || 0) >= 100) socket.emit('activatePillage');
         if (myTank && myTank.selectedClass === 'engineer') {
             const cx = camX, cy = camY, cz = camZ;
             const tx = cx + sniperPanX;
@@ -2854,7 +2898,7 @@ function mouseDragged() {
 function drawBullets() {
     bullets.forEach((bullet, i) => {
         const { x, y } = getBulletDisplayPos(i);
-        const bz = bullet.isTurretBullet ? PLAYER_SIZE * 2.4 : PLAYER_SIZE * 1.4 - BULLET_SIZE;
+        const bz = bullet.bulletZ ?? (bullet.isTurretBullet ? PLAYER_SIZE * 2.4 : PLAYER_SIZE * 1.4 - BULLET_SIZE);
 
         push();
         translate(x, y, bz);
@@ -2973,6 +3017,26 @@ function drawLasers() {
     });
 }
 
+function drawChainRays() {
+    chainRays = chainRays.filter(r => r.life > 0);
+    for (const r of chainRays) {
+        const t = r.life / 18;
+        const alpha = t * 220;
+        const dx = r.x2 - r.x1;
+        const dy = r.y2 - r.y1;
+        const len = Math.sqrt(dx * dx + dy * dy);
+        const angle = atan2(dy, dx) + HALF_PI;
+        push();
+        noStroke();
+        translate((r.x1 + r.x2) / 2, (r.y1 + r.y2) / 2, PLAYER_SIZE * 1.6);
+        rotateZ(angle);
+        fill(255, 220, 50, alpha);
+        cylinder(2.5 * t, len);
+        pop();
+        r.life--;
+    }
+}
+
 function drawFlares() {
     for (const flare of flares) {
         push();
@@ -3068,9 +3132,40 @@ function drawCompanions() {
         fill(200, 165, 30);
         box(s, 0.9 * s, s);
         noStroke();
-        translate(0, -s * 0.85, 0);
-        fill(180, 140, 20);
-        box(s * 0.3, s * 0.85, s * 0.3);
+        // Barrel using camera-facing outline
+        {
+            const bLen = s * 1.5, bRad = s * 0.15, centerY = 0.25 * s - 0.75 * s;
+            const cam = new p5.Vector(camX, camY, camZ);
+            const bx = c.x + s * 1.5 * Math.cos(c.turretAngle);
+            const by = c.y + s * 1.5 * Math.sin(c.turretAngle);
+            const off = p5.Vector.sub(cam, new p5.Vector(bx, by, s)).normalize().mult(-2);
+            push();
+            translate(0, centerY, 0);
+            push();
+            rotateZ(-(PI / 2 + c.turretAngle));
+            translate(off.x, off.y, off.z);
+            rotateZ(PI / 2 + c.turretAngle);
+            fill(0, 0, 0);
+            cylinder(bRad + 1, bLen);
+            pop();
+            fill(180, 140, 20);
+            cylinder(bRad, bLen);
+            // Tip with outline
+            push();
+            translate(0, -0.75 * s, 0);
+            push();
+            const tipOff = p5.Vector.sub(cam, new p5.Vector(bx, by, s)).normalize().mult(-2);
+            rotateZ(-(PI / 2 + c.turretAngle));
+            translate(tipOff.x, tipOff.y, tipOff.z);
+            rotateZ(PI / 2 + c.turretAngle);
+            fill(0, 0, 0);
+            cylinder(bRad * 1.1 + 1, s * 0.15 + 1.9);
+            pop();
+            fill(200, 165, 30);
+            cylinder(bRad * 1.1, s * 0.15 + 2);
+            pop();
+            pop();
+        }
         pop();
         pop();
     }

@@ -152,7 +152,9 @@ function _drawVisionPolygon(cx, cy, originX, originY, viewX, viewY, points) {
     fogLayer.endShape(CLOSE);
 }
 
-function drawFogOfWar(playerX, playerY, visiblePoints) {
+function drawFogOfWar(playerX, playerY, visiblePoints, originX, originY) {
+    originX = originX !== undefined ? originX : playerX;
+    originY = originY !== undefined ? originY : playerY;
     push();
     translate(playerX, playerY, WALL_HEIGHT - 25 + 1);
 
@@ -164,7 +166,7 @@ function drawFogOfWar(playerX, playerY, visiblePoints) {
 
     const cx = fogLayer.width / 2;
     const cy = fogLayer.height / 2;
-    _drawVisionPolygon(cx, cy, playerX, playerY, playerX, playerY, visiblePoints);
+    _drawVisionPolygon(cx, cy, originX, originY, playerX, playerY, visiblePoints);
 
     texture(fogLayer);
     noStroke();

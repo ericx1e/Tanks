@@ -14,8 +14,9 @@ const AI_TANK_SPEED = 1.5; // Speed of AI tanks
 const TANK_CLASSES = [
     {
         id: 'assault', name: 'Assault', label: '[A]',
-        description: 'Balanced fighter — the pure baseline. No trade-offs.',
+        description: 'Balanced fighter. Right-click to spend pillage charge for a random buff — charge builds on kills and surges on level completion.',
         buffs: {},
+        special: 'pillage',
         color: '#6ea8ff',
     },
     {
@@ -42,7 +43,7 @@ const TANK_CLASSES = [
     {
         id: 'engineer', name: 'Engineer', label: '[E]',
         description: 'Deploys auto-turrets that intercept bullets and enemies. Starts with a companion mini-tank; right-click to spawn another every 30 seconds.',
-        buffs: { autoTurret: 5, speed: -2, maxBullets: -3 },
+        buffs: { autoTurret: 5, speed: -1, visionRange: -1, maxBullets: -3 },
         special: 'companion',
         color: '#ffd32a',
     },
@@ -62,8 +63,8 @@ const TANK_CLASSES = [
     },
     {
         id: 'artillerist', name: 'Artillerist', label: '[AT]',
-        description: 'Every shot is a mini-shell that explodes on impact with a small blast. Right-click to launch a heavy cannonball with a massive explosion radius.',
-        buffs: { fireRate: -2, speed: -1, maxBullets: -2 },
+        description: 'Starts with pierce and explosive — every bullet pierces and explodes. Right-click to launch a heavy cannonball with a massive blast radius.',
+        buffs: { piercing: 1, explosive: 1, speed: -1 },
         special: 'cannon',
         color: '#e67e22',
     },

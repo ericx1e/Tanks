@@ -226,6 +226,31 @@ function drawDrop(x, y, angle, buff) {
             box(size * 0.06, size * 1.3, size * 0.06);
             pop();
             break;
+        case 'haste': {
+            noStroke();
+            rotateY(PI / 5);
+            const h = size * 0.55;
+            fill(255, 215, 30, 220);
+            // Upper cone: base at top (+Z), tip at waist (Z=0)
+            push();
+            translate(0, 0, h / 2);
+            rotateX(-HALF_PI);
+            cone(size * 0.5, h);
+            pop();
+            // Lower cone: base at bottom (-Z), tip at waist (Z=0)
+            push();
+            translate(0, 0, -h / 2);
+            rotateX(HALF_PI);
+            cone(size * 0.5, h);
+            pop();
+            // Waist ring
+            fill(255, 245, 120, 230);
+            push();
+            rotateX(HALF_PI);
+            torus(size * 0.08, size * 0.05);
+            pop();
+            break;
+        }
         case 'orbit':
             noStroke();
             // Center core

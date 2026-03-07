@@ -94,6 +94,8 @@ function createLevel(lobbyCode, levelNumber) {
                 player.barrageActive = false;
                 player.barrageShots = 0;
                 player.classBuffsApplied = false; // reset so next game start applies them once
+                player.pillageCharge = 0;
+                player._lastPillageKills = 0;
             }
             // player.shield = true; // Start with shield
             let spawnX = spawn.x;
@@ -234,6 +236,13 @@ function startTransition(lobbyCode) {
     const lobby = lobbies[lobbyCode];
     if (!lobby) return;
     lobby.gameState = "transition";
+
+    // Assault pillage: +55 charge on level completion
+    for (const player of Object.values(lobby.players)) {
+        if (!player.isAI && player.selectedClass === 'assault') {
+            player.pillageCharge = (player.pillageCharge || 0) + 55 / (player.hasteMult || 1);
+        }
+    }
 
     const duration = 3;
     transitionTimers[lobbyCode] = duration;
@@ -503,7 +512,7 @@ io.on('connection', (socket) => {
                 return;
             }
         } else {
-            const playerBulletCount = bullets.filter(bullet => bullet.owner === player.id && !bullet.isTurretBullet).length;
+            const playerBulletCount = bullets.filter(bullet => bullet.owner === player.id && !bullet.isTurretBullet && !bullet.isChainBullet).length;
 
             // Enforce the 6-bullet limit
             if (playerBulletCount >= player.maxBullets) {
@@ -544,9 +553,8 @@ io.on('connection', (socket) => {
                 return;
             }
 
-            const isArtillerist = player.selectedClass === 'artillerist' && lobby.mode !== 'lobby';
             const explosiveStacks = player.buffs?.explosive || 0;
-            const isExplosive = !isArtillerist && explosiveStacks > 0;
+            const isExplosive = explosiveStacks > 0;
             // Each explosive stack multiplies splash by +50% (sqrt diminishing returns)
             const splashMult = explosiveStacks > 0 ? 1 + 0.5 * Math.sqrt(explosiveStacks) : 1;
             bullets.push({
@@ -556,23 +564,12 @@ io.on('connection', (socket) => {
                 y: bulletY,
                 angle: angle,
                 speed: player.bulletSpeed,
-                bounces: isArtillerist ? 0 : player.bulletBounces,
-                isCannonball: isArtillerist || undefined,
+                bounces: player.bulletBounces,
                 hasSplash: isExplosive || undefined,
-                hp: isArtillerist ? 2 : 1 + (player.piercing || 0),
-                // Artillerist: explosive stacks grow their cannonball splash
-                // Explosive class: stacks scale the mini-splash radius
-                splashRadius: isArtillerist ? PLAYER_SIZE * 3.5 * splashMult
-                    : isExplosive ? PLAYER_SIZE * 3.5 * splashMult
-                        : undefined,
-                explosionSize: isArtillerist ? BULLET_SIZE * 6 * splashMult
-                    : isExplosive ? BULLET_SIZE * 5 * splashMult
-                        : undefined,
+                hp: 1 + (player.piercing || 0),
+                splashRadius: isExplosive ? PLAYER_SIZE * 2.5 * splashMult : undefined,
+                explosionSize: isExplosive ? BULLET_SIZE * 3.5 * splashMult : undefined,
             });
-            if (isArtillerist) {
-                player.vx -= Math.cos(angle) * 2.5;
-                player.vy -= Math.sin(angle) * 2.5;
-            }
 
             io.to(lobbyCode).emit('explosion', {
                 x: bulletX,
@@ -623,7 +620,7 @@ io.on('connection', (socket) => {
         if (!isLaserClass && !isDevLaser) return;
         if (isLaserClass) {
             if (player.laserDepleted || (player.laserEnergy || 0) <= 0) return;
-            player.laserEnergy -= 4;
+            player.laserEnergy -= 4 * (player.hasteMult || 1);
             player.laserChanneling = true;
             if (player.laserEnergy <= 0) {
                 player.laserEnergy = 0;
@@ -656,7 +653,7 @@ io.on('connection', (socket) => {
             visionRadius: 4 * TILE_SIZE,
             stopped: false,
         });
-        player.flareCooldown = 300;
+        player.flareCooldown = Math.round(300 * (player.hasteMult || 1));
     });
 
     socket.on('sniperShot', () => {
@@ -675,13 +672,14 @@ io.on('connection', (socket) => {
             speed: BULLET_SPEED * 2.5,
             bounces: 0,
             wallPiercing: true,
+            allyPassthrough: true,
             hp: 5,
             owner: socket.id,
         });
         // Recoil — kick backward from shot direction
         player.vx -= Math.cos(player.turretAngle) * 3.5;
         player.vy -= Math.sin(player.turretAngle) * 3.5;
-        player.sniperShotCooldown = 120; // 2 s
+        player.sniperShotCooldown = Math.round(120 * (player.hasteMult || 1)); // 2 s base
     });
 
     socket.on('cannonShot', () => {
@@ -706,11 +704,12 @@ io.on('connection', (socket) => {
             bounces: 1,
             isCannonball: true,
             isHeavyCannonball: true,
+            allyPassthrough: true,
             hp: 2,
             splashRadius: PLAYER_SIZE * 6,
             explosionSize: BULLET_SIZE * 10,
         });
-        player.cannonCooldown = 600; // 10 s
+        player.cannonCooldown = Math.round(600 * (player.hasteMult || 1)); // 10 s base
         io.to(lobbyCode).emit('explosion', {
             x: player.x + ox, y: player.y + oy,
             z: PLAYER_SIZE * 1.4, size: BULLET_SIZE * 1.5, dSize: 1, color: [230, 120, 30],
@@ -730,6 +729,7 @@ io.on('connection', (socket) => {
         for (const comp of Object.values(lobby.companions)) {
             if (comp.ownerId === socket.id && !comp.isDead) {
                 comp.rallyPoint = { x: data.x, y: data.y };
+                comp.pathWaypoints = null; // replan toward rally
             }
         }
         player.lastRallyPoint = { x: data.x, y: data.y };
@@ -751,6 +751,23 @@ io.on('connection', (socket) => {
         player.barrageActive = true;
         player.barrageShots = 16;
         player.barrageTick = 0;
+    });
+
+    socket.on('activatePillage', () => {
+        const lobbyCode = socketToLobby[socket.id];
+        if (!lobbyCode) return;
+        const lobby = lobbies[lobbyCode];
+        if (!lobby || lobby.mode === 'lobby') return;
+        const player = lobby.players[socket.id];
+        if (!player || player.isDead || player.selectedClass !== 'assault') return;
+        if ((player.pillageCharge || 0) < 100) return;
+
+        const buff = pickWeightedBuff(player);
+        if (player.buffs && player.buffs.hasOwnProperty(buff)) {
+            player.buffs[buff] += 1;
+        }
+        player.pillageCharge = Math.max(0, player.pillageCharge - 100);
+        io.to(lobbyCode).emit('updatePlayerBuffs', { playerId: player.id, buffs: player.buffs });
     });
 
     socket.on('createPlayer', () => {
@@ -793,6 +810,53 @@ io.on('connection', (socket) => {
     });
 });
 
+// Fires chain bullets from a kill site on behalf of owner; chainDepth limits recursion to 2
+function triggerChain(lobby, lobbyCode, owner, killedPlayer, sourceDepth) {
+    const chainStacks = owner.buffs?.chain || 0;
+    if (chainStacks <= 0) return;
+    const depth = sourceDepth || 0;
+    if (depth >= 2) return;
+
+    const players = lobby.players;
+    const bullets = lobby.bullets;
+    const explosiveStacks = owner.buffs?.explosive || 0;
+    const isExplosive = explosiveStacks > 0;
+    const splashMult = explosiveStacks > 0 ? 1 + 0.5 * Math.sqrt(explosiveStacks) : 1;
+    const chainCount = chainStacks + 1;
+
+    const targets = Object.values(players)
+        .filter(t => t.isAI && !t.isDead && t.id !== killedPlayer.id)
+        .sort((a, b) => Math.hypot(a.x - killedPlayer.x, a.y - killedPlayer.y) - Math.hypot(b.x - killedPlayer.x, b.y - killedPlayer.y))
+        .slice(0, chainCount);
+
+    for (const target of targets) {
+        const cAngle = Math.atan2(target.y - killedPlayer.y, target.x - killedPlayer.x);
+        bullets.push({
+            id: bullets.length + Math.random(),
+            owner: owner.id,
+            x: killedPlayer.x,
+            y: killedPlayer.y,
+            angle: cAngle,
+            speed: (owner.bulletSpeed || BULLET_SPEED) * 1.6,
+            bounces: owner.bulletBounces || 0,
+            hp: 1 + (owner.piercing || 0),
+            isChainBullet: true,
+            chainDepth: depth + 1,
+            hasSplash: isExplosive || undefined,
+            splashRadius: isExplosive ? PLAYER_SIZE * 2.5 * splashMult : undefined,
+            explosionSize: isExplosive ? BULLET_SIZE * 3.5 * splashMult : undefined,
+        });
+    }
+
+    if (targets.length > 0) {
+        io.to(lobbyCode).emit('chainRays', {
+            x: killedPlayer.x,
+            y: killedPlayer.y,
+            targets: targets.map(t => ({ x: t.x, y: t.y })),
+        });
+    }
+}
+
 function fireLaser(lobby, lobbyCode, tank, players, level, isActive) {
     const angle = tank.turretAngle;
     let laserEnd = { x: tank.x, y: tank.y };
@@ -828,6 +892,7 @@ function fireLaser(lobby, lobbyCode, tank, players, level, isActive) {
                             player.isDead = true;
                             if (player.isAI && player.tier !== 'chest' && !tank.isAI) {
                                 tank.kills = (tank.kills || 0) + 1;
+                                triggerChain(lobby, lobbyCode, tank, player, 0);
                             }
                             if (!player.isAI) {
                                 player.deaths = (player.deaths || 0) + 1;
@@ -919,7 +984,10 @@ function explodeCannonball(lobby, lobbyCode, bullet, bulletsToRemove, i) {
                     player.isDead = true;
                     if (player.isAI && player.tier !== 'chest') {
                         const killer = players[bullet.owner];
-                        if (killer && !killer.isAI) killer.kills = (killer.kills || 0) + 1;
+                        if (killer && !killer.isAI) {
+                            killer.kills = (killer.kills || 0) + 1;
+                            triggerChain(lobby, lobbyCode, killer, player, bullet.chainDepth || 0);
+                        }
                     }
                     if (!player.isAI) {
                         player.deaths = (player.deaths || 0) + 1;
@@ -958,9 +1026,10 @@ function explodeCannonball(lobby, lobbyCode, bullet, bulletsToRemove, i) {
         }
     }
 
-    // Destroy bullets caught in the explosion
+    // Destroy bullets caught in the explosion (never destroy owner's own bullets)
     lobby.bullets.forEach((b, j) => {
         if (j === i || bulletsToRemove.has(j)) return;
+        if (b.owner === bullet.owner) return;
         if (Math.hypot(b.x - bullet.x, b.y - bullet.y) <= splashRadius) {
             bulletsToRemove.add(j);
         }
@@ -1205,6 +1274,9 @@ function updateBullets(lobby, lobbyCode) {
                 if (lobby.mode !== 'lobby' || player.isAI) {// No player damage in lobby
                     const owner = lobby.players[bullet.owner];
 
+                    // Sniper pierce shot and cannonball pass through allies
+                    if (bullet.allyPassthrough && !player.isAI && owner && !owner.isAI) break;
+
                     if (!owner || lobby.friendlyFire || lobby.mode === 'arena' || (player.isAI !== owner.isAI))
                         // Apply damage to the player
                         if (player.shield) {
@@ -1214,31 +1286,7 @@ function updateBullets(lobby, lobbyCode) {
                             if (player.isAI && player.tier !== 'chest' && owner && !owner.isAI) {
                                 owner.kills = (owner.kills || 0) + 1;
                                 // Chain buff: fire bullets at nearby living enemies
-                                const chainStacks = owner.buffs?.chain || 0;
-                                if (chainStacks > 0 && !bullet.isChainBullet) {
-                                    const chainCount = chainStacks;
-                                    const targets = Object.values(players)
-                                        .filter(t => t.isAI && !t.isDead && t !== player)
-                                        .sort((a, b) => Math.hypot(a.x - player.x, a.y - player.y) - Math.hypot(b.x - player.x, b.y - player.y))
-                                        .slice(0, chainCount);
-                                    for (const target of targets) {
-                                        const cAngle = Math.atan2(target.y - player.y, target.x - player.x);
-                                        bullets.push({
-                                            id: bullets.length + Math.random(),
-                                            owner: bullet.owner,
-                                            x: player.x,
-                                            y: player.y,
-                                            angle: cAngle,
-                                            speed: owner.bulletSpeed || BULLET_SPEED,
-                                            bounces: 0,
-                                            hp: 1,
-                                            isChainBullet: true,
-                                            hasSplash: bullet.hasSplash,
-                                            splashRadius: bullet.splashRadius,
-                                            explosionSize: bullet.explosionSize,
-                                        });
-                                    }
-                                }
+                                triggerChain(lobby, lobbyCode, owner, player, bullet.chainDepth || 0);
                             }
                             if (!player.isAI) {
                                 player.deaths = (player.deaths || 0) + 1;
@@ -1444,6 +1492,7 @@ function resetBuffs(player) {
         regen: 0,      // passively restores shield over time
         chain: 0,      // killing an enemy fires chain bullets at nearby enemies
         orbit: 0,      // orbiting orbs that intercept incoming bullets
+        haste: 0,      // reduces all ability cooldowns and energy drain
         currentFireCooldown: 0,
     };
 }
@@ -1520,6 +1569,16 @@ function updatePlayerStats(lobby, player) {
         player._regenTimer = null; // reset so next cycle starts fresh
     }
 
+    // Pillage charge: assault earns 10 charge per kill
+    if (player.selectedClass === 'assault' && lobby.mode !== 'lobby') {
+        const newKills = player.kills || 0;
+        const prevKills = player._lastPillageKills || 0;
+        if (newKills > prevKills) {
+            player.pillageCharge = (player.pillageCharge || 0) + (newKills - prevKills) * 10 / (player.hasteMult || 1);
+        }
+        player._lastPillageKills = newKills;
+    }
+
     if (player.buffs.bulletSpeed > 0) {
         player.bulletSpeedMultiplier *= 1 + 0.12 * Math.sqrt(player.buffs.bulletSpeed);
     } else if (player.buffs.bulletSpeed < 0) {
@@ -1547,6 +1606,10 @@ function updatePlayerStats(lobby, player) {
     player.piercing = player.buffs.piercing > 0
         ? Math.ceil(Math.sqrt(player.buffs.piercing)) : 0;
 
+    // Haste: reduces all ability cooldowns and energy drain (sqrt diminishing returns)
+    const hastStacks = player.buffs.haste || 0;
+    player.hasteMult = hastStacks > 0 ? 1 / (1 + 0.25 * Math.sqrt(hastStacks)) : 1;
+
     // maxBullets buff: additive to base value, clamped to minimum 1
     if (player.buffs.maxBullets !== 0) {
         player.maxBullets = Math.max(1, player.maxBullets + player.buffs.maxBullets);
@@ -1572,21 +1635,21 @@ function updatePlayerStats(lobby, player) {
     // Laser energy: drains via fireLaser events, recharges passively
     if (player.hasLaserAbility) {
         player.laserChanneling = false; // reset each tick; fireLaser handler re-sets if fired
-        player.laserEnergy = Math.min(100, (player.laserEnergy || 0) + 0.15);
+        player.laserEnergy = Math.min(100, (player.laserEnergy || 0) + 0.15 / (player.hasteMult || 1));
         if (player.laserDepleted && player.laserEnergy >= 25) player.laserDepleted = false;
     }
 
     // Shield energy: drains while active, recharges while inactive
     if (player.hasShieldAbility) {
         if (player.shieldActive) {
-            player.shieldEnergy -= 0.6;
+            player.shieldEnergy -= 0.6 * (player.hasteMult || 1);
             if (player.shieldEnergy <= 0) {
                 player.shieldEnergy = 0;
                 player.shieldDepleted = true;
                 player.shieldActive = false;
             }
         } else {
-            player.shieldEnergy = Math.min(100, (player.shieldEnergy || 0) + 0.5);
+            player.shieldEnergy = Math.min(100, (player.shieldEnergy || 0) + 0.5 / (player.hasteMult || 1));
             if (player.shieldDepleted && player.shieldEnergy >= 25) player.shieldDepleted = false;
         }
     }
@@ -1683,7 +1746,46 @@ function spawnCompanionForPlayer(lobby, playerId, player, spawnX, spawnY) {
         wanderTimer: 0,
     };
     player.companionCount = idx + 1;
-    player.companionSpawnCooldown = 1800;
+    player.companionSpawnCooldown = Math.round(1800 * (player.hasteMult || 1));
+}
+
+function bfsPath(level, startX, startY, endX, endY) {
+    const rows = level.length;
+    const cols = level[0]?.length || 0;
+    const sr = Math.floor(startY / TILE_SIZE);
+    const sc = Math.floor(startX / TILE_SIZE);
+    const er = Math.floor(endY / TILE_SIZE);
+    const ec = Math.floor(endX / TILE_SIZE);
+    if (sr === er && sc === ec) return [];
+    const parent = new Map();
+    const startKey = `${sr},${sc}`;
+    parent.set(startKey, null);
+    const queue = [[sr, sc]];
+    const dirs = [[-1,0],[1,0],[0,-1],[0,1],[-1,-1],[-1,1],[1,-1],[1,1]];
+    let found = false;
+    while (queue.length > 0) {
+        const [r, c] = queue.shift();
+        if (r === er && c === ec) { found = true; break; }
+        for (const [dr, dc] of dirs) {
+            const nr = r + dr, nc = c + dc;
+            if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) continue;
+            if (level[nr][nc] > 0) continue;
+            if (dr !== 0 && dc !== 0 && (level[r][nc] > 0 || level[nr][c] > 0)) continue;
+            const key = `${nr},${nc}`;
+            if (parent.has(key)) continue;
+            parent.set(key, `${r},${c}`);
+            queue.push([nr, nc]);
+        }
+    }
+    if (!found) return null;
+    const path = [];
+    let cur = `${er},${ec}`;
+    while (cur && cur !== startKey) {
+        const [r, c] = cur.split(',').map(Number);
+        path.unshift({ x: (c + 0.5) * TILE_SIZE, y: (r + 0.5) * TILE_SIZE });
+        cur = parent.get(cur);
+    }
+    return path;
 }
 
 function updateCompanions(lobby, lobbyCode) {
@@ -1705,48 +1807,67 @@ function updateCompanions(lobby, lobbyCode) {
             if (d < nearestDist) { nearestDist = d; nearestEnemy = p; }
         }
 
-        let targetX, targetY;
+        // --- Pathfinding via BFS waypoints ---
+        // Determine the final destination
+        let destX, destY;
         if (companion.rallyPoint) {
-            targetX = companion.rallyPoint.x;
-            targetY = companion.rallyPoint.y;
-            if (Math.hypot(targetX - companion.x, targetY - companion.y) < 20) companion.rallyPoint = null;
-        } else {
-            // Wander: pick a new random target direction every 90–180 frames, smoothly lerp toward it
-            companion.wanderTimer = (companion.wanderTimer || 0) - 1;
-            if (companion.wanderTimer <= 0) {
-                companion.wanderTargetAngle = Math.random() * Math.PI * 2;
-                companion.wanderTimer = 90 + Math.floor(Math.random() * 90);
+            destX = companion.rallyPoint.x;
+            destY = companion.rallyPoint.y;
+            if (Math.hypot(destX - companion.x, destY - companion.y) < 20) {
+                companion.rallyPoint = null;
+                companion.pathWaypoints = null;
             }
-            companion.wanderAngle = lerpAngle(companion.wanderAngle, companion.wanderTargetAngle, 0.025);
-
-            // Target: orbit loosely around owner; tighter orbit when an enemy is nearby
-            const wanderRadius = nearestEnemy ? 45 : 90;
-            const wanderX = owner.x + Math.cos(companion.wanderAngle) * wanderRadius;
-            const wanderY = owner.y + Math.sin(companion.wanderAngle) * wanderRadius;
-
-            // Clamp wander target so companion can't stray too far from owner
-            const maxLeash = 4 * TILE_SIZE;
-            const leashDx = wanderX - owner.x;
-            const leashDy = wanderY - owner.y;
-            const leashDist = Math.hypot(leashDx, leashDy);
-            targetX = leashDist > maxLeash ? owner.x + (leashDx / leashDist) * maxLeash : wanderX;
-            targetY = leashDist > maxLeash ? owner.y + (leashDy / leashDist) * maxLeash : wanderY;
+        } else {
+            // Pick a new wander destination when needed
+            companion.wanderTimer = (companion.wanderTimer || 0) - 1;
+            if (companion.wanderTimer <= 0 || !companion.wanderDest) {
+                const maxLeash = nearestEnemy ? 2 : 3;
+                let picked = null;
+                for (let attempt = 0; attempt < 16; attempt++) {
+                    const a = Math.random() * Math.PI * 2;
+                    const d = (0.5 + Math.random() * maxLeash) * TILE_SIZE;
+                    const cx = owner.x + Math.cos(a) * d;
+                    const cy = owner.y + Math.sin(a) * d;
+                    if (!isCollidingWithWall(cx, cy, PLAYER_SIZE * 0.6, lobby.level)) {
+                        picked = { x: cx, y: cy };
+                        break;
+                    }
+                }
+                companion.wanderDest = picked || { x: owner.x, y: owner.y };
+                companion.pathWaypoints = null; // force replan
+                companion.wanderTimer = 100 + Math.floor(Math.random() * 80);
+            }
+            destX = companion.wanderDest.x;
+            destY = companion.wanderDest.y;
         }
 
-        const dx = targetX - companion.x;
-        const dy = targetY - companion.y;
+        // Replan BFS path to destination when needed
+        if (!companion.pathWaypoints || companion.pathWaypoints.length === 0) {
+            companion.pathWaypoints = bfsPath(lobby.level, companion.x, companion.y, destX, destY) || [];
+        }
+
+        // Consume waypoints as they are reached
+        while (companion.pathWaypoints.length > 0) {
+            const wp = companion.pathWaypoints[0];
+            if (Math.hypot(wp.x - companion.x, wp.y - companion.y) < TILE_SIZE * 0.55) {
+                companion.pathWaypoints.shift();
+            } else break;
+        }
+
+        // Steer toward the next waypoint (or destination if path empty)
+        const nextWP = companion.pathWaypoints.length > 0 ? companion.pathWaypoints[0] : { x: destX, y: destY };
+        const dx = nextWP.x - companion.x;
+        const dy = nextWP.y - companion.y;
         const dist = Math.hypot(dx, dy);
 
-        if (dist > 12) {
-            const speed = 1.6;
-            const ax = (dx / dist) * speed;
-            const ay = (dy / dist) * speed;
-            companion.vx = companion.vx * 0.82 + ax * 0.18;
-            companion.vy = companion.vy * 0.82 + ay * 0.18;
-            companion.angle = lerpAngle(companion.angle, Math.atan2(dy, dx), 0.10);
+        const speed = 1.6;
+        if (dist > 8) {
+            companion.vx = companion.vx * 0.75 + (dx / dist) * speed * 0.25;
+            companion.vy = companion.vy * 0.75 + (dy / dist) * speed * 0.25;
+            companion.angle = lerpAngle(companion.angle, Math.atan2(dy, dx), 0.12);
         } else {
-            companion.vx *= 0.82;
-            companion.vy *= 0.82;
+            companion.vx *= 0.75;
+            companion.vy *= 0.75;
         }
 
         // Repulsion from other companions to prevent stacking
@@ -1759,62 +1880,26 @@ function updateCompanions(lobby, lobbyCode) {
             const rdist = Math.hypot(rdx, rdy);
             const minSep = PLAYER_SIZE * 2.2;
             if (rdist < minSep && rdist > 0.1) {
-                const push = (minSep - rdist) / minSep * 2.5;
-                companion.vx += (rdx / rdist) * push;
-                companion.vy += (rdy / rdist) * push;
+                const repulse = (minSep - rdist) / minSep * 2.5;
+                companion.vx += (rdx / rdist) * repulse;
+                companion.vy += (rdy / rdist) * repulse;
             }
         }
 
-        // Wall avoidance: repel from nearby wall tile centers before moving
-        const tileC = companion.x / TILE_SIZE;
-        const tileR = companion.y / TILE_SIZE;
-        for (let dr = -1; dr <= 1; dr++) {
-            for (let dc = -1; dc <= 1; dc++) {
-                const r = Math.floor(tileR + dr);
-                const c = Math.floor(tileC + dc);
-                if (r < 0 || c < 0 || !lobby.level[r] || lobby.level[r][c] <= 0) continue;
-                const wx = (c + 0.5) * TILE_SIZE;
-                const wy = (r + 0.5) * TILE_SIZE;
-                const wdx = companion.x - wx;
-                const wdy = companion.y - wy;
-                const wdist = Math.hypot(wdx, wdy);
-                const repelRange = TILE_SIZE * 1.1;
-                if (wdist < repelRange && wdist > 0.1) {
-                    const strength = (repelRange - wdist) / repelRange * 5;
-                    companion.vx += (wdx / wdist) * strength;
-                    companion.vy += (wdy / wdist) * strength;
-                }
-            }
-        }
-
-        // Wall collision: zero out velocity on hit to allow clean sliding
+        // Wall collision: slide along walls cleanly
         const nx = companion.x + companion.vx;
         const ny = companion.y + companion.vy;
         if (!isCollidingWithWall(nx, companion.y, PLAYER_SIZE * 0.6, lobby.level)) {
             companion.x = nx;
-        } else { companion.vx = 0; }
+        } else {
+            companion.vx = 0;
+            companion.pathWaypoints = null; // replan around obstacle
+        }
         if (!isCollidingWithWall(companion.x, ny, PLAYER_SIZE * 0.6, lobby.level)) {
             companion.y = ny;
-        } else { companion.vy = 0; }
-
-        // Stuck detection: check total displacement every 30 frames
-        companion._stuckPrevX = companion._stuckPrevX ?? companion.x;
-        companion._stuckPrevY = companion._stuckPrevY ?? companion.y;
-        companion._stuckFrames = (companion._stuckFrames ?? 0) + 1;
-        if (companion._stuckFrames >= 30) {
-            const moved = Math.hypot(companion.x - companion._stuckPrevX, companion.y - companion._stuckPrevY);
-            if (moved < 8) {
-                // Barely moved — cancel rally and angle toward owner with a slight random offset
-                companion.rallyPoint = null;
-                companion.wanderTimer = 0;
-                const toOwner = Math.atan2(owner.y - companion.y, owner.x - companion.x);
-                companion.wanderTargetAngle = toOwner + (Math.random() - 0.5) * 1.2;
-                companion.vx = Math.cos(companion.wanderTargetAngle) * 2;
-                companion.vy = Math.sin(companion.wanderTargetAngle) * 2;
-            }
-            companion._stuckPrevX = companion.x;
-            companion._stuckPrevY = companion.y;
-            companion._stuckFrames = 0;
+        } else {
+            companion.vy = 0;
+            companion.pathWaypoints = null;
         }
 
         // Auto-aim: only track and fire when a clear line of sight exists
@@ -1834,6 +1919,7 @@ function updateCompanions(lobby, lobbyCode) {
                         piercing: 0,
                         owner: companion.ownerId,
                         isTurretBullet: true,
+                        bulletZ: PLAYER_SIZE * 1.1,
                     });
                     companion.fireCooldown = 90;
                 }
@@ -1876,7 +1962,7 @@ function updateBarrages(lobby, lobbyCode) {
         player.barrageShots--;
         if (player.barrageShots <= 0) {
             player.barrageActive = false;
-            player.barrageCooldown = 270; // 4.5s at 60fps
+            player.barrageCooldown = Math.round(270 * (player.hasteMult || 1)); // 4.5s base
         }
     }
 }
@@ -1889,7 +1975,7 @@ function updateAutoTurrets(lobby, lobbyCode) {
         if (stacks === 0) continue;
 
         const turnRate = 0.05 * Math.sqrt(stacks);
-        const cooldown = Math.round(90 / Math.sqrt(stacks));
+        const cooldown = Math.round(90 / Math.sqrt(stacks) * (player.hasteMult || 1));
         const bulletRange = 12 * TILE_SIZE;
         const tankRange = 8 * TILE_SIZE;
 
@@ -2047,13 +2133,14 @@ function pickWeightedBuff(player) {
         piercing: 5,
         autoTurret: 5,
         explosive: 5,
-        homing: 5,
+        // homing: 5, // disabled from drops for now
         bulletBounces: w(5, b.bulletBounces || 0, 2),   // rapidly less useful after 2
         multiShot: w(5, b.multiShot || 0, 1.5),
         visionRange: w(5, b.visionRange || 0, 2),
         regen: w(5, b.regen || 0, 2),
         chain: 5,
         orbit: w(5, b.orbit || 0, 0.8), // diminishing — each extra orb is very powerful
+        haste: 5,
     };
     const entries = Object.entries(weights);
     const total = entries.reduce((s, [, v]) => s + v, 0);
