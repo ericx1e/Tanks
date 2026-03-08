@@ -303,18 +303,18 @@ function findSafeSpawn(g, room, enemies) {
 
 // Returns array of placed enemy grid positions [{ex, ey}].
 // Minimum difficulty required for each boss-tier enemy to appear in the pool
-const BOSS_MIN_DIFF = { 11: 0.50, 14: 0.62, 15: 0.78, 16: 0.88 };
+const BOSS_MIN_DIFF = { 11: 0.50, 14: 0.62, 15: 0.78, 16: 0.88, 17: 0.80 };
 
 function placeEnemies(g, rooms, diff) {
     const totalCount = Math.floor(3 + diff * 10);
-    const maxTier    = Math.min(16, Math.floor(diff * 17 + 0.5));
+    const maxTier    = Math.min(17, Math.floor(diff * 18 + 0.5));
 
     const poolMin = Math.max(0, maxTier - 7);
     const pool = [];
     for (let t = poolMin; t <= maxTier; t++) {
         // Boss tiers only enter the pool once their minimum difficulty is reached
         if (BOSS_MIN_DIFF[t] !== undefined && diff < BOSS_MIN_DIFF[t]) continue;
-        const w = t === 11 || t === 15 || t === 16 ? 1  // Harbinger/Sovereign/Phantom: rare
+        const w = t === 11 || t === 15 || t === 16 || t === 17 ? 1  // Harbinger/Sovereign/Phantom/Wraith: rare
                 : t === 14 ? 1                          // Cannoneer: rare
                 : t >= maxTier - 1 ? 3                 // Top-tier: frequent
                 : 2;                                    // Mid-tier: normal
@@ -326,15 +326,16 @@ function placeEnemies(g, rooms, diff) {
     // Elites: Titan(10), Cloak(8), Guardian(9), Intelligence(12), Laser-Pulse(13), + bosses
     let guaranteedTier = -1;
     if (diff >= 0.45 && maxTier >= 8) {
-        const elites = [10, 8, 9, 12, 13, 14, 15, 16].filter(t => t <= maxTier && (BOSS_MIN_DIFF[t] === undefined || diff >= BOSS_MIN_DIFF[t]));
+        const elites = [10, 8, 9, 12, 13, 14, 15, 16, 17].filter(t => t <= maxTier && (BOSS_MIN_DIFF[t] === undefined || diff >= BOSS_MIN_DIFF[t]));
         if (elites.length) guaranteedTier = elites[rng(0, elites.length - 1)];
     }
 
-    // Cap Harbinger (11), Cannoneer (14), Sovereign (15), Phantom (16) to at most 1 per level
+    // Cap Harbinger (11), Cannoneer (14), Sovereign (15), Phantom (16), Wraith (17) to at most 1 per level
     let rusherCount = 0;
     let cannoneerCount = 0;
     let sovereignCount = 0;
     let phantomCount = 0;
+    let wraithCount = 0;
 
     const positions = [];
     let placed = 0;
@@ -400,6 +401,14 @@ function placeEnemies(g, rooms, diff) {
                     tier = alt.length ? alt[rng(0, alt.length - 1)] : pool[rng(0, pool.length - 1)];
                 } else {
                     phantomCount++;
+                }
+            }
+            if (tier === 17) {
+                if (wraithCount >= 1) {
+                    const alt = pool.filter(t => t !== 17 && t !== 16 && t !== 15);
+                    tier = alt.length ? alt[rng(0, alt.length - 1)] : pool[rng(0, pool.length - 1)];
+                } else {
+                    wraithCount++;
                 }
             }
             g[ey][ex] = enemyVal(tier);

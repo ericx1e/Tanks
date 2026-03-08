@@ -227,6 +227,7 @@ function createLevel(lobbyCode, levelNumber) {
         totalLevels: getNumLevels(lobby.mode),
         friendlyFire: lobby.friendlyFire,
         numBots: 0,
+        smokeClouds: [],
     };
 
     // io.to(lobbyCode).emit('updateLevel', level)
@@ -1248,6 +1249,7 @@ function updateBullets(lobby, lobbyCode) {
                 const bOwner = players[bullet.owner];
                 if (bOwner && bOwner.isAI) continue;
             }
+            if (player.isAI && player.wraithStealthed) continue; // Wraith invulnerable while stealthed
             if (/*playerId !== bullet.owner && */isCollidingWithPlayer(nextX, nextY, player)) {
                 if (bullet.isCannonball || bullet.hasSplash) {
                     explodeCannonball(lobby, lobbyCode, bullet, bulletsToRemove, i);
@@ -2338,6 +2340,12 @@ setInterval(() => {
                 lobby.levelNumber = -1;
                 startTransition(lobbyCode);
             }
+        }
+
+        // Tick smoke clouds
+        if (lobby.smokeClouds && lobby.smokeClouds.length) {
+            lobby.smokeClouds = lobby.smokeClouds.filter(sc => --sc.framesLeft > 0);
+            io.to(lobbyCode).emit('updateSmokeClouds', lobby.smokeClouds);
         }
     }
 }, 1000 / 60);

@@ -170,6 +170,19 @@ function drawFogOfWar(playerX, playerY, visiblePoints, originX, originY) {
     const cy = fogLayer.height / 2;
     _drawVisionPolygon(cx, cy, originX, originY, playerX, playerY, visiblePoints);
 
+    // Repaint smoke clouds as opaque fog on top of cleared vision areas
+    if (typeof smokeClouds !== 'undefined' && smokeClouds.length) {
+        fogLayer.blendMode(BLEND);
+        fogLayer.noStroke();
+        for (const sc of smokeClouds) {
+            const relX = cx + (sc.x - playerX);
+            const relY = cy + (sc.y - playerY);
+            const fade = Math.min(1, sc.framesLeft / 60); // fade out in last second
+            fogLayer.fill(20, 20, 30, 230 * fade);
+            fogLayer.circle(relX, relY, sc.radius * 2);
+        }
+    }
+
     texture(fogLayer);
     noStroke();
     plane(fogLayer.width, fogLayer.height);

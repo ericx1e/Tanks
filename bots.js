@@ -10,7 +10,7 @@ function setIO(ioInstance) {
 
 // Initialize AI tanks
 
-const colorList = [[100, 100, 100], [200, 100, 100], [200, 200, 100], [100, 200, 100], [200, 100, 200], [50, 150, 220], [200, 100, 50], [150, 100, 100], [190, 210, 240], [60, 100, 220], [30, 15, 50], [200, 30, 200], [220, 30, 90], [50, 200, 210], [170, 110, 20], [100, 180, 255], [40, 90, 40]]
+const colorList = [[100, 100, 100], [200, 100, 100], [200, 200, 100], [100, 200, 100], [200, 100, 200], [50, 150, 220], [200, 100, 50], [150, 100, 100], [190, 210, 240], [60, 100, 220], [30, 15, 50], [200, 30, 200], [220, 30, 90], [50, 200, 210], [170, 110, 20], [100, 180, 255], [40, 90, 40], [180, 220, 255]]
 
 function initializeAITank(id, x, y, tier, buttonType) {
     let tank = {
@@ -70,7 +70,7 @@ function initializeAITank(id, x, y, tier, buttonType) {
     if (tier == 11) {
         // Harbinger — heavy spread artillery with ring burst
         tank.ringCooldown = 100;
-        tank.buffs = { shield: 5 };
+        tank.buffs = { shield: 9 };
     }
     if (tier == 12) {
         tank.flankSide = 1;
@@ -91,6 +91,13 @@ function initializeAITank(id, x, y, tier, buttonType) {
         tank.sniperCharging = false;
         tank.sniperChargeTimer = 0;
         tank.buffs = { shield: 2 };
+    }
+    if (tier == 17) {
+        // Wraith — stealths (invulnerable+fast), rapid single-direction fire, smoke grenades
+        tank.wraithStealthed = false;
+        tank.wraithPhaseTimer = 300; // starts visible for 5s
+        tank.wraithSmokeTimer = 200;
+        tank.buffs = { shield: 3 };
     }
     if (tier == 13) {
         tank = {
@@ -291,6 +298,12 @@ function updateAITank(lobby, lobbyCode, tank, level, players, bullets) {
             fireCooldown = 220;
             turretSpeed = 0.06;
             break;
+        case 17: // Wraith — stealth/attack cycle, smoke grenades
+            speed = tank.wraithStealthed ? 2.4 * AI_TANK_SPEED : 1.0 * AI_TANK_SPEED;
+            shootingRange = PLAYER_SIZE * 24;
+            fireCooldown = 8;
+            turretSpeed = 0.30;
+            break;
         case 'button':
             speed = 0;
             shootingRange = 0;
@@ -448,13 +461,47 @@ function updateAITank(lobby, lobbyCode, tank, level, players, bullets) {
     // Glide only during dodge; otherwise keep your original step
     const isDodging = (tank._dodgeTimer || 0) > 0;
 
-    if (isDodging) {
-        tryMoveWithWallGlideAndEscape(tank, speed, level, true);
+    if (isDodging || tank.tier === 15 || tank.tier === 11) {
+        tryMoveWithWallGlideAndEscape(tank, speed, level, isDodging);
     } else {
         const newX = tank.x + Math.cos(tank.angle) * speed;
         const newY = tank.y + Math.sin(tank.angle) * speed;
         if (!isCollidingWithWall(newX, tank.y, PLAYER_SIZE, level)) tank.x = newX;
         if (!isCollidingWithWall(tank.x, newY, PLAYER_SIZE, level)) tank.y = newY;
+    }
+
+    // Wraith stealth/attack cycle
+    if (tank.tier === 17) {
+        tank.wraithPhaseTimer = (tank.wraithPhaseTimer || 1) - 1;
+        if (tank.wraithPhaseTimer <= 0) {
+            tank.wraithStealthed = !tank.wraithStealthed;
+            tank.wraithPhaseTimer = tank.wraithStealthed ? 180 : 300; // 3s stealth, 5s visible
+        }
+
+        // Smoke grenade — fire toward nearest player while visible
+        tank.wraithSmokeTimer = (tank.wraithSmokeTimer || 200) - 1;
+        if (tank.wraithSmokeTimer <= 0 && !tank.wraithStealthed) {
+            let nearest = null, nearestDist = Infinity;
+            for (const id in players) {
+                const p = players[id];
+                if (!p.isAI && !p.isDead) {
+                    const d = Math.hypot(p.x - tank.x, p.y - tank.y);
+                    if (d < nearestDist) { nearestDist = d; nearest = p; }
+                }
+            }
+            if (nearest) {
+                lobby.smokeClouds = lobby.smokeClouds || [];
+                lobby.smokeClouds.push({ x: nearest.x, y: nearest.y, radius: TILE_SIZE * 2.5, framesLeft: 480 });
+                io.to(lobbyCode).emit('smokeCloud', { x: nearest.x, y: nearest.y, radius: TILE_SIZE * 2.5, duration: 480 });
+            }
+            tank.wraithSmokeTimer = 240;
+        }
+
+        if (tank.wraithStealthed) {
+            // Invulnerable, fast — skip firing
+            handleAITurret(lobby, lobbyCode, tank, level, players, bullets, shootingRange, turretSpeed, 999999);
+            return;
+        }
     }
 
     handleAITurret(lobby, lobbyCode, tank, level, players, bullets, shootingRange, turretSpeed, fireCooldown);
@@ -485,7 +532,7 @@ function handleAITurret(lobby, lobbyCode, tank, level, players, bullets, shootin
             tank.prevTargetY = nearestPlayer.y;
             playerInSight = { player: nearestPlayer, angle: leadAngle };
         }
-    } else if (tank.tier === 11 || tank.tier === 14 || tank.tier === 15) {
+    } else if (tank.tier === 11 || tank.tier === 14 || tank.tier === 15 || tank.tier === 17) {
         // Boss tanks: omniscient — find nearest player regardless of LOS, lead shot
         let nearestPlayer = null, nearestDist = Infinity;
         for (let id in players) {
@@ -810,8 +857,9 @@ function fireBullet(lobbyCode, tank, angle, bullets, level) {
     const rowTop = Math.floor((checkBulletY - size) / TILE_SIZE);
     const rowBottom = Math.floor((checkBulletY + size) / TILE_SIZE);
 
-    if (isWall(colLeft, rowTop, level) || isWall(colRight, rowTop, level) || isWall(colLeft, rowBottom, level) || isWall(colRight, rowBottom, level)) {
-        // Do not fire the bullet if it starts inside a wall
+    // Boss tiers fire heavy shots that pierce/destroy walls — skip the wall proximity check
+    const skipWallCheck = tank.tier === 11 || tank.tier === 14 || tank.tier === 15 || tank.tier === 16 || tank.tier === 17;
+    if (!skipWallCheck && (isWall(colLeft, rowTop, level) || isWall(colRight, rowTop, level) || isWall(colLeft, rowBottom, level) || isWall(colRight, rowBottom, level))) {
         return;
     }
 
@@ -894,6 +942,17 @@ function fireBullet(lobbyCode, tank, angle, bullets, level) {
                 bounces: 0,
                 wallPiercing: true,
                 hp: 4,
+            }
+            break;
+        case 17: // Wraith — fast single-direction shots
+            newBullet = {
+                id: bullets.length,
+                owner: player.id,
+                x: bulletX,
+                y: bulletY,
+                angle: angle,
+                speed: BULLET_SPEED * 1.6,
+                bounces: 1,
             }
             break;
         default:

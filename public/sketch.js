@@ -102,6 +102,7 @@ function particleScale() {
 
 let shakeIntensity = 0;
 let shakeDuration = 0;
+let smokeClouds = []; // { x, y, radius, framesLeft }
 let killIndicators = []; // { x, y, life, maxLife, text, color? }
 let prevMyKills = 0;
 let skipKillDetection = false;
@@ -395,6 +396,7 @@ socket.on('nextLevel', () => {
     companions = {};
     spectateTargetId = null;
     killIndicators = [];
+    smokeClouds = [];
     chainRays = [];
     skipKillDetection = true;
     skipBuffDetection = true;
@@ -403,6 +405,8 @@ socket.on('nextLevel', () => {
 
 socket.on('updateFlares', (data) => { flares = data; });
 socket.on('updateCompanions', (data) => { companions = data; });
+socket.on('smokeCloud', (sc) => { smokeClouds.push({ ...sc, framesLeft: sc.duration }); });
+socket.on('updateSmokeClouds', (data) => { smokeClouds = data; });
 socket.on('muzzleFlash', (data) => { muzzleFlashes.push({ ...data, life: 7 }); });
 
 socket.on('arenaMode', () => {
@@ -692,6 +696,10 @@ function draw() {
         textSize(PLAYER_SIZE * 0.9);
         textAlign(CENTER, CENTER);
         const [r, g, b] = k.color || [255, 220, 60];
+        translate(0, 0, -1);
+        fill(0, 0, 0, a * 0.7);
+        text(k.text, 1.5, 1.5);
+        translate(0, 0, 1);
         fill(r, g, b, a);
         text(k.text, 0, 0);
         pop();
@@ -1814,7 +1822,7 @@ function drawTank(tank, isSelf) {
     const size = PLAYER_SIZE;
     // Soft pulse during spawn grace — briefly invisible for 5 frames every 30
     if (tank.spawnGrace > 0 && frameCount % 30 >= 25) return;
-    const cloakAlpha = (tank.tier === 8 && tank.cloaked) ? 10 : 255;
+    const cloakAlpha = (tank.tier === 8 && tank.cloaked) ? 10 : (tank.tier === 17 && tank.wraithStealthed) ? 15 : 255;
     push();
     // Tank base (lower box)
     translate(tank.x, tank.y, PLAYER_SIZE); // Position tank
@@ -1838,6 +1846,9 @@ function drawTank(tank, isSelf) {
             } else if (tank.tier === 16) {
                 box(2.8 * size, 1.8 * size, size * 1.1);  // Long Phantom hull
                 box(2.6 * size, 2.1 * size, size * 0.75); // Treads
+            } else if (tank.tier === 17) {
+                box(2.2 * size, 1.4 * size, size * 0.9);  // Sleek Wraith hull
+                box(2.0 * size, 1.7 * size, size * 0.6);  // Low-profile treads
             } else {
                 box(2 * size, 1.5 * size, size); // Tank base dimensions
                 box(1.8 * size, 1.7 * size, size * 0.8); // Treads
@@ -1852,6 +1863,8 @@ function drawTank(tank, isSelf) {
                 box(1.8 * size, 1.5 * size, size * 1.3); // Sovereign turret
             } else if (tank.tier === 16) {
                 box(1.3 * size, 1.3 * size, size * 1.1); // Phantom turret
+            } else if (tank.tier === 17) {
+                box(0.9 * size, 0.9 * size, size * 0.8); // Small Wraith turret
             } else {
                 box(size, 1.15 * size, size); // Slightly smaller box
             }
