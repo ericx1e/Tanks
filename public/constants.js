@@ -43,7 +43,7 @@ const TANK_CLASSES = [
     {
         id: 'engineer', name: 'Engineer', label: '[E]',
         description: 'Deploys auto-turrets that intercept bullets and enemies. Starts with a companion mini-tank; right-click to spawn another every 30 seconds.',
-        buffs: { autoTurret: 5, speed: -1, visionRange: -1, maxBullets: -3 },
+        buffs: { autoTurret: 5, speed: -1, visionRange: -3, maxBullets: -3 },
         special: 'companion',
         color: '#ffd32a',
     },
@@ -57,14 +57,14 @@ const TANK_CLASSES = [
     {
         id: 'gunner', name: 'Gunner', label: '[GN]',
         description: 'Rapid-fire triple-shot spread. Right-click to unleash a focused bullet stream at your crosshair. Bullets are slower with no ricochets.',
-        buffs: { multiShot: 2, fireRate: 3, bulletSpeed: -2, bulletBounces: -1 },
+        buffs: { multiShot: 2, fireRate: 3, bulletSpeed: -2, bulletBounces: -1, visionRange: -1 },
         special: 'barrage',
         color: '#a29bfe',
     },
     {
         id: 'artillerist', name: 'Artillerist', label: '[AT]',
         description: 'Starts with pierce and explosive — every bullet pierces and explodes. Right-click to launch a heavy cannonball with a massive blast radius.',
-        buffs: { piercing: 1, explosive: 1, speed: -1 },
+        buffs: { piercing: 1, explosive: 1, speed: -1, bulletSpeed: -1, maxBullets: -2 },
         special: 'cannon',
         color: '#e67e22',
     },

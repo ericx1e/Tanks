@@ -39,6 +39,8 @@ function calculateVision(playerX, playerY, level, maxDistance, resolution) {
     for (let angle = 0; angle < TWO_PI; angle += resolution) {
         visiblePoints.push(castRay(playerX, playerY, angle, maxDistance, level));
     }
+    // Close the polygon back to angle 0 to prevent a seam artifact at fine resolutions
+    if (visiblePoints.length > 0) visiblePoints.push(visiblePoints[0]);
     return visiblePoints;
 }
 

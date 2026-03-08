@@ -126,7 +126,7 @@ const panel = el('lobby-controls');
 const fab = el('lobby-fab');
 const fabCode = el('lobby-fab-code');
 
-function showLobbyPanel() { panel.classList.remove('is-hidden'); fab.classList.remove('show'); panel.setAttribute('aria-hidden', 'false'); }
+function showLobbyPanel() { panel.classList.remove('is-hidden'); fab.classList.remove('show'); panel.setAttribute('aria-hidden', 'false'); if (typeof clearAllInput === 'function') clearAllInput(); }
 function hideLobbyPanel() { panel.classList.add('is-hidden'); fab.classList.add('show'); panel.setAttribute('aria-hidden', 'true'); }
 function updateFabCode(code) { if (!code) return; fabCode.textContent = code; }
 fab.addEventListener('click', showLobbyPanel);

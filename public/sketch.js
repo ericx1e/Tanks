@@ -20,6 +20,38 @@ let skipMarkExplored = false; // true for one updatePlayers cycle after a level 
 
 let camX = 0, camY = 0, camZ = 600;
 let groupedWalls = [];
+let floorTex = null, wallTex = null;
+let useTextures = false; // toggle with T
+let showFps = false;    // toggle with P
+const _fpsHistory = [];
+let _smoothFps = 60;
+
+function createLevelTextures() {
+    const ts = TILE_SIZE;
+
+    // Floor tile: sandy base with subtle darker border seam
+    floorTex = createGraphics(ts, ts);
+    floorTex.pixelDensity(1);
+    floorTex.background(148, 118, 68);
+    floorTex.noFill();
+    floorTex.stroke(108, 82, 36, 130);
+    floorTex.strokeWeight(2);
+    floorTex.rect(1, 1, ts - 2, ts - 2);
+    // Faint inner highlight
+    floorTex.stroke(170, 138, 82, 45);
+    floorTex.strokeWeight(1);
+    floorTex.rect(4, 4, ts - 8, ts - 8);
+
+    // Wall tile: warm brown with horizontal stone-course lines
+    wallTex = createGraphics(ts, WALL_HEIGHT);
+    wallTex.pixelDensity(1);
+    wallTex.background(120, 80, 40);
+    wallTex.stroke(82, 52, 18, 110);
+    wallTex.strokeWeight(1.5);
+    for (let y = 22; y < WALL_HEIGHT; y += 22) {
+        wallTex.line(0, y, ts, y);
+    }
+}
 
 function rebuildGroupedWalls() {
     groupedWalls = [];
@@ -52,6 +84,17 @@ function rebuildGroupedWalls() {
 }
 
 // Returns 1.0 at low tank counts, scales down toward 0.15 at high counts.
+function hexToRgb(hex) {
+    return [parseInt(hex.slice(1,3),16), parseInt(hex.slice(3,5),16), parseInt(hex.slice(5,7),16)];
+}
+
+function playerColor(tank, _isSelf, alpha = 255) {
+    if (tank.isAI) return [...tank.color, alpha];
+    const cls = TANK_CLASSES.find(c => c.id === tank.selectedClass);
+    const rgb = cls ? hexToRgb(cls.color) : [80, 120, 255];
+    return [...rgb, alpha];
+}
+
 function particleScale() {
     const n = Object.keys(players).length;
     return Math.max(0.15, 4 / Math.max(4, n));
@@ -59,11 +102,15 @@ function particleScale() {
 
 let shakeIntensity = 0;
 let shakeDuration = 0;
-let killIndicators = []; // { x, y, life, maxLife, text }
+let killIndicators = []; // { x, y, life, maxLife, text, color? }
 let prevMyKills = 0;
 let skipKillDetection = false;
+let prevMyBuffs = {};
+let skipBuffDetection = false;
 
 let lobbyCode = null;
+let lobbyZones = [];
+let zoneProgress = {};
 
 let gameState = "playing"; // Other states: "transition", "waiting"
 let transitionTimer = 0;
@@ -105,7 +152,8 @@ let engineerRallyTimer = 0;
 
 // Manual key state — clears on blur so keys never get stuck
 const keysHeld = {};
-window.addEventListener('keydown', e => { keysHeld[e.code] = true; });
+const isLobbyPanelOpen = () => !document.getElementById('lobby-controls')?.classList.contains('is-hidden');
+window.addEventListener('keydown', e => { if (!isLobbyPanelOpen()) keysHeld[e.code] = true; });
 window.addEventListener('keyup', e => { delete keysHeld[e.code]; });
 function clearAllInput() {
     Object.keys(keysHeld).forEach(k => delete keysHeld[k]);
@@ -145,16 +193,17 @@ function isInsideViewport(x, y, viewport) {
     );
 }
 
+let _pingSentAt = 0;
 function updatePing() {
-    const startTime = Date.now();
-    socket.emit('pingCheck', startTime);
+    _pingSentAt = performance.now();
+    socket.emit('pingCheck', 0);
 }
 
-socket.on('pingResponse', (startTime) => {
-    const roundTripTime = Date.now() - startTime;
+socket.on('pingResponse', () => {
+    const roundTripTime = performance.now() - _pingSentAt;
     pingHistory.push(roundTripTime);
-    if (pingHistory.length > 10) pingHistory.shift(); // Keep the last 10 pings
-    ping = pingHistory.reduce((a, b) => a + b, 0) / pingHistory.length; // Calculate average
+    if (pingHistory.length > 10) pingHistory.shift();
+    ping = pingHistory.reduce((a, b) => a + b, 0) / pingHistory.length;
 });
 
 // Update ping every 2 seconds
@@ -220,6 +269,36 @@ socket.on('updatePlayers', (serverPlayers) => {
         }
         prevMyKills = newKills;
         skipKillDetection = false;
+
+        // Detect buff gains
+        const buffNames = {
+            speed: 'SPEED', fireRate: 'FIRE RATE', bulletSpeed: 'BULLET SPD',
+            bulletBounces: 'BOUNCES', shield: 'SHIELD', multiShot: 'MULTISHOT',
+            visionRange: 'VISION', piercing: 'PIERCE', autoTurret: 'TURRET',
+            explosive: 'EXPLODE', homing: 'HOMING', regen: 'REGEN',
+            chain: 'CHAIN', orbit: 'ORBIT', haste: 'HASTE',
+        };
+        const newBuffs = me.buffs || {};
+        const newBuffSnapshot = {
+            ...newBuffs,
+            shield: (newBuffs.shield || 0) + (me.shield ? 1 : 0),
+        };
+        if (!skipBuffDetection) {
+            for (const [type, label] of Object.entries(buffNames)) {
+                const prev = prevMyBuffs[type] || 0;
+                const curr = newBuffSnapshot[type] || 0;
+                if (curr > prev) {
+                    killIndicators.push({
+                        x: me.x, y: me.y,
+                        life: 50, maxLife: 50,
+                        text: `+${label}`,
+                        color: [100, 255, 160],
+                    });
+                }
+            }
+        }
+        skipBuffDetection = false;
+        prevMyBuffs = newBuffSnapshot;
     }
 });
 
@@ -251,9 +330,13 @@ socket.on('tilesUpdated', (tiles) => {
     rebuildGroupedWalls();
 });
 
+socket.on('updateZones', (data) => { zoneProgress = data; });
+
 socket.on('updateLevel', (data) => {
     level = data.level; // Store the level received from the server
     levelNumber = data.levelNumber;
+    lobbyZones = data.zones || [];
+    zoneProgress = {};
     rebuildGroupedWalls();
     tracks.length = 0;
     trackState = {};
@@ -314,6 +397,8 @@ socket.on('nextLevel', () => {
     killIndicators = [];
     chainRays = [];
     skipKillDetection = true;
+    skipBuffDetection = true;
+    prevMyBuffs = {};
 });
 
 socket.on('updateFlares', (data) => { flares = data; });
@@ -378,7 +463,7 @@ async function setup() {
 
     frameRate(60);
     fogLayer = createGraphics(width * 2, height * 2);
-
+    createLevelTextures();
     // Dev console helper: type godMode() in the browser console to toggle invincibility
     window.godMode = () => socket.emit('toggleGodMode');
     socket.on('godModeStatus', (on) => console.log(`%cGod mode ${on ? 'ON ✓' : 'OFF ✗'}`, `color:${on ? 'lime' : 'red'};font-weight:bold`))
@@ -389,6 +474,11 @@ let menuAngle = 0; // start screen animation phase
 
 
 function draw() {
+    if (deltaTime > 0) {
+        _fpsHistory.push(1000 / deltaTime);
+        if (_fpsHistory.length > 60) _fpsHistory.shift();
+        _smoothFps = _fpsHistory.reduce((a, b) => a + b, 0) / _fpsHistory.length;
+    }
     background(51);
     lights();
     directionalLight(80, 80, 80, 1, 1, -1)
@@ -527,27 +617,47 @@ function draw() {
     const gridWidth = level[0].length * TILE_SIZE; // Width of the ground
     const gridHeight = level.length * TILE_SIZE; // Height of the ground
 
-    push();
-    fill(150, 120, 70); // Ground color
-    translate(gridWidth / 2, gridHeight / 2, -2); // Center ground at (0, 0)
-    noStroke();
-    plane(gridWidth, gridHeight); // Ground dimensions
+    if (useTextures && floorTex) {
+        const camCX = myTank ? myTank.x : gridWidth / 2;
+        const camCY = myTank ? myTank.y : gridHeight / 2;
+        const margin = 700;
+        const cStart = Math.max(0, Math.floor((camCX - margin) / TILE_SIZE));
+        const cEnd = Math.min(level[0].length - 1, Math.ceil((camCX + margin) / TILE_SIZE));
+        const rStart = Math.max(0, Math.floor((camCY - margin) / TILE_SIZE));
+        const rEnd = Math.min(level.length - 1, Math.ceil((camCY + margin) / TILE_SIZE));
+        noStroke();
+        for (let r = rStart; r <= rEnd; r++) {
+            for (let c = cStart; c <= cEnd; c++) {
+                push();
+                translate((c + 0.5) * TILE_SIZE, (r + 0.5) * TILE_SIZE, -2);
+                texture(floorTex);
+                plane(TILE_SIZE, TILE_SIZE);
+                pop();
+            }
+        }
+    } else {
+        push();
+        fill(150, 120, 70);
+        translate(gridWidth / 2, gridHeight / 2, -2);
+        noStroke();
+        plane(gridWidth, gridHeight);
+        pop();
+    }
     if (gameMode === 'lobby') {
-        push()
-        translate(0, 0, 1)
+        push();
+        translate(gridWidth / 2, gridHeight / 2, -1);
         textSize(TILE_SIZE);
-        // rotateX(PI / 2);
         textFont(font);
         textAlign(CENTER, CENTER);
         fill(255);
         noStroke();
-        text(`Lobby ${lobbyCode}`, 0, 0)
-        pop()
+        text(`Lobby ${lobbyCode}`, 0, 0);
+        pop();
     }
-    pop();
 
 
     drawTracks();
+    drawLobbyZones();
 
     // Draw walls
     drawWalls();
@@ -581,7 +691,8 @@ function draw() {
         textFont(font);
         textSize(PLAYER_SIZE * 0.9);
         textAlign(CENTER, CENTER);
-        fill(255, 220, 60, a);
+        const [r, g, b] = k.color || [255, 220, 60];
+        fill(r, g, b, a);
         text(k.text, 0, 0);
         pop();
         k.life--;
@@ -781,20 +892,17 @@ function draw() {
     textAlign(LEFT, TOP); // Align text to the top-left
     textFont(font);
 
-    // disable depth test so ping is always visible
-    if (false) {
-        const gl = drawingContext;
-        gl.disable(gl.DEPTH_TEST);
-        text(`Ping: ${Math.round(ping)} ms`, -width / 2 + width / 7, -height / 2 + width / 11); // Display rounded ping
-        gl.enable(gl.DEPTH_TEST);
-    }
+    if (showFps) drawPerfOverlay();
 
-    if (gameMode !== 'lobby') drawMinimap();
-    if (gameMode !== 'lobby') drawBuffHUD();
-    if (gameMode !== 'lobby') drawBulletIndicator();
-    if (gameMode !== 'lobby') drawClassBadge();
-    if (gameMode !== 'lobby') drawKDABoard();
-    if (gameMode === 'lobby') drawClassInfoPanel();
+    if (gameMode !== 'lobby') {
+        drawMinimap();
+        drawBuffHUD();
+        drawBulletIndicator();
+        drawClassBadge();
+        drawKDABoard();
+    } else if (gameMode === 'lobby') {
+        drawClassInfoPanel();
+    }
 
     // Spectate overlay
     if (isSpectating && !allDead && targetTank) {
@@ -856,6 +964,30 @@ function markExplored(playerX, playerY, points) {
             if (r >= 0 && r < rows && c >= 0 && c < cols) exploredTiles[r][c] = true;
         }
     }
+}
+
+function drawPerfOverlay() {
+    const VH = 250;
+    const margin = 12;
+    const fps = Math.round(_smoothFps);
+    const ms = ping.toFixed(1);
+    const label = `FPS: ${fps}   Ping: ${ms} ms`;
+
+    const gl = drawingContext;
+    gl.disable(gl.DEPTH_TEST);
+
+    if (font) textFont(font);
+    textSize(13);
+    textAlign(CENTER, TOP);
+    const x = 0;
+    const y = -VH + margin;
+    fill(0, 0, 0, 160);
+    text(label, x + 1, y + 1);
+    const fpsColor = fps >= 50 ? color(100, 255, 130) : fps >= 30 ? color(255, 210, 60) : color(255, 80, 80);
+    fill(fpsColor);
+    text(label, x, y);
+
+    gl.enable(gl.DEPTH_TEST);
 }
 
 // Draw a small exploration minimap in the bottom-left corner (screen space).
@@ -1434,6 +1566,13 @@ function drawClassInfoPanel() {
 
 // keyboard shortcuts to tweak fog/vision
 function keyPressed() {
+    if (isLobbyPanelOpen()) return;
+    if (key === 'T' || key === 't') {
+        useTextures = !useTextures;
+    }
+    if (key === 'P' || key === 'p') {
+        showFps = !showFps;
+    }
     if (key === 'F' || key === 'f') {
         // toggleFogOfWar();
         isFogOfWar = !isFogOfWar;
@@ -1673,19 +1812,15 @@ function drawTracks() {
 
 function drawTank(tank, isSelf) {
     const size = PLAYER_SIZE;
-    // Flash during spawn grace period (skip every other 8-frame block)
-    if (tank.spawnGrace > 0 && Math.floor(frameCount / 8) % 2 === 0) return;
+    // Soft pulse during spawn grace — briefly invisible for 5 frames every 30
+    if (tank.spawnGrace > 0 && frameCount % 30 >= 25) return;
     const cloakAlpha = (tank.tier === 8 && tank.cloaked) ? 10 : 255;
     push();
     // Tank base (lower box)
     translate(tank.x, tank.y, PLAYER_SIZE); // Position tank
     rotateZ(tank.angle); // Rotate tank base
 
-    if (tank.isAI) {
-        fill(...tank.color, cloakAlpha); // AI tank color
-    } else {
-        fill(isSelf ? 'blue' : 'red'); // Differentiate self vs others
-    }
+    fill(...playerColor(tank, isSelf, cloakAlpha));
 
     if (!tank.isDead) {
 
@@ -1961,17 +2096,22 @@ function drawTank(tank, isSelf) {
         textAlign(CENTER, CENTER);
         textFont(font);
         noStroke();
+        const label = cls ? cls.name : tank.name;
+        textSize(isSelected ? 16 : 14);
+        translate(0, 0, -1);
+        fill(0, 0, 0, 180);
+        text(label, 1.5, 1.5);
+        translate(0, 0, 1);
+        fill(...tank.color);
+        text(label, 0, 0);
         if (isSelected) {
-            fill(...tank.color);
-            textSize(16);
-            text(cls ? cls.name : tank.name, 0, 0);
             textSize(10);
+            translate(0, 0, -1);
+            fill(0, 0, 0, 180);
+            text('SELECTED', 1.5, 19.5);
+            translate(0, 0, 1);
             fill(...tank.color, 200);
             text('SELECTED', 0, 18);
-        } else {
-            fill(200, 200, 200);
-            textSize(14);
-            text(cls ? cls.name : tank.name, 0, 0);
         }
         pop();
     } else if (!tank.isAI || tank.tier === 'button') {
@@ -1979,12 +2119,16 @@ function drawTank(tank, isSelf) {
         translate(tank.x, tank.y, PLAYER_SIZE * 3.5);
         rotateX(atan2(tank.y - camY, camZ));
         textAlign(CENTER, CENTER);
-        textSize(16);
-        fill(255);
-        stroke(0);
-        strokeWeight(1);
         textFont(font);
-        text(tank.name || "Player", 0, 0);
+        textSize(16);
+        noStroke();
+        const name = tank.name || "Player";
+        translate(0, 0, -1);
+        fill(0, 0, 0, 180);
+        text(name, 1.5, 1.5);
+        translate(0, 0, 1);
+        fill(255);
+        text(name, 0, 0);
         pop();
     }
 
@@ -2087,10 +2231,8 @@ function drawTank(tank, isSelf) {
 
         if (color !== null) {
             fill(...color, cloakAlpha);
-        } else if (tank.isAI) {
-            fill(...tank.color, cloakAlpha);
         } else {
-            fill(isSelf ? 'blue' : 'red');
+            fill(...playerColor(tank, isSelf, cloakAlpha));
         }
         cylinder(tipRadius * 0.25 + 1, 0.20 * size + 2);
 
@@ -2140,8 +2282,7 @@ function drawTank(tank, isSelf) {
         fill(0, 0, 0, cloakAlpha);
         cylinder(0.40 * size + 1, 0.12 * size + 1);
         pop();
-        if (tank.isAI) fill(...tank.color, cloakAlpha);
-        else fill(isSelf ? 'blue' : 'red');
+        fill(...playerColor(tank, isSelf, cloakAlpha));
         cylinder(0.40 * size, 0.12 * size);
         pop();
 
@@ -2187,25 +2328,98 @@ function drawChest(tank) {
     box(size / 5, size / 5, size / 3);
 }
 
-function drawWalls() {
-    if (!groupedWalls.length) return;
+function drawLobbyZones() {
+    if (!lobbyZones.length) return;
+    const pulse = 0.5 + 0.5 * Math.sin(frameCount * 0.07);
+    for (const zone of lobbyZones) {
+        const zx = (zone.col + 0.5) * TILE_SIZE;
+        const zy = (zone.row + 0.5) * TILE_SIZE;
+        const prog = zoneProgress[zone.mode] || 0;
+        const [r, g, b] = zone.color;
+        const radius = TILE_SIZE * 1.0;
 
-    // Viewport culling: only draw walls within visible range of the camera
-    const camCX = myTank ? myTank.x : groupedWalls[0].x;
-    const camCY = myTank ? myTank.y : groupedWalls[0].y;
-    const marginX = 700, marginY = 800;
-
-    for (const wall of groupedWalls) {
-        if (wall.x + wall.width < camCX - marginX || wall.x > camCX + marginX) continue;
-        if (wall.y + wall.height < camCY - marginY || wall.y > camCY + marginY) continue;
+        // Ground circle
         push();
-        translate(wall.x + wall.width / 2, wall.y + wall.height / 2, wall.wallHeight / 2 - 25);
-        fill(120, 80, 40);
-        // stroke(0);
-        noStroke()
-        strokeWeight(1);
-        box(wall.width, wall.height, wall.wallHeight);
+        translate(zx, zy, 1);
+        noStroke();
+        fill(r, g, b, 100 + 60 * pulse);
+        circle(0, 0, radius * 2);
         pop();
+
+        // Progress arc (swept ring drawn as filled arc minus inner)
+        if (prog > 0) {
+            push();
+            translate(zx, zy, 2);
+            noFill();
+            stroke(r, g, b, 230);
+            strokeWeight(5);
+            arc(0, 0, radius * 2, radius * 2, -HALF_PI, -HALF_PI + prog * TWO_PI);
+            pop();
+        }
+
+        // Label floating above
+        push();
+        translate(zx, zy, PLAYER_SIZE * 2.5);
+        rotateX(Math.atan2(zy - camY, camZ));
+        noStroke();
+        if (font) textFont(font);
+        textAlign(CENTER, CENTER);
+        textSize(PLAYER_SIZE * 0.8);
+        translate(0, 0, -1);
+        fill(0, 0, 0, 180);
+        text(zone.label, 1.5, 1.5);
+        translate(0, 0, 1);
+        fill(255);
+        text(zone.label, 0, 0);
+        if (prog > 0) {
+            textSize(PLAYER_SIZE * 0.6);
+            translate(0, 0, -1);
+            fill(0, 0, 0, 180);
+            text(`${Math.ceil(3 * (1 - prog))}s`, 1.5, PLAYER_SIZE * 1.1 + 1.5);
+            translate(0, 0, 1);
+            fill(255);
+            text(`${Math.ceil(3 * (1 - prog))}s`, 0, PLAYER_SIZE * 1.1);
+        }
+        pop();
+    }
+}
+
+function drawWalls() {
+    if (!level.length) return;
+
+    const camCX = myTank ? myTank.x : 0;
+    const camCY = myTank ? myTank.y : 0;
+    const marginX = 700, marginY = 800;
+    noStroke();
+
+    if (useTextures && wallTex) {
+        // Per-tile draw so each box gets correct UV tiling
+        const cStart = Math.max(0, Math.floor((camCX - marginX) / TILE_SIZE));
+        const cEnd   = Math.min(level[0].length - 1, Math.ceil((camCX + marginX) / TILE_SIZE));
+        const rStart = Math.max(0, Math.floor((camCY - marginY) / TILE_SIZE));
+        const rEnd   = Math.min(level.length - 1, Math.ceil((camCY + marginY) / TILE_SIZE));
+        for (let r = rStart; r <= rEnd; r++) {
+            for (let c = cStart; c <= cEnd; c++) {
+                if (!level[r][c]) continue;
+                const wh = level[r][c] * WALL_HEIGHT;
+                push();
+                translate((c + 0.5) * TILE_SIZE, (r + 0.5) * TILE_SIZE, wh / 2 - 25);
+                texture(wallTex);
+                box(TILE_SIZE, TILE_SIZE, wh);
+                pop();
+            }
+        }
+    } else {
+        // Grouped draw (faster, no texture)
+        for (const wall of groupedWalls) {
+            if (wall.x + wall.width < camCX - marginX || wall.x > camCX + marginX) continue;
+            if (wall.y + wall.height < camCY - marginY || wall.y > camCY + marginY) continue;
+            push();
+            translate(wall.x + wall.width / 2, wall.y + wall.height / 2, wall.wallHeight / 2 - 25);
+            fill(120, 80, 40);
+            box(wall.width, wall.height, wall.wallHeight);
+            pop();
+        }
     }
 }
 
@@ -2608,8 +2822,14 @@ function drawExplosions() {
 
         // Debris shards
         if (explosion.color) {
-            if (typeof explosion.color === 'string') { // passed in id indicating player hit
-                explosion.color = (explosion.color == myTank.id) ? [0, 0, 255] : [255, 0, 0];
+            if (typeof explosion.color === 'string') { // player id — resolve to class color
+                const hitPlayer = players[explosion.color];
+                if (hitPlayer) {
+                    const cls = TANK_CLASSES.find(c => c.id === hitPlayer.selectedClass);
+                    explosion.color = cls ? hexToRgb(cls.color) : [200, 200, 200];
+                } else {
+                    explosion.color = [200, 200, 200];
+                }
             }
             if (!explosion._debrisSpawned) {
                 explosion._debrisSpawned = true;
@@ -2782,11 +3002,12 @@ function handleMovement() {
     if (!myTank) return;
     // Capture input and send to server. Physics prediction runs in applySmoothing()
     // (inside draw()) so it fires exactly once per render frame, not at setInterval rate.
+    const panelOpen = isLobbyPanelOpen();
     currentKeys = {
-        w: !!keysHeld['KeyW'],
-        a: !!keysHeld['KeyA'],
-        s: !!keysHeld['KeyS'],
-        d: !!keysHeld['KeyD'],
+        w: !panelOpen && !!keysHeld['KeyW'],
+        a: !panelOpen && !!keysHeld['KeyA'],
+        s: !panelOpen && !!keysHeld['KeyS'],
+        d: !panelOpen && !!keysHeld['KeyD'],
     };
     currentTurretAngle = atan2(mouseY - height / 2, mouseX - width / 2);
     if (laserChanneling && myTank?.selectedClass === 'laser') socket.emit('fireLaser');
@@ -3120,6 +3341,7 @@ function drawCompanions() {
         push();
         translate(c.x, c.y, s);
         rotateZ(c.angle);
+
         fill(255, 211, 42);
         stroke(0);
         strokeWeight(1);
@@ -3130,7 +3352,7 @@ function drawCompanions() {
         rotateZ(PI / 2 + c.turretAngle - c.angle);
         translate(0, 0, s);
         fill(200, 165, 30);
-        box(s, 0.9 * s, s);
+        box(s, s, 0.9 * s);
         noStroke();
         // Barrel using camera-facing outline
         {
@@ -3167,6 +3389,14 @@ function drawCompanions() {
             pop();
         }
         pop();
+
+        // Shield bubble (same as normal tank shield)
+        if (c.shield) {
+            noStroke();
+            fill(50, 100, 255, 100);
+            sphere(s * 1.6);
+        }
+
         pop();
     }
 }

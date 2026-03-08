@@ -71,9 +71,6 @@ function loadLevel(lobby, levelNumber) {
   const spawn = { x: 0, y: 0 };
   const players = {};
   let tankCount = 0;
-  let buttonNumber = 0;
-  const buttonTypes = ['Campaign', lobby.friendlyFire ? 'Friendly Fire: ON' : 'Friendly Fire: OFF', 'Arena', 'Survival', 'Endless'];
-
   for (let r = 0; r < level.length; r++) {
     for (let c = 0; c < level[0].length; c++) {
       const elem = level[r][c];
@@ -85,9 +82,6 @@ function loadLevel(lobby, levelNumber) {
         if (tier === 18) {               // 'S' -> spawn marker
           spawn.x = x;
           spawn.y = y;
-        } else if (tier === 25) {        // 'Z' -> button tank
-          const id = `AI_${tankCount++}`;
-          players[id] = initializeAITank(id, x, y, 'button', buttonTypes[buttonNumber++]);
         } else if (tier === 24) {        // 'Y' -> chest
           const id = `AI_c${tankCount++}`;
           players[id] = initializeAITank(id, x, y, 'chest');

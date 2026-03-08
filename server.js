@@ -169,7 +169,7 @@ function createLevel(lobbyCode, levelNumber) {
                     idx++;
                 }
 
-                // No survivors — give one fresh companion
+                // No survivors — give one fresh companion and reset cooldown
                 if (idx === 0) {
                     const initWander = Math.random() * Math.PI * 2;
                     newCompanions[`${id}_0`] = {
@@ -178,6 +178,7 @@ function createLevel(lobbyCode, levelNumber) {
                         angle: 0, turretAngle: 0,
                         ownerId: id,
                         isDead: false,
+                        shield: true,
                         fireCooldown: 90,
                         spawnGrace: 60,
                         wanderAngle: initWander,
@@ -185,9 +186,9 @@ function createLevel(lobbyCode, levelNumber) {
                         wanderTimer: 0,
                     };
                     idx = 1;
+                    player.companionSpawnCooldown = 900;
                 }
-
-                player.companionSpawnCooldown = 900;
+                // Otherwise cooldown carries over from previous round
                 player.companionCount = idx;
             }
         }
@@ -204,7 +205,7 @@ function createLevel(lobbyCode, levelNumber) {
             const dummy = initializeAITank(dummyId, x, y, 'button', cls.name);
             dummy.classId = cls.id;
             dummy.color = hexToRgb(cls.color);
-            dummy.angle = Math.PI / 2; // face downward toward spawn area
+            dummy.angle = pos.angle ?? Math.PI / 2;
             newPlayers[dummyId] = dummy;
         });
     }
@@ -229,7 +230,7 @@ function createLevel(lobbyCode, levelNumber) {
     };
 
     // io.to(lobbyCode).emit('updateLevel', level)
-    io.to(lobbyCode).emit('updateLevel', { level: level, levelNumber: levelNumber });
+    io.to(lobbyCode).emit('updateLevel', { level: level, levelNumber: levelNumber, zones: lobby.mode === 'lobby' ? LOBBY_ZONES : [] });
 }
 
 function startTransition(lobbyCode) {
@@ -237,14 +238,14 @@ function startTransition(lobbyCode) {
     if (!lobby) return;
     lobby.gameState = "transition";
 
-    // Assault pillage: +55 charge on level completion
+    const basePillageGain = 45; // Base gain per level
     for (const player of Object.values(lobby.players)) {
         if (!player.isAI && player.selectedClass === 'assault') {
-            player.pillageCharge = (player.pillageCharge || 0) + 55 / (player.hasteMult || 1);
+            player.pillageCharge = (player.pillageCharge || 0) + basePillageGain / (player.hasteMult || 1);
         }
     }
 
-    const duration = 3;
+    const duration = lobby.levelNumber === -1 ? 2 : 3;
     transitionTimers[lobbyCode] = duration;
 
     const intervalId = setInterval(() => {
@@ -289,11 +290,34 @@ io.on('connection', (socket) => {
         return lobbies[lobbyCode];
     }
 
+    // Remove this socket from its current lobby (if any). Returns true if left successfully.
+    function leaveCurrentLobby() {
+        const oldCode = socketToLobby[socket.id];
+        if (!oldCode) return true;
+        const oldLobby = lobbies[oldCode];
+        if (oldLobby) {
+            if (oldLobby.mode !== 'lobby') {
+                socket.emit('error', { message: 'Cannot switch lobbies mid-game' });
+                return false;
+            }
+            delete oldLobby.players[socket.id];
+            io.to(oldCode).emit('updatePlayers', oldLobby.players);
+            const remaining = Object.values(oldLobby.players).filter(p => !p.isAI).length;
+            if (remaining === 0) {
+                delete lobbies[oldCode];
+                console.log(`Lobby ${oldCode} deleted (empty after leave)`);
+            }
+        }
+        socket.leave(oldCode);
+        delete socketToLobby[socket.id];
+        return true;
+    }
+
     function createPlayer() {
         // const { x, y } = getRandomNonWallPosition(level);
         const lobby = getLobby()
 
-        socket.emit('updateLevel', { level: lobby.level, levelNumber: lobby.levelNumber });
+        socket.emit('updateLevel', { level: lobby.level, levelNumber: lobby.levelNumber, zones: lobby.mode === 'lobby' ? LOBBY_ZONES : [] });
 
         let name = "Player"
 
@@ -369,9 +393,7 @@ io.on('connection', (socket) => {
     });
 
     socket.on('createLobby', (data = {}) => {
-        if (socketToLobby[socket.id]) {
-            return;
-        }
+        if (!leaveCurrentLobby()) return;
         const name = data.name?.trim() || 'Player';
         setPlayerName(socket, name);
 
@@ -390,9 +412,7 @@ io.on('connection', (socket) => {
     });
 
     socket.on('joinLobby', (data = {}) => {
-        if (socketToLobby[socket.id]) {
-            return;
-        }
+        if (!leaveCurrentLobby()) return;
 
         const { code, name } = data;
         let lobbyCode = code
@@ -920,25 +940,6 @@ function fireLaser(lobby, lobbyCode, tank, players, level, isActive) {
                                 color: color,
                             });
 
-                            if (lobby.mode === 'lobby') {
-                                if (player.isAI && player.tier === 'button') {
-                                    const buttonId = player.name.toLowerCase()
-                                    if (buttonId === 'campaign' || buttonId === 'arena' || buttonId === 'survival' || buttonId === 'endless') {
-                                        // player.isDead = true;
-                                        changeMode(lobbyCode, buttonId);
-                                        lobby.levelNumber = -1;
-                                        // lobby.levelNumber = 14; // Start from level
-                                        startTransition(lobbyCode);
-                                    }
-                                    if (buttonId === 'friendly fire: off') {
-                                        lobby.friendlyFire = true;
-                                        player.name = "Friendly Fire: ON";
-                                    } else if (buttonId === 'friendly fire: on') {
-                                        lobby.friendlyFire = false;
-                                        player.name = "Friendly Fire: OFF";
-                                    }
-                                }
-                            }
                         }
                 }
                 // HIT
@@ -1223,13 +1224,17 @@ function updateBullets(lobby, lobbyCode) {
                 const dx = bullet.x - companion.x;
                 const dy = bullet.y - companion.y;
                 if (Math.hypot(dx, dy) < PLAYER_SIZE * 0.8) {
-                    companion.isDead = true;
                     bulletsToRemove.add(i);
-                    io.to(lobbyCode).emit('explosion', {
-                        x: companion.x, y: companion.y,
-                        z: PLAYER_SIZE, size: 10, dSize: 2,
-                        color: [255, 211, 42],
-                    });
+                    if (companion.shield) {
+                        companion.shield = false;
+                    } else {
+                        companion.isDead = true;
+                        io.to(lobbyCode).emit('explosion', {
+                            x: companion.x, y: companion.y,
+                            z: PLAYER_SIZE, size: 10, dSize: 2,
+                            color: [255, 211, 42],
+                        });
+                    }
                 }
             }
         }
@@ -1314,34 +1319,14 @@ function updateBullets(lobby, lobbyCode) {
 
                 // Tank dies / takes damage
                 if (lobby.mode === 'lobby') {
-                    if (player.isAI && player.tier === 'button') {
+                    if (player.isAI && player.tier === 'button' && player.classId) {
                         // Class selection dummy — set the shooter's class
-                        if (player.classId) {
-                            const shooter = lobby.players[bullet.owner];
-                            if (shooter && !shooter.isAI) {
-                                shooter.selectedClass = player.classId;
-                                io.to(lobbyCode).emit('playerClassChanged', { playerId: bullet.owner, classId: player.classId });
-                            }
-                            player.isDead = false; // Dummy stays alive
-                        } else {
-                            const buttonId = player.name.toLowerCase()
-                            if (buttonId === 'campaign' || buttonId === 'arena' || buttonId === 'survival' || buttonId === 'endless') {
-                                // player.isDead = true;
-                                changeMode(lobbyCode, buttonId);
-                                lobby.levelNumber = -1;
-                                // lobby.levelNumber = 13; // Start from level
-                                startTransition(lobbyCode);
-                            }
-                            if (buttonId === 'friendly fire: off') {
-                                lobby.friendlyFire = true;
-                                player.name = "Friendly Fire: ON";
-                                player.isDead = false;
-                            } else if (buttonId === 'friendly fire: on') {
-                                lobby.friendlyFire = false;
-                                player.name = "Friendly Fire: OFF";
-                                player.isDead = false;
-                            }
+                        const shooter = lobby.players[bullet.owner];
+                        if (shooter && !shooter.isAI) {
+                            shooter.selectedClass = player.classId;
+                            io.to(lobbyCode).emit('playerClassChanged', { playerId: bullet.owner, classId: player.classId });
                         }
+                        player.isDead = false; // Dummy stays alive
                     }
                 }
                 if (bullet.hp > 0) continue; // still has hp, pierces to next target
@@ -1432,11 +1417,27 @@ function handlePlayerMovement(lobby, player) {
     // io.to(lobbyCode).emit('updatePlayers', players);
 }
 
-// Class dummy positions in the lobby level (left section, cols 1-8)
-// Layout: 4 dummies in row 2, 3 dummies in row 8 (world coords = (col+0.5)*TILE_SIZE)
+// Lobby mode-select zones (right section, col 17) — player stands in zone for ZONE_HOLD_FRAMES to activate
+const LOBBY_ZONES = [
+    { col: 15, row: 2, mode: 'campaign', label: 'CAMPAIGN', color: [80, 220, 120] },
+    { col: 15, row: 5, mode: 'arena', label: 'ARENA', color: [220, 80, 80] },
+    { col: 15, row: 8, mode: 'survival', label: 'SURVIVAL', color: [220, 160, 60] },
+    { col: 15, row: 11, mode: 'endless', label: 'ENDLESS', color: [140, 100, 220] },
+];
+const ZONE_RADIUS = TILE_SIZE * 1.2;
+const ZONE_HOLD_FRAMES = 180; // 3 seconds at 60 fps
+
+// Class dummy positions — two rows of 4 spread across the open lobby
+// Row 2 faces down (toward center), Row 11 faces up (toward center)
 const CLASS_DUMMY_POSITIONS = [
-    { col: 1, row: 2 }, { col: 3, row: 2 }, { col: 5, row: 2 }, { col: 7, row: 2 },
-    { col: 2, row: 8 }, { col: 4, row: 8 }, { col: 6, row: 8 }, { col: 8, row: 8 },
+    { col: 2, row: 2, angle: Math.PI / 2 },
+    { col: 5, row: 2, angle: Math.PI / 2 },
+    { col: 8, row: 2, angle: Math.PI / 2 },
+    { col: 11, row: 2, angle: Math.PI / 2 },
+    { col: 2, row: 11, angle: -Math.PI / 2 },
+    { col: 5, row: 11, angle: -Math.PI / 2 },
+    { col: 8, row: 11, angle: -Math.PI / 2 },
+    { col: 11, row: 11, angle: -Math.PI / 2 },
 ];
 
 function hexToRgb(hex) {
@@ -1524,7 +1525,7 @@ function updatePlayerStats(lobby, player) {
             break;
         default:
             player.visionDistance = 100 * TILE_SIZE
-            player.max_speed = MAX_SPEED;
+            player.max_speed = MAX_SPEED * 1.4;
             player.maxBullets = 6;
             // player.bulletBounces = 0;
             break;
@@ -1599,6 +1600,9 @@ function updatePlayerStats(lobby, player) {
     if (player.buffs.visionRange > 0) {
         player.visionDistance *= 1 + 0.3 * Math.sqrt(player.buffs.visionRange);
         player.visionCornerBoost = 1;
+    } else if (player.buffs.visionRange < 0) {
+        player.visionDistance *= Math.max(0.2, 1 - 0.2 * Math.sqrt(-player.buffs.visionRange));
+        player.visionCornerBoost = 0;
     } else {
         player.visionCornerBoost = 0;
     }
@@ -1738,6 +1742,7 @@ function spawnCompanionForPlayer(lobby, playerId, player, spawnX, spawnY) {
         angle: 0, turretAngle: 0,
         ownerId: playerId,
         isDead: false,
+        shield: true,
         fireCooldown: 90,
         spawnGrace: 60,
         rallyPoint: player.lastRallyPoint || null,
@@ -1761,7 +1766,7 @@ function bfsPath(level, startX, startY, endX, endY) {
     const startKey = `${sr},${sc}`;
     parent.set(startKey, null);
     const queue = [[sr, sc]];
-    const dirs = [[-1,0],[1,0],[0,-1],[0,1],[-1,-1],[-1,1],[1,-1],[1,1]];
+    const dirs = [[-1, 0], [1, 0], [0, -1], [0, 1], [-1, -1], [-1, 1], [1, -1], [1, 1]];
     let found = false;
     while (queue.length > 0) {
         const [r, c] = queue.shift();
@@ -1909,7 +1914,9 @@ function updateCompanions(lobby, lobbyCode) {
             const hasLOS = !detectObstacleAlongRay(companion.x, companion.y, angleToEnemy, nearestDist, lobby.level);
             if (hasLOS) {
                 companion.turretAngle = lerpAngle(companion.turretAngle, angleToEnemy, 0.18);
-                if (companion.fireCooldown <= 0) {
+                const d = companion.turretAngle - angleToEnemy;
+                const aimDiff = Math.abs(Math.atan2(Math.sin(d), Math.cos(d)));
+                if (companion.fireCooldown <= 0 && aimDiff < 0.15) {
                     lobby.bullets.push({
                         x: companion.x + Math.cos(companion.turretAngle) * PLAYER_SIZE,
                         y: companion.y + Math.sin(companion.turretAngle) * PLAYER_SIZE,
@@ -2214,6 +2221,36 @@ setInterval(() => {
             if (!player.isAI && !player.isDead) {
                 handlePlayerMovement(lobby, player);
             }
+        }
+
+        // Zone voting in lobby
+        if (lobby.mode === 'lobby') {
+            const zoneProgress = {};
+            for (const zone of LOBBY_ZONES) zoneProgress[zone.mode] = 0;
+            let modeTriggered = false;
+            for (const player of Object.values(lobby.players)) {
+                if (player.isAI || player.isDead || modeTriggered) continue;
+                player.zoneTimers = player.zoneTimers || {};
+                for (const zone of LOBBY_ZONES) {
+                    const zx = (zone.col + 0.5) * TILE_SIZE;
+                    const zy = (zone.row + 0.5) * TILE_SIZE;
+                    if (Math.hypot(player.x - zx, player.y - zy) < ZONE_RADIUS) {
+                        player.zoneTimers[zone.mode] = (player.zoneTimers[zone.mode] || 0) + 1;
+                        if (player.zoneTimers[zone.mode] >= ZONE_HOLD_FRAMES) {
+                            modeTriggered = true;
+                            player.zoneTimers = {};
+                            changeMode(lobbyCode, zone.mode);
+                            lobby.levelNumber = -1;
+                            startTransition(lobbyCode);
+                            break;
+                        }
+                        zoneProgress[zone.mode] = Math.max(zoneProgress[zone.mode], player.zoneTimers[zone.mode] / ZONE_HOLD_FRAMES);
+                    } else {
+                        player.zoneTimers[zone.mode] = Math.max(0, (player.zoneTimers[zone.mode] || 0) - 3);
+                    }
+                }
+            }
+            if (!modeTriggered) io.to(lobbyCode).emit('updateZones', zoneProgress);
         }
 
         lobby.lasers = lobby.lasers.filter(laser => {

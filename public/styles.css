@@ -439,6 +439,34 @@ button[disabled] {
 }
 
 /* ===== Event Log ===== */
+.key-hints {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 10px;
+    margin-top: 8px;
+    padding-top: 7px;
+    border-top: 1px solid #1a2035;
+}
+
+.key-hint {
+    font-size: 11px;
+    color: #6b7a9a;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+kbd {
+    font-family: ui-monospace, monospace;
+    font-size: 10px;
+    color: #a0aec0;
+    background: #141b2d;
+    border: 1px solid #2a3452;
+    border-radius: 4px;
+    padding: 1px 5px;
+    line-height: 1.6;
+}
+
 .event-log-wrap {
     background: rgba(11, 14, 22, 0.6);
     border: 1px solid #20273a;
