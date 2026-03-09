@@ -11,6 +11,8 @@ let explosions = [];
 let trails = [];
 let woodTexture;
 let drops = []; // Store active drops
+let vacuumDrops = []; // { x, y, buff, targetX, targetY, life } — flying toward player at round end
+let fogSuppressed = false; // true during vacuum animation until transition or next level
 // let drops = [{ x: 200, y: 200, buff: 'speed' }, { x: 250, y: 200, buff: 'fireRate' }, { x: 300, y: 200, buff: 'bulletSpeed' }, { x: 350, y: 200, buff: 'shield' }, { x: 400, y: 200, buff: 'multiShot' }, { x: 450, y: 200, buff: 'bulletBounces' }]; // test drop
 let buffs = [];
 
@@ -103,6 +105,27 @@ function particleScale() {
 let shakeIntensity = 0;
 let shakeDuration = 0;
 let smokeClouds = []; // { x, y, radius, framesLeft }
+
+const MUSEUM_DESCRIPTIONS = [
+    { name: 'Basic Tank',      desc: 'The standard enemy. Balanced stats, no special tricks.' },
+    { name: 'Speedy',          desc: 'Fast-moving and quick to fire. Dangerous in groups.' },
+    { name: 'Sniper',          desc: 'Long-range specialist. Slow to fire but shots travel far.' },
+    { name: 'Rusher',          desc: 'Aggressive flanker. High speed, fires in short bursts.' },
+    { name: 'Tracker',         desc: 'Bullets curve toward you. Hard to dodge at range.' },
+    { name: 'Laser Tank',      desc: 'Fires a sustained laser beam. Locks on and holds fire.' },
+    { name: 'Triple Shot',     desc: 'Fires three bullets in a spread. Deadly up close.' },
+    { name: 'Machine Gun',     desc: 'Rapid-fire, low accuracy. Overwhelms with volume.' },
+    { name: 'Phantom',         desc: 'Turns nearly invisible. Listen for its shots.' },
+    { name: 'Shield Tank',     desc: 'Raises a directional shield to block your bullets.' },
+    { name: 'Titan',           desc: 'Heavily armored. Takes many hits to bring down.' },
+    { name: 'Harbinger',       desc: '[BOSS] Captures nearby bullets and deflects them back with a pulse blast.' },
+    { name: 'Intelligence',    desc: 'Coordinates nearby allies, boosting their targeting accuracy.' },
+    { name: 'Laser Pulse',     desc: 'Charges up then unleashes a sweeping rapid-fire laser arc.' },
+    { name: 'Cannoneer',       desc: 'Fires explosive cannonballs that destroy walls on impact.' },
+    { name: 'Sovereign',       desc: '[BOSS] Massive. Wall-destroying cannonballs. Four orbiting shield walls intercept your bullets.' },
+    { name: 'Phantom Sniper',  desc: '[BOSS] Cloaks, then charges and fires a wall-piercing shot.' },
+    { name: 'Wraith',          desc: '[BOSS] Cycles stealth (invulnerable). Rapid-fires in one direction. Drops vision-blocking smoke grenades.' },
+];
 let killIndicators = []; // { x, y, life, maxLife, text, color? }
 let prevMyKills = 0;
 let skipKillDetection = false;
@@ -385,7 +408,8 @@ socket.on('gameOver', () => {
 
 socket.on('transitionTimer', (data) => {
     gameState = "transition";
-    transitionTimeLeft = data.secondsLeft; // Update the countdown
+    transitionTimeLeft = data.secondsLeft;
+    fogSuppressed = false;
 });
 
 socket.on('nextLevel', () => {
@@ -397,7 +421,10 @@ socket.on('nextLevel', () => {
     spectateTargetId = null;
     killIndicators = [];
     smokeClouds = [];
+    vacuumDrops = [];
     chainRays = [];
+    smoothingEnabled = true;
+    fogSuppressed = false;
     skipKillDetection = true;
     skipBuffDetection = true;
     prevMyBuffs = {};
@@ -415,6 +442,14 @@ socket.on('arenaMode', () => {
 
 socket.on('updateDrops', (serverDrops) => {
     drops = serverDrops;
+});
+
+socket.on('dropsVacuum', (events) => {
+    smoothingEnabled = false;
+    fogSuppressed = true;
+    for (const ev of events) {
+        vacuumDrops.push({ x: ev.x, y: ev.y, buff: ev.buff, targetX: ev.targetX, targetY: ev.targetY, life: 120 });
+    }
 });
 
 socket.on('laserFired', (laserData) => {
@@ -489,6 +524,10 @@ function draw() {
     directionalLight(80, 80, 80, 1, -1, -1)
 
     if (gameState === "transition") {
+        if (vacuumDrops.length > 0 && myTank) {
+            camera(camX, camY, camZ, myTank.x, myTank.y, 0, 0, 1, 0);
+            drawDrops();
+        }
         drawTransitionScreen();
         return;
     }
@@ -814,6 +853,7 @@ function draw() {
     drawTrails();
 
     drawFlares();
+    drawSmokeClouds();
     drawCompanions();
     drawEngineerRallyIndicator();
     drawSniperScopeRay();
@@ -850,7 +890,7 @@ function draw() {
         }
     }
 
-    if (isFogOfWar && !allDead) {
+    if (isFogOfWar && !allDead && !fogSuppressed) {
         const resolution = visionResolution;
         // Build flare vision entries to inject into fog
         const flareVision = flares.map(f => ({
@@ -910,6 +950,7 @@ function draw() {
         drawKDABoard();
     } else if (gameMode === 'lobby') {
         drawClassInfoPanel();
+        drawMuseumTooltip();
     }
 
     // Spectate overlay
@@ -1503,6 +1544,53 @@ function drawKDABoard() {
     gl.enable(gl.DEPTH_TEST);
 }
 
+// Draw museum tooltip when the player is near a museum tank
+function drawMuseumTooltip() {
+    if (!myTank) return;
+    const HOVER_DIST = typeof PLAYER_SIZE !== 'undefined' ? PLAYER_SIZE * 3.5 : 50;
+    let nearest = null, nearestDist = Infinity;
+    for (const id in players) {
+        const t = players[id];
+        if (!t.isMuseum) continue;
+        const d = Math.hypot(t.x - myTank.x, t.y - myTank.y);
+        if (d < HOVER_DIST && d < nearestDist) { nearest = t; nearestDist = d; }
+    }
+    if (!nearest) return;
+    const info = MUSEUM_DESCRIPTIONS[nearest.tier];
+    if (!info) return;
+
+    const gl = drawingContext;
+    gl.disable(gl.DEPTH_TEST);
+
+    const VH = 250;
+    const panW = 340, panH = 72;
+    const [r, g, b] = nearest.color || [200, 200, 200];
+
+    push();
+    translate(-panW / 2, VH - panH - 14, 0);
+    rectMode(CORNER);
+    noStroke();
+    fill(10, 10, 18, 210);
+    rect(0, 0, panW, panH, 8);
+    stroke(r, g, b, 160);
+    strokeWeight(1.5);
+    noFill();
+    rect(0, 0, panW, panH, 8);
+
+    textFont(font);
+    noStroke();
+    textAlign(LEFT, TOP);
+    textSize(14);
+    fill(r, g, b);
+    text(info.name, 12, 10);
+    textSize(11);
+    fill(210, 210, 220);
+    text(info.desc, 12, 30, panW - 24, panH - 34);
+    pop();
+
+    gl.enable(gl.DEPTH_TEST);
+}
+
 // Draw class info panel in lobby mode — shows selected class description + trade-offs
 function drawClassInfoPanel() {
     if (!myTank || typeof TANK_CLASSES === 'undefined') return;
@@ -1820,15 +1908,23 @@ function drawTracks() {
 
 function drawTank(tank, isSelf) {
     const size = PLAYER_SIZE;
-    // Soft pulse during spawn grace — briefly invisible for 5 frames every 30
-    if (tank.spawnGrace > 0 && frameCount % 30 >= 25) return;
     const cloakAlpha = (tank.tier === 8 && tank.cloaked) ? 10 : (tank.tier === 17 && tank.wraithStealthed) ? 15 : 255;
+    // Grace period ring: draw a pulsing aura in world space
+    if (tank.spawnGrace > 0) {
+        const pulse = 0.7 + 0.3 * Math.sin(frameCount * 0.25);
+        push();
+        translate(tank.x, tank.y, 2);
+        noStroke();
+        fill(255, 240, 80, Math.round(pulse * 140));
+        torus(size * 1.6, size * 0.25);
+        pop();
+    }
     push();
     // Tank base (lower box)
     translate(tank.x, tank.y, PLAYER_SIZE); // Position tank
     rotateZ(tank.angle); // Rotate tank base
 
-    fill(...playerColor(tank, isSelf, cloakAlpha));
+    fill(color(...playerColor(tank, isSelf, cloakAlpha)));
 
     if (!tank.isDead) {
 
@@ -1847,8 +1943,8 @@ function drawTank(tank, isSelf) {
                 box(2.8 * size, 1.8 * size, size * 1.1);  // Long Phantom hull
                 box(2.6 * size, 2.1 * size, size * 0.75); // Treads
             } else if (tank.tier === 17) {
-                box(2.2 * size, 1.4 * size, size * 0.9);  // Sleek Wraith hull
-                box(2.0 * size, 1.7 * size, size * 0.6);  // Low-profile treads
+                box(3.0 * size, 2.0 * size, size * 1.1);  // Wraith hull
+                box(2.8 * size, 2.4 * size, size * 0.7);  // Wide treads
             } else {
                 box(2 * size, 1.5 * size, size); // Tank base dimensions
                 box(1.8 * size, 1.7 * size, size * 0.8); // Treads
@@ -1864,7 +1960,7 @@ function drawTank(tank, isSelf) {
             } else if (tank.tier === 16) {
                 box(1.3 * size, 1.3 * size, size * 1.1); // Phantom turret
             } else if (tank.tier === 17) {
-                box(0.9 * size, 0.9 * size, size * 0.8); // Small Wraith turret
+                box(1.4 * size, 1.4 * size, size * 1.0); // Wraith turret
             } else {
                 box(size, 1.15 * size, size); // Slightly smaller box
             }
@@ -2086,7 +2182,24 @@ function drawTank(tank, isSelf) {
     }
 
     // Draw nametag
-    if (tank.classId) {
+    if (tank.isMuseum) {
+        // ── Museum display tank — tier name label ──────────────────────
+        const info = MUSEUM_DESCRIPTIONS[tank.tier] || { name: `Tier ${tank.tier}` };
+        push();
+        translate(tank.x, tank.y, PLAYER_SIZE * 3.5);
+        rotateX(atan2(tank.y - camY, camZ));
+        textAlign(CENTER, CENTER);
+        if (font) textFont(font);
+        textSize(13);
+        noStroke();
+        translate(0, 0, -1);
+        fill(0, 0, 0, 180);
+        text(info.name, 1.5, 1.5);
+        translate(0, 0, 1);
+        fill(...tank.color);
+        text(info.name, 0, 0);
+        pop();
+    } else if (tank.classId) {
         // ── Class selection dummy ──────────────────────────────────────
         const cls = typeof TANK_CLASSES !== 'undefined'
             ? TANK_CLASSES.find(c => c.id === tank.classId) : null;
@@ -2107,7 +2220,7 @@ function drawTank(tank, isSelf) {
         translate(tank.x, tank.y, PLAYER_SIZE * 4.2);
         rotateX(atan2(tank.y - camY, camZ));
         textAlign(CENTER, CENTER);
-        textFont(font);
+        if (font) textFont(font);
         noStroke();
         const label = cls ? cls.name : tank.name;
         textSize(isSelected ? 16 : 14);
@@ -2132,7 +2245,7 @@ function drawTank(tank, isSelf) {
         translate(tank.x, tank.y, PLAYER_SIZE * 3.5);
         rotateX(atan2(tank.y - camY, camZ));
         textAlign(CENTER, CENTER);
-        textFont(font);
+        if (font) textFont(font);
         textSize(16);
         noStroke();
         const name = tank.name || "Player";
@@ -2992,24 +3105,34 @@ function drawDrops() {
         drawDrop(x, y, angle, buff);
         pop();
     });
+
+    // Vacuum animation: actual drop icons fly and shrink toward their target player
+    for (let i = vacuumDrops.length - 1; i >= 0; i--) {
+        const vd = vacuumDrops[i];
+        const t = 1 - vd.life / 120;         // 0→1 over 2 seconds
+        const speed = 0.015 + t * t * 0.12;  // ease-in: slow start, accelerates late
+        vd.x += (vd.targetX - vd.x) * speed;
+        vd.y += (vd.targetY - vd.y) * speed;
+        vd.life--;
+
+        // Stay full size for first 60% of journey, then shrink
+        const sz = t < 0.6 ? 1 : (1 - (t - 0.6) / 0.4);
+        if (sz < 0.08 || Math.hypot(vd.x - vd.targetX, vd.y - vd.targetY) < PLAYER_SIZE * 0.5) {
+            vacuumDrops.splice(i, 1);
+            continue;
+        }
+
+        const angle = frameCount / 45;
+        push();
+        translate(vd.x, vd.y, TILE_SIZE / 4 * sz);
+        rotateZ(angle);
+        scale(sz, sz, sz);
+        if (font) textFont(font);
+        drawDrop(vd.x, vd.y, angle, vd.buff);
+        pop();
+    }
 }
 
-function drawUI() {
-    push()
-    translate(myTank.x, myTank.y, 0)
-    const angle = - PI / 2 + atan2(camZ, camY - myTank.y)
-    translate(0, 0 * sin(angle), 100)
-    rotateX(angle)
-    push()
-    // translate(-width / 2, -height / 2)
-    fill(255);
-    noStroke();
-    textAlign(LEFT, TOP);
-    textFont(font)
-    text("HELLO", mouseX, 0)
-    pop()
-    pop()
-}
 
 function handleMovement() {
     if (!myTank) return;
@@ -3286,6 +3409,21 @@ function drawFlares() {
     }
 }
 
+
+function drawSmokeClouds() {
+    // Fog blocking is handled in vision.js fog layer.
+    // Draw a subtle ground ring so the smoke location is hinted at in-world.
+    for (const sc of smokeClouds) {
+        const fade = Math.min(1, sc.framesLeft / 60);
+        const pulse = 0.8 + 0.2 * Math.sin(frameCount * 0.05);
+        push();
+        translate(sc.x, sc.y, 2);
+        noStroke();
+        fill(140, 140, 160, Math.round(55 * fade * pulse));
+        torus(sc.radius * 0.55, sc.radius * 0.18);
+        pop();
+    }
+}
 
 function drawSniperScopeRay() {
     if (!sniperPanning || !myTank || myTank.selectedClass !== 'sniper') return;

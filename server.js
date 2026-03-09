@@ -69,7 +69,7 @@ function createLevel(lobbyCode, levelNumber) {
     //     }
     // }
 
-    let { players: newPlayers, level, spawn } = loadLevel(lobby, levelNumber)
+    let { players: newPlayers, level, spawn, continueZone } = loadLevel(lobby, levelNumber)
 
     // Object.assign(newPlayers, lobby.players)
     // console.log(newPlayers)
@@ -208,6 +208,18 @@ function createLevel(lobbyCode, levelNumber) {
             dummy.angle = pos.angle ?? Math.PI / 2;
             newPlayers[dummyId] = dummy;
         });
+
+        // Museum tanks — one per enemy tier, static display only
+        MUSEUM_TANK_POSITIONS.forEach(pos => {
+            const museumId = `museum_${pos.tier}`;
+            const x = (pos.col + 0.5) * TILE_SIZE;
+            const y = (pos.row + 0.5) * TILE_SIZE;
+            const tank = initializeAITank(museumId, x, y, pos.tier, '');
+            tank.isMuseum = true;
+            tank.angle = pos.angle;
+            tank.turretAngle = pos.angle;
+            newPlayers[museumId] = tank;
+        });
     }
 
     lobbies[lobbyCode] = {
@@ -228,40 +240,76 @@ function createLevel(lobbyCode, levelNumber) {
         friendlyFire: lobby.friendlyFire,
         numBots: 0,
         smokeClouds: [],
+        continueZone: continueZone || null,
     };
 
     // io.to(lobbyCode).emit('updateLevel', level)
-    io.to(lobbyCode).emit('updateLevel', { level: level, levelNumber: levelNumber, zones: lobby.mode === 'lobby' ? LOBBY_ZONES : [] });
+    const emitZones = lobby.mode === 'lobby' ? LOBBY_ZONES
+        : (continueZone ? [{ col: continueZone.col, row: continueZone.row, mode: 'continue', label: 'CONTINUE', color: [255, 215, 0] }] : []);
+    io.to(lobbyCode).emit('updateLevel', { level: level, levelNumber: levelNumber, zones: emitZones });
 }
 
 function startTransition(lobbyCode) {
     const lobby = lobbies[lobbyCode];
-    if (!lobby) return;
-    lobby.gameState = "transition";
+    if (!lobby || lobby.gameState === 'transition' || lobby.gameState === 'animating') return;
 
-    const basePillageGain = 45; // Base gain per level
-    for (const player of Object.values(lobby.players)) {
-        if (!player.isAI && player.selectedClass === 'assault') {
-            player.pillageCharge = (player.pillageCharge || 0) + basePillageGain / (player.hasteMult || 1);
+    // Phase 1: stay on game screen so vacuum animation is visible
+    lobby.gameState = "animating";
+
+    // Emit drops immediately so the animation starts while still on game screen
+    const hasDrops = !!(lobby.drops && lobby.drops.length);
+    if (lobby.drops && lobby.drops.length) {
+        const humans = Object.values(lobby.players).filter(p => !p.isAI && !p.isDead);
+        const vacuumEvents = [];
+        for (const drop of lobby.drops) {
+            if (!humans.length) break;
+            let nearest = null, nearestDist = Infinity;
+            for (const p of humans) {
+                const d = Math.hypot(drop.x - p.x, drop.y - p.y);
+                if (d < nearestDist) { nearestDist = d; nearest = p; }
+            }
+            if (nearest) {
+                vacuumEvents.push({ id: drop.id, x: drop.x, y: drop.y, buff: drop.buff, targetX: nearest.x, targetY: nearest.y });
+                if (nearest.buffs && nearest.buffs.hasOwnProperty(drop.buff)) {
+                    nearest.buffs[drop.buff] += 1;
+                    io.to(lobbyCode).emit('updatePlayerBuffs', { playerId: nearest.id, buffs: nearest.buffs });
+                }
+            }
         }
+        if (vacuumEvents.length) io.to(lobbyCode).emit('dropsVacuum', vacuumEvents);
+        lobby.drops = [];
+        io.to(lobbyCode).emit('updateDrops', lobby.drops);
     }
 
-    const duration = lobby.levelNumber === -1 ? 2 : 3;
-    transitionTimers[lobbyCode] = duration;
+    // Phase 2: after animation window, switch to transition screen
+    const animDelay = lobby.levelNumber === -1 ? 0 : (hasDrops ? 1500 : 300);
+    setTimeout(() => {
+        if (!lobbies[lobbyCode]) return;
+        lobby.gameState = "transition";
 
-    const intervalId = setInterval(() => {
-        transitionTimers[lobbyCode]--;
-        io.to(lobbyCode).emit('transitionTimer', { secondsLeft: transitionTimers[lobbyCode] });
-
-        if (transitionTimers[lobbyCode] <= 0) {
-            clearInterval(intervalId);
-            createLevel(lobbyCode, lobby.levelNumber + 1);
-            io.to(lobbyCode).emit('nextLevel');
-
-            lobby.gameState = "playing";
-            transitionTimers[lobbyCode] = null;
+        const basePillageGain = 45;
+        for (const player of Object.values(lobby.players)) {
+            if (!player.isAI && player.selectedClass === 'assault') {
+                player.pillageCharge = (player.pillageCharge || 0) + basePillageGain / (player.hasteMult || 1);
+            }
         }
-    }, 1000);
+
+        const duration = lobby.levelNumber === -1 ? 2 : 3;
+        transitionTimers[lobbyCode] = duration;
+
+        const intervalId = setInterval(() => {
+            transitionTimers[lobbyCode]--;
+            io.to(lobbyCode).emit('transitionTimer', { secondsLeft: transitionTimers[lobbyCode] });
+
+            if (transitionTimers[lobbyCode] <= 0) {
+                clearInterval(intervalId);
+                createLevel(lobbyCode, lobby.levelNumber + 1);
+                io.to(lobbyCode).emit('nextLevel');
+                lobbies[lobbyCode].gameState = "playing";
+                transitionTimers[lobbyCode] = null;
+            }
+        }, 1000);
+    }, animDelay);
 }
 
 function changeMode(lobbyCode, mode) {
@@ -975,7 +1023,7 @@ function explodeCannonball(lobby, lobbyCode, bullet, bulletsToRemove, i) {
     const players = lobby.players;
     for (const playerId in players) {
         const player = players[playerId];
-        if (player.isDead) continue;
+        if (player.isDead || player.isMuseum) continue;
         if (Math.hypot(player.x - bullet.x, player.y - bullet.y) > splashRadius) continue;
         const owner = players[bullet.owner];
         if (lobby.mode !== 'lobby' || player.isAI) {
@@ -1001,7 +1049,7 @@ function explodeCannonball(lobby, lobbyCode, bullet, bulletsToRemove, i) {
                 }
             }
         }
-        if (player.tier === 'chest') spawnDrop(lobbyCode, player.x, player.y, owner);
+        if (player.tier === 'chest' && player.isDead) spawnDrop(lobbyCode, player.x, player.y, owner);
     }
     // Destroy interior walls in splash radius (cannoneer heavy cannon only)
     if (bullet.isHeavyCannonball && lobby.level) {
@@ -1241,6 +1289,13 @@ function updateBullets(lobby, lobbyCode) {
         }
 
         // Check for collisions with players
+        // For piercing bullets: clean up players the bullet has exited before checking new hits
+        if (bullet.hitPlayers) {
+            for (const pid of bullet.hitPlayers) {
+                const p = players[pid];
+                if (!p || !isCollidingWithPlayer(nextX, nextY, p)) bullet.hitPlayers.delete(pid);
+            }
+        }
         for (let playerId in players) {
             const player = players[playerId];
             if ((bullet.isTurretBullet || bullet.skipOwner) && playerId === bullet.owner) continue;
@@ -1250,6 +1305,8 @@ function updateBullets(lobby, lobbyCode) {
                 if (bOwner && bOwner.isAI) continue;
             }
             if (player.isAI && player.wraithStealthed) continue; // Wraith invulnerable while stealthed
+            if (player.isMuseum) continue; // Museum tanks are indestructible
+            if (bullet.hitPlayers && bullet.hitPlayers.has(playerId)) continue; // still inside this tank
             if (/*playerId !== bullet.owner && */isCollidingWithPlayer(nextX, nextY, player)) {
                 if (bullet.isCannonball || bullet.hasSplash) {
                     explodeCannonball(lobby, lobbyCode, bullet, bulletsToRemove, i);
@@ -1302,7 +1359,7 @@ function updateBullets(lobby, lobbyCode) {
                     // player.isDead = true;
                 }
 
-                if (player.tier == 'chest') {
+                if (player.tier === 'chest' && player.isDead) {
                     const bulletOwner = lobby.players[bullet.owner];
                     if (!bulletOwner || !bulletOwner.isAI) {
                         spawnDrop(lobbyCode, player.x, player.y, bulletOwner);
@@ -1331,7 +1388,12 @@ function updateBullets(lobby, lobbyCode) {
                         player.isDead = false; // Dummy stays alive
                     }
                 }
-                if (bullet.hp > 0) continue; // still has hp, pierces to next target
+                if (bullet.hp > 0) {
+                    // Track that bullet is still inside this tank to prevent multi-tick damage
+                    if (!bullet.hitPlayers) bullet.hitPlayers = new Set();
+                    bullet.hitPlayers.add(playerId);
+                    continue; // still has hp, pierces to next target
+                }
                 break;
             }
         }
@@ -1442,6 +1504,14 @@ const CLASS_DUMMY_POSITIONS = [
     { col: 11, row: 11, angle: -Math.PI / 2 },
 ];
 
+// Museum — display tank for each tier in the right wing (cols 22-38, rows 4 and 9)
+// 9 per row: tiers 0-8 in row 4, tiers 9-17 in row 9, spaced every 2 cols from col 22
+const MUSEUM_COLS = [22, 24, 26, 28, 30, 32, 34, 36, 38];
+const MUSEUM_TANK_POSITIONS = [
+    ...MUSEUM_COLS.map((col, i) => ({ col, row: 4,  tier: i,     angle: Math.PI / 2 })),
+    ...MUSEUM_COLS.map((col, i) => ({ col, row: 9,  tier: i + 9, angle: Math.PI / 2 })),
+];
+
 function hexToRgb(hex) {
     return [
         parseInt(hex.slice(1, 3), 16),
@@ -1540,9 +1610,9 @@ function updatePlayerStats(lobby, player) {
         player.max_speed *= Math.max(0.3, 1 + player.buffs.speed * 0.15);
     }
 
-    // Fire-rate buff: faster (positive) or slower (negative)
-    const fireRateBulletBonus = player.buffs.fireRate > 0
-        ? Math.ceil(Math.sqrt(player.buffs.fireRate)) : 0;
+    // Fire-rate buff: faster (positive) or slower (negative); also scales bullet count
+    const fr = player.buffs.fireRate;
+    const fireRateBulletBonus = fr > 0 ? Math.ceil(Math.sqrt(fr)) : Math.ceil(fr / 2);
     if (player.buffs.fireRate > 0) {
         player.fireRateMultiplier = Math.max(0.35, 1 - 0.09 * Math.sqrt(player.buffs.fireRate));
     } else if (player.buffs.fireRate < 0) {
@@ -1637,6 +1707,7 @@ function updatePlayerStats(lobby, player) {
 
     // Apply fireRate bullet bonus on top of class base
     player.maxBullets += fireRateBulletBonus;
+    player.maxBullets = Math.max(1, player.maxBullets);
 
     // Laser energy: drains via fireLaser events, recharges passively
     if (player.hasLaserAbility) {
@@ -2204,7 +2275,7 @@ function handlePlayerPickup(lobbyCode, playerId) {
 // Run lobby updates 60 times per second
 setInterval(() => {
     for (const [lobbyCode, lobby] of Object.entries(lobbies)) {
-        if (lobby.gameState == "transition") continue;
+        if (lobby.gameState === "transition") continue;
 
         updateBullets(lobby, lobbyCode);
 
@@ -2219,9 +2290,11 @@ setInterval(() => {
 
 
 
-        for (const [_, player] of Object.entries(lobby.players)) {
-            if (!player.isAI && !player.isDead) {
-                handlePlayerMovement(lobby, player);
+        if (lobby.gameState !== 'animating') {
+            for (const [_, player] of Object.entries(lobby.players)) {
+                if (!player.isAI && !player.isDead) {
+                    handlePlayerMovement(lobby, player);
+                }
             }
         }
 
@@ -2255,6 +2328,37 @@ setInterval(() => {
             if (!modeTriggered) io.to(lobbyCode).emit('updateZones', zoneProgress);
         }
 
+        // Continue zone for endless loot rounds
+        if (lobby.mode === 'endless' && lobby.continueZone) {
+            const cz = lobby.continueZone;
+            const czX = (cz.col + 0.5) * TILE_SIZE;
+            const czY = (cz.row + 0.5) * TILE_SIZE;
+            let anyProgress = false;
+            let triggered = false;
+            let bestProg = 0;
+            for (const player of Object.values(lobby.players)) {
+                if (player.isAI || player.isDead) continue;
+                if (Math.hypot(player.x - czX, player.y - czY) < ZONE_RADIUS) {
+                    player.continueZoneTimer = (player.continueZoneTimer || 0) + 1;
+                    if (player.continueZoneTimer >= ZONE_HOLD_FRAMES) {
+                        triggered = true;
+                        break;
+                    }
+                    bestProg = Math.max(bestProg, player.continueZoneTimer / ZONE_HOLD_FRAMES);
+                    anyProgress = true;
+                } else {
+                    player.continueZoneTimer = Math.max(0, (player.continueZoneTimer || 0) - 3);
+                }
+            }
+            if (triggered) {
+                lobby.continueZone = null;
+                io.to(lobbyCode).emit('levelComplete', { levelNumber: lobby.levelNumber });
+                startTransition(lobbyCode);
+            } else {
+                io.to(lobbyCode).emit('updateZones', { continue: bestProg });
+            }
+        }
+
         lobby.lasers = lobby.lasers.filter(laser => {
             laser.duration--;
             return laser.duration > 0;
@@ -2279,7 +2383,7 @@ setInterval(() => {
         updateCompanions(lobby, lobbyCode);
 
         if (lobby.mode == 'lobby' || lobby.mode == 'campaign' || lobby.mode == 'endless') {
-            if (lobby.level && updateAITanks(lobby, lobbyCode, lobby.players, lobby.level, lobby.bullets)) {
+            if (lobby.gameState !== 'transition' && lobby.gameState !== 'animating' && lobby.level && !lobby.continueZone && updateAITanks(lobby, lobbyCode, lobby.players, lobby.level, lobby.bullets)) {
                 // createLevel(lobbyCode, lobby.levelNumber + 1);
                 // console.log(lobby.levelNumber, lobby.totalLevels - 1)
                 if (lobby.levelNumber == lobby.totalLevels - 1) {
@@ -2312,7 +2416,7 @@ setInterval(() => {
                     livingPlayers.push(player);
                 }
             }
-            if (livingPlayers.length == 1) {
+            if (lobby.gameState !== 'transition' && lobby.gameState !== 'animating' && livingPlayers.length == 1) {
                 // TODO: Broadcast winning player
 
                 changeMode(lobbyCode, 'lobby');
@@ -2334,7 +2438,7 @@ setInterval(() => {
                 }
             }
 
-            if (numPlayers > 0 && allDead) {
+            if (lobby.gameState !== 'transition' && lobby.gameState !== 'animating' && numPlayers > 0 && allDead) {
                 changeMode(lobbyCode, 'lobby');
                 io.to(lobbyCode).emit("gameOver");
                 lobby.levelNumber = -1;

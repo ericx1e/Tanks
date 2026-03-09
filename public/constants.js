@@ -29,7 +29,7 @@ const TANK_CLASSES = [
     {
         id: 'sniper', name: 'Sniper', label: '[SN]',
         description: 'Piercing high-velocity shots. Hold right-click to scope; release to fire a wall-piercing shot that passes through everything.',
-        buffs: { bulletSpeed: 4, piercing: 2, visionRange: 2, speed: -3, maxBullets: -4, fireRate: -4 },
+        buffs: { bulletSpeed: 4, piercing: 2, visionRange: 2, speed: -3, fireRate: -4 },
         special: 'scope',
         color: '#ff9f43',
     },

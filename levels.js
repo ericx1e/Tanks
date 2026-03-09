@@ -3,7 +3,7 @@ const fs = require('fs');
 const { initializeAITank } = require('./bots.js');
 const { TILE_SIZE } = require('./public/constants.js');
 const { getRandomNonWallPosition, generateOpenMaze } = require('./utils.js');
-const { generateLevel: generateBSPLevel } = require('./levelGen.js');
+const { generateLevel: generateBSPLevel, generateLootLevel } = require('./levelGen.js');
 
 function readLevels(path) {
   const levels = [];
@@ -39,6 +39,8 @@ function loadLevel(lobby, levelNumber) {
   let level;
   const numPlayers = Object.values(lobby.players).reduce((count, p) => count + (!p.isAI ? 1 : 0), 0);
 
+  let lootContinueZone = null;
+
   switch (lobby.mode) {
     case 'lobby':
       level = lobbyLevels[levelNumber] || lobbyLevels[0] || [[]];
@@ -47,7 +49,15 @@ function loadLevel(lobby, levelNumber) {
       level = allCampaignLevels[levelNumber] || [[]];
       break;
     case 'endless':
-      level = generateBSPLevel(levelNumber, Infinity, true);
+      if ((levelNumber + 1) % 5 === 0) {
+        // Loot round
+        const result = generateLootLevel(numPlayers);
+        level = result.grid;
+        lootContinueZone = { col: result.continueCol, row: result.continueRow };
+      } else {
+        level = generateBSPLevel(levelNumber, Infinity, true);
+        lootContinueZone = null;
+      }
       break;
     case 'arena': {
       const size = Math.max(1, Math.floor(30 * Math.sqrt(Math.max(1, numPlayers))));
@@ -93,7 +103,7 @@ function loadLevel(lobby, levelNumber) {
     }
   }
 
-  return { players, level, spawn };
+  return { players, level, spawn, continueZone: lootContinueZone };
 }
 
 function getNumLevels(mode) {

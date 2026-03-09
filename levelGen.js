@@ -27,16 +27,16 @@ function carveRect(g, x, y, w, h) {
 // 2-wide horizontal segment at rows y and y+1
 function carveH(g, x1, x2, y) {
     for (let x = Math.min(x1, x2); x <= Math.max(x1, x2); x++) {
-        if (inBounds(g, x, y))   g[y][x]   = 0;
-        if (inBounds(g, x, y+1)) g[y+1][x] = 0;
+        if (inBounds(g, x, y)) g[y][x] = 0;
+        if (inBounds(g, x, y + 1)) g[y + 1][x] = 0;
     }
 }
 
 // 2-wide vertical segment at cols x and x+1
 function carveV(g, y1, y2, x) {
     for (let y = Math.min(y1, y2); y <= Math.max(y1, y2); y++) {
-        if (inBounds(g, x,   y)) g[y][x]   = 0;
-        if (inBounds(g, x+1, y)) g[y][x+1] = 0;
+        if (inBounds(g, x, y)) g[y][x] = 0;
+        if (inBounds(g, x + 1, y)) g[y][x + 1] = 0;
     }
 }
 
@@ -44,10 +44,10 @@ function carveV(g, y1, y2, x) {
 function carveDiag(g, x1, y1, x2, y2) {
     let x = x1, y = y1;
     while (true) {
-        if (inBounds(g, x,   y))   g[y][x]     = 0;
-        if (inBounds(g, x+1, y))   g[y][x+1]   = 0;
-        if (inBounds(g, x,   y+1)) g[y+1][x]   = 0;
-        if (inBounds(g, x+1, y+1)) g[y+1][x+1] = 0;
+        if (inBounds(g, x, y)) g[y][x] = 0;
+        if (inBounds(g, x + 1, y)) g[y][x + 1] = 0;
+        if (inBounds(g, x, y + 1)) g[y + 1][x] = 0;
+        if (inBounds(g, x + 1, y + 1)) g[y + 1][x + 1] = 0;
         if (x === x2 && y === y2) break;
         if (x !== x2) x += x < x2 ? 1 : -1;
         if (y !== y2) y += y < y2 ? 1 : -1;
@@ -65,35 +65,35 @@ function bsp(region, depth, rooms, pairs) {
 
     if (depth === 0 || (w < MIN_LEAF && h < MIN_LEAF)) {
         const pad = Math.max(1, Math.min(2, Math.floor(Math.min(w, h) / 5)));
-        const rw  = Math.max(4, w - pad * 2);
-        const rh  = Math.max(4, h - pad * 2);
-        const rx  = x + pad + (w - pad*2 - rw > 0 ? rng(0, w - pad*2 - rw) : 0);
-        const ry  = y + pad + (h - pad*2 - rh > 0 ? rng(0, h - pad*2 - rh) : 0);
-        const id  = rooms.length;
-        rooms.push({ x: rx, y: ry, w: rw, h: rh, cx: rx + rw/2, cy: ry + rh/2 });
+        const rw = Math.max(4, w - pad * 2);
+        const rh = Math.max(4, h - pad * 2);
+        const rx = x + pad + (w - pad * 2 - rw > 0 ? rng(0, w - pad * 2 - rw) : 0);
+        const ry = y + pad + (h - pad * 2 - rh > 0 ? rng(0, h - pad * 2 - rh) : 0);
+        const id = rooms.length;
+        rooms.push({ x: rx, y: ry, w: rw, h: rh, cx: rx + rw / 2, cy: ry + rh / 2 });
         return [id];
     }
 
     const splitH = h > w * 1.25 ? true
-                 : w > h * 1.25 ? false
-                 : Math.random() < 0.5;
+        : w > h * 1.25 ? false
+            : Math.random() < 0.5;
 
     let leftIds, rightIds;
     if (splitH) {
         const splitY = y + Math.floor(h * (0.35 + Math.random() * 0.3));
         const hA = splitY - y, hB = h - hA;
         if (hA < MIN_LEAF / 2 || hB < MIN_LEAF / 2) return bsp(region, 0, rooms, pairs);
-        leftIds  = bsp({ x, y,         w, h: hA }, depth - 1, rooms, pairs);
+        leftIds = bsp({ x, y, w, h: hA }, depth - 1, rooms, pairs);
         rightIds = bsp({ x, y: splitY, w, h: hB }, depth - 1, rooms, pairs);
     } else {
         const splitX = x + Math.floor(w * (0.35 + Math.random() * 0.3));
         const wA = splitX - x, wB = w - wA;
         if (wA < MIN_LEAF / 2 || wB < MIN_LEAF / 2) return bsp(region, 0, rooms, pairs);
-        leftIds  = bsp({ x,         y, w: wA, h }, depth - 1, rooms, pairs);
+        leftIds = bsp({ x, y, w: wA, h }, depth - 1, rooms, pairs);
         rightIds = bsp({ x: splitX, y, w: wB, h }, depth - 1, rooms, pairs);
     }
 
-    const a = leftIds [Math.floor(Math.random() * leftIds.length)];
+    const a = leftIds[Math.floor(Math.random() * leftIds.length)];
     const b = rightIds[Math.floor(Math.random() * rightIds.length)];
     pairs.push([a, b]);
     return [...leftIds, ...rightIds];
@@ -137,9 +137,9 @@ function carveIrregularRoom(g, room) {
         const cw = rng(2, Math.floor(w / 4));
         const ch = rng(2, Math.floor(h / 4));
         for (let r = y; r < y + ch; r++) for (let c = x; c < x + cw; c++) if (inBounds(g, c, r)) g[r][c] = 1;
-        for (let r = y; r < y + ch; r++) for (let c = x+w-cw; c < x+w; c++) if (inBounds(g, c, r)) g[r][c] = 1;
-        for (let r = y+h-ch; r < y+h; r++) for (let c = x; c < x + cw; c++) if (inBounds(g, c, r)) g[r][c] = 1;
-        for (let r = y+h-ch; r < y+h; r++) for (let c = x+w-cw; c < x+w; c++) if (inBounds(g, c, r)) g[r][c] = 1;
+        for (let r = y; r < y + ch; r++) for (let c = x + w - cw; c < x + w; c++) if (inBounds(g, c, r)) g[r][c] = 1;
+        for (let r = y + h - ch; r < y + h; r++) for (let c = x; c < x + cw; c++) if (inBounds(g, c, r)) g[r][c] = 1;
+        for (let r = y + h - ch; r < y + h; r++) for (let c = x + w - cw; c < x + w; c++) if (inBounds(g, c, r)) g[r][c] = 1;
     } else {
         // Base rectangle with 1-2 corner cuts (original feel, majority of rooms)
         carveRect(g, x, y, w, h);
@@ -150,10 +150,10 @@ function carveIrregularRoom(g, room) {
             const cw = rng(2, Math.floor(w / 3));
             const ch = rng(2, Math.floor(h / 3));
             switch (corner) {
-                case 0: for (let r = y;       r < y+ch;   r++) for (let c = x;       c < x+cw;   c++) if (inBounds(g,c,r)) g[r][c] = 1; break;
-                case 1: for (let r = y;       r < y+ch;   r++) for (let c = x+w-cw;  c < x+w;    c++) if (inBounds(g,c,r)) g[r][c] = 1; break;
-                case 2: for (let r = y+h-ch;  r < y+h;    r++) for (let c = x;       c < x+cw;   c++) if (inBounds(g,c,r)) g[r][c] = 1; break;
-                case 3: for (let r = y+h-ch;  r < y+h;    r++) for (let c = x+w-cw;  c < x+w;    c++) if (inBounds(g,c,r)) g[r][c] = 1; break;
+                case 0: for (let r = y; r < y + ch; r++) for (let c = x; c < x + cw; c++) if (inBounds(g, c, r)) g[r][c] = 1; break;
+                case 1: for (let r = y; r < y + ch; r++) for (let c = x + w - cw; c < x + w; c++) if (inBounds(g, c, r)) g[r][c] = 1; break;
+                case 2: for (let r = y + h - ch; r < y + h; r++) for (let c = x; c < x + cw; c++) if (inBounds(g, c, r)) g[r][c] = 1; break;
+                case 3: for (let r = y + h - ch; r < y + h; r++) for (let c = x + w - cw; c < x + w; c++) if (inBounds(g, c, r)) g[r][c] = 1; break;
             }
         }
         // Occasionally add a small alcove (protrusion from one edge)
@@ -190,9 +190,9 @@ function addRoomDetail(g, room) {
         const px = room.x + 2 + rng(0, Math.max(0, room.w - 5));
         const py = room.y + 2 + rng(0, Math.max(0, room.h - 5));
         if (Math.random() < 0.5) {
-            if (inBounds(g, px+1, py)   && g[py][px] === 0 && g[py][px+1] === 0)   { g[py][px] = 1; g[py][px+1] = 1; }
+            if (inBounds(g, px + 1, py) && g[py][px] === 0 && g[py][px + 1] === 0) { g[py][px] = 1; g[py][px + 1] = 1; }
         } else {
-            if (inBounds(g, px,   py+1) && g[py][px] === 0 && g[py+1][px] === 0)   { g[py][px] = 1; g[py+1][px] = 1; }
+            if (inBounds(g, px, py + 1) && g[py][px] === 0 && g[py + 1][px] === 0) { g[py][px] = 1; g[py + 1][px] = 1; }
         }
     }
 
@@ -254,7 +254,7 @@ function connectRooms(g, a, b) {
 const SPAWN_VAL = 'A'.charCodeAt(0) - 'S'.charCodeAt(0) - 1; // = -19
 
 function enemyVal(tier) {
-    return -(Math.min(16, Math.max(0, tier)) + 1); // -1 for tier 0, -17 for tier 16
+    return -(Math.min(17, Math.max(0, tier)) + 1); // -1 for tier 0, -18 for tier 17
 }
 
 // Grid LOS check with 2× tile-step sampling — correctly blocks diagonal sight lines.
@@ -303,11 +303,11 @@ function findSafeSpawn(g, room, enemies) {
 
 // Returns array of placed enemy grid positions [{ex, ey}].
 // Minimum difficulty required for each boss-tier enemy to appear in the pool
-const BOSS_MIN_DIFF = { 11: 0.50, 14: 0.62, 15: 0.78, 16: 0.88, 17: 0.80 };
+const BOSS_MIN_DIFF = { 11: 0.50, 15: 0.78, 16: 0.88, 17: 0.80 };
 
 function placeEnemies(g, rooms, diff) {
-    const totalCount = Math.floor(3 + diff * 10);
-    const maxTier    = Math.min(17, Math.floor(diff * 18 + 0.5));
+    const totalCount = Math.floor(3 + diff * 12);
+    const maxTier = Math.min(17, Math.floor(diff * 18 + 0.5));
 
     const poolMin = Math.max(0, maxTier - 7);
     const pool = [];
@@ -315,39 +315,38 @@ function placeEnemies(g, rooms, diff) {
         // Boss tiers only enter the pool once their minimum difficulty is reached
         if (BOSS_MIN_DIFF[t] !== undefined && diff < BOSS_MIN_DIFF[t]) continue;
         const w = t === 11 || t === 15 || t === 16 || t === 17 ? 1  // Harbinger/Sovereign/Phantom/Wraith: rare
-                : t === 14 ? 1                          // Cannoneer: rare
-                : t >= maxTier - 1 ? 3                 // Top-tier: frequent
-                : 2;                                    // Mid-tier: normal
+            : t >= maxTier - 1 ? 3                             // Top-tier: frequent
+                : 2;                                               // Mid-tier: normal
         for (let i = 0; i < w; i++) pool.push(t);
     }
     if (!pool.length) pool.push(0);
 
     // At mid-to-high difficulty guarantee one elite enemy type per level
-    // Elites: Titan(10), Cloak(8), Guardian(9), Intelligence(12), Laser-Pulse(13), + bosses
+    // Elites: Titan(10), Cloak(8), Guardian(9), Intelligence(12), Laser-Pulse(13), Cannoneer(14), + bosses
     let guaranteedTier = -1;
     if (diff >= 0.45 && maxTier >= 8) {
         const elites = [10, 8, 9, 12, 13, 14, 15, 16, 17].filter(t => t <= maxTier && (BOSS_MIN_DIFF[t] === undefined || diff >= BOSS_MIN_DIFF[t]));
         if (elites.length) guaranteedTier = elites[rng(0, elites.length - 1)];
     }
 
-    // Cap Harbinger (11), Cannoneer (14), Sovereign (15), Phantom (16), Wraith (17) to at most 1 per level
-    let rusherCount = 0;
-    let cannoneerCount = 0;
-    let sovereignCount = 0;
-    let phantomCount = 0;
-    let wraithCount = 0;
-
     const positions = [];
     let placed = 0;
 
-    // Distribute enemies across non-spawn rooms.
-    // Shuffle enemy rooms so fill order varies each level.
-    const enemyRooms = rooms.slice(1).sort(() => Math.random() - 0.5);
+    // Sort non-spawn rooms by distance from spawn room (farthest first).
+    // Boss tiers will be placed in the farthest rooms.
+    const spawnCx = rooms[0].cx, spawnCy = rooms[0].cy;
+    const enemyRooms = rooms.slice(1).sort((a, b) => {
+        const da = Math.hypot(a.cx - spawnCx, a.cy - spawnCy);
+        const db = Math.hypot(b.cx - spawnCx, b.cy - spawnCy);
+        return db - da; // farthest first
+    });
     if (!enemyRooms.length) enemyRooms.push(rooms[0]);
+
+    const BOSS_TIERS = new Set([11, 15, 16, 17]);
 
     // Place the guaranteed elite first, in the farthest room
     if (guaranteedTier >= 0 && enemyRooms.length) {
-        const room = enemyRooms[enemyRooms.length - 1]; // last = "deepest" after shuffle
+        const room = enemyRooms[0]; // index 0 = farthest room
         for (let tries = 0; tries < 30; tries++) {
             const ex = room.x + 1 + rng(0, Math.max(0, room.w - 3));
             const ey = room.y + 1 + rng(0, Math.max(0, room.h - 3));
@@ -360,7 +359,8 @@ function placeEnemies(g, rooms, diff) {
         }
     }
 
-    // Fill remaining slots room by room (1-2 per room) for spatial grouping
+    // Fill remaining slots room by room.
+    // Rooms are ordered farthest-first so bosses drawn from pool land in far rooms.
     for (let ri = 0; ri < enemyRooms.length && placed < totalCount; ri++) {
         const room = enemyRooms[ri];
         const roomCapacity = rng(1, 2);
@@ -369,47 +369,11 @@ function placeEnemies(g, rooms, diff) {
             const ex = room.x + 1 + rng(0, Math.max(0, room.w - 3));
             const ey = room.y + 1 + rng(0, Math.max(0, room.h - 3));
             if (!inBounds(g, ex, ey) || g[ey][ex] !== 0) continue;
-
             let tier = pool[rng(0, pool.length - 1)];
-            if (tier === 11) {
-                if (rusherCount >= 1) {
-                    const alt = pool.filter(t => t !== 11 && t !== 14);
-                    tier = alt.length ? alt[rng(0, alt.length - 1)] : pool[rng(0, pool.length - 1)];
-                } else {
-                    rusherCount++;
-                }
-            }
-            if (tier === 14) {
-                if (cannoneerCount >= 1) {
-                    const alt = pool.filter(t => t !== 14 && t !== 11 && t !== 15);
-                    tier = alt.length ? alt[rng(0, alt.length - 1)] : pool[rng(0, pool.length - 1)];
-                } else {
-                    cannoneerCount++;
-                }
-            }
-            if (tier === 15) {
-                if (sovereignCount >= 1) {
-                    const alt = pool.filter(t => t !== 15 && t !== 14 && t !== 11);
-                    tier = alt.length ? alt[rng(0, alt.length - 1)] : pool[rng(0, pool.length - 1)];
-                } else {
-                    sovereignCount++;
-                }
-            }
-            if (tier === 16) {
-                if (phantomCount >= 1) {
-                    const alt = pool.filter(t => t !== 16 && t !== 15 && t !== 14 && t !== 11);
-                    tier = alt.length ? alt[rng(0, alt.length - 1)] : pool[rng(0, pool.length - 1)];
-                } else {
-                    phantomCount++;
-                }
-            }
-            if (tier === 17) {
-                if (wraithCount >= 1) {
-                    const alt = pool.filter(t => t !== 17 && t !== 16 && t !== 15);
-                    tier = alt.length ? alt[rng(0, alt.length - 1)] : pool[rng(0, pool.length - 1)];
-                } else {
-                    wraithCount++;
-                }
+            // If a boss tier is drawn while we're still in the nearer half of rooms, reroll once
+            if (BOSS_TIERS.has(tier) && ri > enemyRooms.length / 2) {
+                const nonBoss = pool.filter(t => !BOSS_TIERS.has(t));
+                if (nonBoss.length) tier = nonBoss[rng(0, nonBoss.length - 1)];
             }
             g[ey][ex] = enemyVal(tier);
             positions.push({ ex, ey });
@@ -424,23 +388,7 @@ function placeEnemies(g, rooms, diff) {
         const ex = room.x + 1 + rng(0, Math.max(0, room.w - 3));
         const ey = room.y + 1 + rng(0, Math.max(0, room.h - 3));
         if (!inBounds(g, ex, ey) || g[ey][ex] !== 0) continue;
-        let tier = pool[rng(0, pool.length - 1)];
-        if (tier === 11 && rusherCount >= 1) {
-            const alt = pool.filter(t => t !== 11 && t !== 14);
-            tier = alt.length ? alt[rng(0, alt.length - 1)] : tier;
-        }
-        if (tier === 14 && cannoneerCount >= 1) {
-            const alt = pool.filter(t => t !== 14 && t !== 11 && t !== 15);
-            tier = alt.length ? alt[rng(0, alt.length - 1)] : tier;
-        }
-        if (tier === 15 && sovereignCount >= 1) {
-            const alt = pool.filter(t => t !== 15 && t !== 14 && t !== 11);
-            tier = alt.length ? alt[rng(0, alt.length - 1)] : tier;
-        }
-        if (tier === 16 && phantomCount >= 1) {
-            const alt = pool.filter(t => t !== 16 && t !== 15 && t !== 14 && t !== 11);
-            tier = alt.length ? alt[rng(0, alt.length - 1)] : tier;
-        }
+        const tier = pool[rng(0, pool.length - 1)];
         g[ey][ex] = enemyVal(tier);
         positions.push({ ex, ey });
         placed++;
@@ -452,19 +400,24 @@ function placeEnemies(g, rooms, diff) {
 // Place chests in non-spawn rooms. chest tile value = -25 (matches 'Y' in readLevels).
 const CHEST_TILE = -25;
 function placeChests(g, rooms, count) {
-    const chestRooms = rooms.slice(1).sort(() => Math.random() - 0.5);
+    // Prefer non-spawn rooms; fall back to all rooms to guarantee placement
+    const preferred = rooms.slice(1).sort(() => Math.random() - 0.5);
+    const fallback  = [rooms[0]];
     let placed = 0;
-    for (let ri = 0; ri < chestRooms.length && placed < count; ri++) {
-        const room = chestRooms[ri];
-        for (let tries = 0; tries < 20; tries++) {
-            const cx = room.x + 1 + rng(0, Math.max(0, room.w - 3));
-            const cy = room.y + 1 + rng(0, Math.max(0, room.h - 3));
-            if (inBounds(g, cx, cy) && g[cy][cx] === 0) {
-                g[cy][cx] = CHEST_TILE;
-                placed++;
-                break;
+    for (const roomList of [preferred, fallback]) {
+        for (let ri = 0; ri < roomList.length && placed < count; ri++) {
+            const room = roomList[ri];
+            for (let tries = 0; tries < 40; tries++) {
+                const cx = room.x + 1 + rng(0, Math.max(0, room.w - 3));
+                const cy = room.y + 1 + rng(0, Math.max(0, room.h - 3));
+                if (inBounds(g, cx, cy) && g[cy][cx] === 0) {
+                    g[cy][cx] = CHEST_TILE;
+                    placed++;
+                    break;
+                }
             }
         }
+        if (placed >= count) break;
     }
 }
 
@@ -478,7 +431,7 @@ function floodFillReachable(g, startX, startY) {
     const key = (x, y) => y * 65536 + x;
     const queue = [[startX, startY]];
     reachable.add(key(startX, startY));
-    const dirs = [[-1,0],[1,0],[0,-1],[0,1]];
+    const dirs = [[-1, 0], [1, 0], [0, -1], [0, 1]];
     while (queue.length) {
         const [x, y] = queue.shift();
         for (const [dx, dy] of dirs) {
@@ -503,15 +456,15 @@ function floodFillReachable(g, startX, startY) {
  * @returns {number[][]}  2D number grid (1=wall, 0=open, negative=entity).
  */
 function generateLevel(levelIndex, totalLevels, endless) {
-    // Endless: ramp difficulty over first 20 levels, then hold at max.
+    // Endless: ramp difficulty continuously — no cap.
     const diff = !isFinite(totalLevels)
-        ? Math.min(1, levelIndex / 20)
+        ? levelIndex / 20
         : totalLevels <= 1 ? 0.5 : levelIndex / (totalLevels - 1);
 
     const w = Math.max(14, Math.min(36, Math.floor(14 + diff * 22) + rng(-2, 2)));
     const h = Math.max(12, Math.min(28, Math.floor(12 + diff * 16) + rng(-2, 2)));
 
-    const g     = makeGrid(w, h);
+    const g = makeGrid(w, h);
     const rooms = [], pairs = [];
 
     const depth = w < 20 ? 2 : w < 27 ? 3 : 4;
@@ -545,7 +498,7 @@ function generateLevel(levelIndex, totalLevels, endless) {
         if (g[sy][sx] !== 0) {
             outer: for (let dy = -2; dy <= 2; dy++)
                 for (let dx = -2; dx <= 2; dx++)
-                    if (inBounds(g, sx+dx, sy+dy) && g[sy+dy][sx+dx] === 0) {
+                    if (inBounds(g, sx + dx, sy + dy) && g[sy + dy][sx + dx] === 0) {
                         sx += dx; sy += dy; break outer;
                     }
         }
@@ -558,7 +511,8 @@ function generateLevel(levelIndex, totalLevels, endless) {
 
     // Place map chests for endless mode (scale: 1 chest for first ~10 levels, grows gradually)
     if (endless) {
-        const chestCount = Math.min(5, Math.max(1, Math.floor(1 + levelIndex / 10)));
+        const chestBase = Math.floor(1 + levelIndex / 5);
+        const chestCount = chestBase + rng(0, Math.max(1, Math.floor(chestBase * 0.5)));
         placeChests(g, rooms, chestCount);
     }
 
@@ -577,8 +531,8 @@ function generateLevel(levelIndex, totalLevels, endless) {
         outer:
         for (let dy = 0; dy < 4; dy++)
             for (let dx = 0; dx < 4; dx++)
-                if (inBounds(g, sx+dx, sy+dy) && g[sy+dy][sx+dx] === 0) {
-                    g[sy+dy][sx+dx] = SPAWN_VAL;
+                if (inBounds(g, sx + dx, sy + dy) && g[sy + dy][sx + dx] === 0) {
+                    g[sy + dy][sx + dx] = SPAWN_VAL;
                     placed = true;
                     break outer;
                 }
@@ -588,4 +542,35 @@ function generateLevel(levelIndex, totalLevels, endless) {
     return g;
 }
 
-module.exports = { generateLevel };
+function generateLootLevel(numPlayers) {
+    const W = 14, H = 10;
+    const g = [];
+    for (let r = 0; r < H; r++) {
+        g.push([]);
+        for (let c = 0; c < W; c++) {
+            g[r].push((r === 0 || r === H-1 || c === 0 || c === W-1) ? 1 : 0);
+        }
+    }
+    // Spawn at top-left area
+    g[2][2] = SPAWN_VAL;
+
+    // Place chests: 3 base + 1 per player, random open cells
+    const chestCount = 3 + Math.min(numPlayers, 6);
+    let placed = 0;
+    for (let tries = 0; tries < 200 && placed < chestCount; tries++) {
+        const cr = 1 + Math.floor(Math.random() * (H - 2));
+        const cc = 1 + Math.floor(Math.random() * (W - 2));
+        if (g[cr][cc] === 0) {
+            g[cr][cc] = CHEST_TILE;
+            placed++;
+        }
+    }
+
+    // Continue zone position (bottom-right area) — just an open cell, zone tracked separately
+    const continueCol = W - 3;
+    const continueRow = H - 3;
+
+    return { grid: g, continueCol, continueRow };
+}
+
+module.exports = { generateLevel, generateLootLevel };

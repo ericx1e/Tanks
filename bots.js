@@ -155,7 +155,7 @@ function updateAITanks(lobby, lobbyCode, players, level, bullets) {
     let allDead = true;
     for (let id in players) {
         const tank = players[id];
-        if (tank.isAI && !tank.isDead && tank.tier !== 'chest') {
+        if (tank.isAI && !tank.isDead && tank.tier !== 'chest' && !tank.isMuseum) {
             allDead = false;
             updateAITank(lobby, lobbyCode, tank, level, players, bullets);
         }
@@ -288,7 +288,7 @@ function updateAITank(lobby, lobbyCode, tank, level, players, bullets) {
             break;
         case 15: // Sovereign — massive boss, orbiting orb shield, heavy cannonballs
             speed = 0.45 * AI_TANK_SPEED;
-            shootingRange = PLAYER_SIZE * 32;
+            shootingRange = Infinity;
             fireCooldown = 130;
             turretSpeed = 0.22;
             break;
@@ -301,7 +301,7 @@ function updateAITank(lobby, lobbyCode, tank, level, players, bullets) {
         case 17: // Wraith — stealth/attack cycle, smoke grenades
             speed = tank.wraithStealthed ? 2.4 * AI_TANK_SPEED : 1.0 * AI_TANK_SPEED;
             shootingRange = PLAYER_SIZE * 24;
-            fireCooldown = 8;
+            fireCooldown = 22;
             turretSpeed = 0.30;
             break;
         case 'button':
@@ -415,8 +415,29 @@ function updateAITank(lobby, lobbyCode, tank, level, players, bullets) {
             }
         }
 
-        // Linger: steer body toward last known player position
-        if ((tank.targetLostTimer || 0) > 0 && tank.lastKnownTarget && tank.tier !== 12) {
+        // Boss tiers: actively navigate toward nearest player (like Intelligence Tank)
+        if (tank.tier === 11 || tank.tier === 15 || tank.tier === 16 || tank.tier === 17) {
+            let nearestPlayer = null, nearestDist = Infinity;
+            for (const id in players) {
+                const p = players[id];
+                if (!p.isAI && !p.isDead) {
+                    const d = Math.hypot(p.x - tank.x, p.y - tank.y);
+                    if (d < nearestDist) { nearestDist = d; nearestPlayer = p; }
+                }
+            }
+            if (nearestPlayer) {
+                const directAngle = Math.atan2(nearestPlayer.y - tank.y, nearestPlayer.x - tank.x);
+                if (detectObstacleAlongRay(tank.x, tank.y, tank.targetDirection, 3 * PLAYER_SIZE, level)) {
+                    // Wall ahead — deviate to navigate around it
+                    tank.targetDirection += (Math.random() - 0.5) * Math.PI * 1.2;
+                    tank.movementTimer = Math.random() * 40 + 20;
+                } else {
+                    // Smoothly steer toward player
+                    tank.targetDirection = lerpAngle(tank.targetDirection, directAngle, 0.15);
+                }
+            }
+        } else if ((tank.targetLostTimer || 0) > 0 && tank.lastKnownTarget) {
+            // Linger: steer body toward last known player position
             tank.targetDirection = Math.atan2(tank.lastKnownTarget.y - tank.y, tank.lastKnownTarget.x - tank.x);
         }
     }
@@ -461,7 +482,7 @@ function updateAITank(lobby, lobbyCode, tank, level, players, bullets) {
     // Glide only during dodge; otherwise keep your original step
     const isDodging = (tank._dodgeTimer || 0) > 0;
 
-    if (isDodging || tank.tier === 15 || tank.tier === 11) {
+    if (isDodging) {
         tryMoveWithWallGlideAndEscape(tank, speed, level, isDodging);
     } else {
         const newX = tank.x + Math.cos(tank.angle) * speed;
@@ -472,34 +493,37 @@ function updateAITank(lobby, lobbyCode, tank, level, players, bullets) {
 
     // Wraith stealth/attack cycle
     if (tank.tier === 17) {
-        tank.wraithPhaseTimer = (tank.wraithPhaseTimer || 1) - 1;
+        tank.wraithPhaseTimer = (tank.wraithPhaseTimer || 300) - 1;
         if (tank.wraithPhaseTimer <= 0) {
+            const wasStealthed = tank.wraithStealthed;
             tank.wraithStealthed = !tank.wraithStealthed;
             tank.wraithPhaseTimer = tank.wraithStealthed ? 180 : 300; // 3s stealth, 5s visible
+            if (wasStealthed && !tank.wraithStealthed) {
+                // Just became visible — ready to fire immediately
+                tank.fireCooldown = 0;
+            } else if (!wasStealthed && tank.wraithStealthed) {
+                // Just became stealthed — smoke screen at own position + shield
+                tank.shield = 1;
+                lobby.smokeClouds = lobby.smokeClouds || [];
+                lobby.smokeClouds.push({ x: tank.x, y: tank.y, radius: TILE_SIZE * 3, framesLeft: 480 });
+                io.to(lobbyCode).emit('smokeCloud', { x: tank.x, y: tank.y, radius: TILE_SIZE * 3, duration: 480 });
+            }
         }
 
-        // Smoke grenade — fire toward nearest player while visible
-        tank.wraithSmokeTimer = (tank.wraithSmokeTimer || 200) - 1;
-        if (tank.wraithSmokeTimer <= 0 && !tank.wraithStealthed) {
-            let nearest = null, nearestDist = Infinity;
+        if (tank.wraithStealthed) {
+            // Invulnerable while stealthed — only track turret toward nearest player, never fire
+            let stealthTarget = null, stealthDist = Infinity;
             for (const id in players) {
                 const p = players[id];
                 if (!p.isAI && !p.isDead) {
                     const d = Math.hypot(p.x - tank.x, p.y - tank.y);
-                    if (d < nearestDist) { nearestDist = d; nearest = p; }
+                    if (d < stealthDist) { stealthDist = d; stealthTarget = p; }
                 }
             }
-            if (nearest) {
-                lobby.smokeClouds = lobby.smokeClouds || [];
-                lobby.smokeClouds.push({ x: nearest.x, y: nearest.y, radius: TILE_SIZE * 2.5, framesLeft: 480 });
-                io.to(lobbyCode).emit('smokeCloud', { x: nearest.x, y: nearest.y, radius: TILE_SIZE * 2.5, duration: 480 });
+            if (stealthTarget) {
+                const a = Math.atan2(stealthTarget.y - tank.y, stealthTarget.x - tank.x);
+                tank.turretAngle = lerpAngle(tank.turretAngle, a, turretSpeed);
             }
-            tank.wraithSmokeTimer = 240;
-        }
-
-        if (tank.wraithStealthed) {
-            // Invulnerable, fast — skip firing
-            handleAITurret(lobby, lobbyCode, tank, level, players, bullets, shootingRange, turretSpeed, 999999);
             return;
         }
     }
@@ -532,7 +556,7 @@ function handleAITurret(lobby, lobbyCode, tank, level, players, bullets, shootin
             tank.prevTargetY = nearestPlayer.y;
             playerInSight = { player: nearestPlayer, angle: leadAngle };
         }
-    } else if (tank.tier === 11 || tank.tier === 14 || tank.tier === 15 || tank.tier === 17) {
+    } else if (tank.tier === 11 || tank.tier === 15 || tank.tier === 17) {
         // Boss tanks: omniscient — find nearest player regardless of LOS, lead shot
         let nearestPlayer = null, nearestDist = Infinity;
         for (let id in players) {
@@ -548,7 +572,11 @@ function handleAITurret(lobby, lobbyCode, tank, level, players, bullets, shootin
         if (nearestPlayer) {
             const vx = nearestPlayer.x - (tank.prevTargetX ?? nearestPlayer.x);
             const vy = nearestPlayer.y - (tank.prevTargetY ?? nearestPlayer.y);
-            const leadAngle = computeLeadAngle(tank.x, tank.y, BULLET_SPEED, nearestPlayer.x, nearestPlayer.y, vx, vy);
+            // Use each boss's actual bullet speed for accurate lead
+            const bSpeed = tank.tier === 15 ? BULLET_SPEED * 1.5
+                         : tank.tier === 17 ? BULLET_SPEED * 1.6
+                         : BULLET_SPEED;
+            const leadAngle = computeLeadAngle(tank.x, tank.y, bSpeed, nearestPlayer.x, nearestPlayer.y, vx, vy);
             tank.prevTargetX = nearestPlayer.x;
             tank.prevTargetY = nearestPlayer.y;
             playerInSight = { player: nearestPlayer, angle: leadAngle };
@@ -637,7 +665,6 @@ function handleAITurret(lobby, lobbyCode, tank, level, players, bullets, shootin
         // Record last known position and reset linger timer
         tank.lastKnownTarget = { x: playerInSight.player.x, y: playerInSight.player.y };
         tank.targetLostTimer = 180;
-        if (tank.tier === 15) tank.lingerShots = 2; // reload linger shots while in sight
 
         // Shield Tank — raise shield facing the player
         if (tank.tier === 9) {
@@ -813,12 +840,6 @@ function handleAITurret(lobby, lobbyCode, tank, level, players, bullets, shootin
                 tank.turretAngle = lerpAngle(tank.turretAngle, lkAngle, turretSpeed);
             }
             tank.turretRotationalVelocity = 0;
-            // Sovereign fires a few shots at last known position even after losing sight
-            if (tank.tier === 15 && tank.fireCooldown <= 0 && (tank.lingerShots || 0) > 0) {
-                fireBullet(lobbyCode, tank, tank.turretAngle, bullets, level);
-                tank.fireCooldown = fireCooldown;
-                tank.lingerShots--;
-            }
         } else {
             // No information — rotate turret randomly
             tank.fireCooldown = fireCooldown / 2;

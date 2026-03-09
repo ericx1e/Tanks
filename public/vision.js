@@ -170,15 +170,16 @@ function drawFogOfWar(playerX, playerY, visiblePoints, originX, originY) {
     const cy = fogLayer.height / 2;
     _drawVisionPolygon(cx, cy, originX, originY, playerX, playerY, visiblePoints);
 
-    // Repaint smoke clouds as opaque fog on top of cleared vision areas
+    // Repaint smoke clouds — use full fog color so smoke is invisible outside vision
+    // but restores opacity inside cleared (visible) areas, denying vision there.
     if (typeof smokeClouds !== 'undefined' && smokeClouds.length) {
         fogLayer.blendMode(BLEND);
         fogLayer.noStroke();
         for (const sc of smokeClouds) {
             const relX = cx + (sc.x - playerX);
             const relY = cy + (sc.y - playerY);
-            const fade = Math.min(1, sc.framesLeft / 60); // fade out in last second
-            fogLayer.fill(20, 20, 30, 230 * fade);
+            const fade = Math.min(1, sc.framesLeft / 60);
+            fogLayer.fill(51, 51, 51, Math.round(255 * fade));
             fogLayer.circle(relX, relY, sc.radius * 2);
         }
     }
@@ -205,6 +206,19 @@ function drawSharedFogOfWar(viewX, viewY, sharedVisiblePoints) {
     // Ray polygons at full alpha (direct line of sight fully clear)
     for (const { x: tankX, y: tankY, points } of sharedVisiblePoints) {
         _drawVisionPolygon(cx, cy, tankX, tankY, viewX, viewY, points);
+    }
+
+    // Repaint smoke clouds — full fog color so smoke only denies vision, invisible outside it
+    if (typeof smokeClouds !== 'undefined' && smokeClouds.length) {
+        fogLayer.blendMode(BLEND);
+        fogLayer.noStroke();
+        for (const sc of smokeClouds) {
+            const relX = cx + (sc.x - viewX);
+            const relY = cy + (sc.y - viewY);
+            const fade = Math.min(1, sc.framesLeft / 60);
+            fogLayer.fill(51, 51, 51, Math.round(255 * fade));
+            fogLayer.circle(relX, relY, sc.radius * 2);
+        }
     }
 
     texture(fogLayer);
