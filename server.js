@@ -1097,9 +1097,14 @@ function explodeCannonball(lobby, lobbyCode, bullet, bulletsToRemove, i) {
     });
 }
 
+const _bulletsToRemove = new Set();
+const _hitThisTick = new Set();
+
 function updateBullets(lobby, lobbyCode) {
-    const bulletsToRemove = new Set();
-    const hitThisTick = new Set(); // bullets that already took damage this tick (prevents multi-hit in one frame)
+    const bulletsToRemove = _bulletsToRemove;
+    const hitThisTick = _hitThisTick;
+    bulletsToRemove.clear();
+    hitThisTick.clear();
     const bullets = lobby.bullets
     const players = lobby.players
     const level = lobby.level
@@ -1843,6 +1848,12 @@ function spawnCompanionForPlayer(lobby, playerId, player, spawnX, spawnY) {
     player.companionSpawnCooldown = Math.round(1800 * (player.hasteMult || 1));
 }
 
+const BFS_NO_PARENT = -1;
+const BFS_ROOT = -2;
+let _bfsParent = new Int32Array(0);
+let _bfsQueueR = new Int32Array(0);
+let _bfsQueueC = new Int32Array(0);
+
 function bfsPath(level, startX, startY, endX, endY) {
     const rows = level.length;
     const cols = level[0]?.length || 0;
@@ -1851,33 +1862,44 @@ function bfsPath(level, startX, startY, endX, endY) {
     const er = Math.floor(endY / TILE_SIZE);
     const ec = Math.floor(endX / TILE_SIZE);
     if (sr === er && sc === ec) return [];
-    const parent = new Map();
-    const startKey = `${sr},${sc}`;
-    parent.set(startKey, null);
-    const queue = [[sr, sc]];
+
+    const size = rows * cols;
+    if (_bfsParent.length < size) {
+        _bfsParent = new Int32Array(size);
+        _bfsQueueR = new Int32Array(size);
+        _bfsQueueC = new Int32Array(size);
+    }
+    _bfsParent.fill(BFS_NO_PARENT, 0, size);
+
+    const startIdx = sr * cols + sc;
+    _bfsParent[startIdx] = BFS_ROOT;
+    _bfsQueueR[0] = sr; _bfsQueueC[0] = sc;
+    let head = 0, tail = 1;
+
     const dirs = [[-1, 0], [1, 0], [0, -1], [0, 1], [-1, -1], [-1, 1], [1, -1], [1, 1]];
     let found = false;
-    while (queue.length > 0) {
-        const [r, c] = queue.shift();
+    while (head < tail) {
+        const r = _bfsQueueR[head], c = _bfsQueueC[head]; head++;
         if (r === er && c === ec) { found = true; break; }
         for (const [dr, dc] of dirs) {
             const nr = r + dr, nc = c + dc;
             if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) continue;
             if (level[nr][nc] > 0) continue;
             if (dr !== 0 && dc !== 0 && (level[r][nc] > 0 || level[nr][c] > 0)) continue;
-            const key = `${nr},${nc}`;
-            if (parent.has(key)) continue;
-            parent.set(key, `${r},${c}`);
-            queue.push([nr, nc]);
+            const nIdx = nr * cols + nc;
+            if (_bfsParent[nIdx] !== BFS_NO_PARENT) continue;
+            _bfsParent[nIdx] = r * cols + c;
+            _bfsQueueR[tail] = nr; _bfsQueueC[tail] = nc; tail++;
         }
     }
     if (!found) return null;
+
     const path = [];
-    let cur = `${er},${ec}`;
-    while (cur && cur !== startKey) {
-        const [r, c] = cur.split(',').map(Number);
+    let cur = er * cols + ec;
+    while (cur !== BFS_ROOT && _bfsParent[cur] !== BFS_ROOT) {
+        const r = Math.floor(cur / cols), c = cur % cols;
         path.unshift({ x: (c + 0.5) * TILE_SIZE, y: (r + 0.5) * TILE_SIZE });
-        cur = parent.get(cur);
+        cur = _bfsParent[cur];
     }
     return path;
 }

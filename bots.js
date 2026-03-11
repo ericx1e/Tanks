@@ -3,6 +3,8 @@ const { isCollidingWithWall, lerpAngle, isWall, getRandomNonWallPosition, isColl
 
 let io = null; // Declare io variable
 
+const _humans = [];
+
 // Function to set io instance
 function setIO(ioInstance) {
     io = ioInstance;
@@ -154,8 +156,10 @@ function initializeAITank(id, x, y, tier, buttonType) {
 function updateAITanks(lobby, lobbyCode, players, level, bullets) {
     let allDead = true;
 
-    // Precompute human player positions once for culling
-    const humans = Object.values(players).filter(p => !p.isAI && !p.isDead);
+    // Precompute human player positions once for culling (reuse array to avoid GC pressure)
+    _humans.length = 0;
+    for (const id in players) { const p = players[id]; if (!p.isAI && !p.isDead) _humans.push(p); }
+    const humans = _humans;
     const cullDist = TILE_SIZE * 30; // skip full AI logic beyond this range
     const cullDistSq = cullDist * cullDist;
 
