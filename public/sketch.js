@@ -1773,19 +1773,41 @@ function applySmoothing() {
         }
     }
 
-    // Remote players: interpolate between buffered snapshots
+    // Remote players/bots: interpolate between buffered snapshots, extrapolate when ahead
     const renderTime = Date.now() - INTERP_DELAY_MS;
     for (const [id, buf] of Object.entries(playerInterpBuf)) {
         if (!players[id] || buf.length < 2) continue;
         let i = buf.length - 2;
         while (i > 0 && buf[i].t > renderTime) i--;
         const before = buf[i], after = buf[i + 1];
-        const span = after.t - before.t;
-        const t = span > 0 ? Math.max(0, Math.min(1, (renderTime - before.t) / span)) : 1;
-        players[id].x = before.x + (after.x - before.x) * t;
-        players[id].y = before.y + (after.y - before.y) * t;
-        players[id].angle = clientLerpAngle(before.angle, after.angle, t);
-        players[id].turretAngle = before.turretAngle + (after.turretAngle - before.turretAngle) * t;
+
+        if (renderTime > after.t) {
+            // Buffer exhausted (server spike) — dead-reckoning from last two snapshots
+            const dt = after.t - before.t;
+            const elapsed = Math.min(renderTime - after.t, 200); // cap at 200ms
+            if (dt > 0) {
+                const vx = (after.x - before.x) / dt;
+                const vy = (after.y - before.y) / dt;
+                players[id].x = after.x + vx * elapsed;
+                players[id].y = after.y + vy * elapsed;
+                const va = clientLerpAngle(before.angle, after.angle, 1) - before.angle;
+                players[id].angle = after.angle + (va / dt) * elapsed;
+                const vta = clientLerpAngle(before.turretAngle, after.turretAngle, 1) - before.turretAngle;
+                players[id].turretAngle = after.turretAngle + (vta / dt) * elapsed;
+            } else {
+                players[id].x = after.x;
+                players[id].y = after.y;
+                players[id].angle = after.angle;
+                players[id].turretAngle = after.turretAngle;
+            }
+        } else {
+            const span = after.t - before.t;
+            const t = span > 0 ? Math.max(0, Math.min(1, (renderTime - before.t) / span)) : 1;
+            players[id].x = before.x + (after.x - before.x) * t;
+            players[id].y = before.y + (after.y - before.y) * t;
+            players[id].angle = clientLerpAngle(before.angle, after.angle, t);
+            players[id].turretAngle = before.turretAngle + (after.turretAngle - before.turretAngle) * t;
+        }
     }
 }
 
