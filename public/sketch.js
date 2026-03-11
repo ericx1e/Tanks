@@ -4,6 +4,7 @@ let bullets = [];
 let lasers = [];
 let flares = [];
 let companions = {};
+let companionVisionCache = {}; // { ownerId: { x, y, points } } — only recalc when moved
 let muzzleFlashes = [];
 let level = [];
 let levelNumber = -1;
@@ -87,7 +88,7 @@ function rebuildGroupedWalls() {
 
 // Returns 1.0 at low tank counts, scales down toward 0.15 at high counts.
 function hexToRgb(hex) {
-    return [parseInt(hex.slice(1,3),16), parseInt(hex.slice(3,5),16), parseInt(hex.slice(5,7),16)];
+    return [parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16), parseInt(hex.slice(5, 7), 16)];
 }
 
 function playerColor(tank, _isSelf, alpha = 255) {
@@ -107,24 +108,24 @@ let shakeDuration = 0;
 let smokeClouds = []; // { x, y, radius, framesLeft }
 
 const MUSEUM_DESCRIPTIONS = [
-    { name: 'Basic Tank',      desc: 'The standard enemy. Balanced stats, no special tricks.' },
-    { name: 'Speedy',          desc: 'Fast-moving and quick to fire. Dangerous in groups.' },
-    { name: 'Sniper',          desc: 'Long-range specialist. Slow to fire but shots travel far.' },
-    { name: 'Rusher',          desc: 'Aggressive flanker. High speed, fires in short bursts.' },
-    { name: 'Tracker',         desc: 'Bullets curve toward you. Hard to dodge at range.' },
-    { name: 'Laser Tank',      desc: 'Fires a sustained laser beam. Locks on and holds fire.' },
-    { name: 'Triple Shot',     desc: 'Fires three bullets in a spread. Deadly up close.' },
-    { name: 'Machine Gun',     desc: 'Rapid-fire, low accuracy. Overwhelms with volume.' },
-    { name: 'Phantom',         desc: 'Turns nearly invisible. Listen for its shots.' },
-    { name: 'Shield Tank',     desc: 'Raises a directional shield to block your bullets.' },
-    { name: 'Titan',           desc: 'Heavily armored. Takes many hits to bring down.' },
-    { name: 'Harbinger',       desc: '[BOSS] Captures nearby bullets and deflects them back with a pulse blast.' },
-    { name: 'Intelligence',    desc: 'Coordinates nearby allies, boosting their targeting accuracy.' },
-    { name: 'Laser Pulse',     desc: 'Charges up then unleashes a sweeping rapid-fire laser arc.' },
-    { name: 'Cannoneer',       desc: 'Fires explosive cannonballs that destroy walls on impact.' },
-    { name: 'Sovereign',       desc: '[BOSS] Massive. Wall-destroying cannonballs. Four orbiting shield walls intercept your bullets.' },
-    { name: 'Phantom Sniper',  desc: '[BOSS] Cloaks, then charges and fires a wall-piercing shot.' },
-    { name: 'Wraith',          desc: '[BOSS] Cycles stealth (invulnerable). Rapid-fires in one direction. Drops vision-blocking smoke grenades.' },
+    { name: 'Basic Tank', desc: 'The standard enemy. Balanced stats, no special tricks.' },
+    { name: 'Speedy', desc: 'Fast-moving and quick to fire. Dangerous in groups.' },
+    { name: 'Sniper', desc: 'Long-range specialist. Slow to fire but shots travel far.' },
+    { name: 'Rusher', desc: 'Aggressive flanker. High speed, fires in short bursts.' },
+    { name: 'Tracker', desc: 'Bullets curve toward you. Hard to dodge at range.' },
+    { name: 'Laser Tank', desc: 'Fires a sustained laser beam. Locks on and holds fire.' },
+    { name: 'Triple Shot', desc: 'Fires three bullets in a spread. Deadly up close.' },
+    { name: 'Machine Gun', desc: 'Rapid-fire, low accuracy. Overwhelms with volume.' },
+    { name: 'Phantom', desc: 'Turns nearly invisible. Listen for its shots.' },
+    { name: 'Shield Tank', desc: 'Raises a directional shield to block your bullets.' },
+    { name: 'Titan', desc: 'Heavily armored. Takes many hits to bring down.' },
+    { name: 'Harbinger', desc: '[BOSS] Captures nearby bullets and deflects them back with a pulse blast.' },
+    { name: 'Intelligence', desc: 'Coordinates nearby allies, boosting their targeting accuracy.' },
+    { name: 'Laser Pulse', desc: 'Charges up then unleashes a sweeping rapid-fire laser arc.' },
+    { name: 'Cannoneer', desc: 'Fires explosive cannonballs that destroy walls on impact.' },
+    { name: 'Sovereign', desc: '[BOSS] Massive. Wall-destroying cannonballs. Four orbiting shield walls intercept your bullets.' },
+    { name: 'Phantom Sniper', desc: '[BOSS] Cloaks, then charges and fires a wall-piercing shot.' },
+    { name: 'Wraith', desc: '[BOSS] Cycles stealth (invulnerable). Rapid-fires in one direction. Drops vision-blocking smoke grenades.' },
 ];
 let killIndicators = []; // { x, y, life, maxLife, text, color? }
 let prevMyKills = 0;
@@ -251,50 +252,53 @@ socket.on('error', (err) => {
     alert(err.message);
 });
 
-socket.on('updatePlayers', (serverPlayers) => {
+socket.on('tick', (data) => {
+    if (data.bullets) {
+        const now = Date.now();
+        const nextState = {};
+        data.bullets.forEach((b, i) => {
+            nextState[i] = { x: b.x, y: b.y, angle: b.angle, speed: b.speed, receivedAt: now };
+        });
+        bulletState = nextState;
+        bullets = data.bullets;
+    }
+    if (data.lasers !== undefined) lasers = data.lasers;
+    if (data.flares !== undefined) flares = data.flares;
+    if (data.companions !== undefined) companions = data.companions;
+    if (data.smoke !== undefined) smokeClouds = data.smoke;
+    if (data.zones !== undefined) zoneProgress = data.zones;
+    const serverPlayers = data.players;
     const now = Date.now();
     for (const [id, p] of Object.entries(serverPlayers)) {
         if (id === socket.id) {
             if (!localPredValid) {
-                // First update — initialize local prediction from server
                 localX = p.x; localY = p.y;
                 localVx = p.vx || 0; localVy = p.vy || 0;
                 localAngle = p.angle;
                 localTurretAngle = p.turretAngle || 0;
                 localPredValid = true;
             }
-            // Reconciliation is intentionally deferred to applySmoothing() so
-            // corrections are applied at the render-frame rate, not socket-packet rate.
         } else {
-            // Buffer remote player snapshots for interpolation
             if (!playerInterpBuf[id]) playerInterpBuf[id] = [];
             playerInterpBuf[id].push({ x: p.x, y: p.y, angle: p.angle, turretAngle: p.turretAngle || 0, t: now });
             if (playerInterpBuf[id].length > 20) playerInterpBuf[id].shift();
         }
     }
-    // Clean up buffers for disconnected players
     for (const id of Object.keys(playerInterpBuf)) {
         if (!serverPlayers[id]) delete playerInterpBuf[id];
     }
     players = serverPlayers;
-    skipMarkExplored = false; // positions are now valid for the current level
+    skipMarkExplored = false;
 
-    // Detect kill — spawn indicator above player tank
     const me = serverPlayers[socket.id];
     if (me) {
         const newKills = me.kills || 0;
         if (!skipKillDetection && newKills > prevMyKills) {
-            const msgs = ['HIT'];
-            killIndicators.push({
-                x: me.x, y: me.y,
-                life: 40, maxLife: 40,
-                text: msgs[Math.floor(Math.random() * msgs.length)],
-            });
+            killIndicators.push({ x: me.x, y: me.y, life: 40, maxLife: 40, text: 'HIT' });
         }
         prevMyKills = newKills;
         skipKillDetection = false;
 
-        // Detect buff gains
         const buffNames = {
             speed: 'SPEED', fireRate: 'FIRE RATE', bulletSpeed: 'BULLET SPD',
             bulletBounces: 'BOUNCES', shield: 'SHIELD', multiShot: 'MULTISHOT',
@@ -303,21 +307,11 @@ socket.on('updatePlayers', (serverPlayers) => {
             chain: 'CHAIN', orbit: 'ORBIT', haste: 'HASTE',
         };
         const newBuffs = me.buffs || {};
-        const newBuffSnapshot = {
-            ...newBuffs,
-            shield: (newBuffs.shield || 0) + (me.shield ? 1 : 0),
-        };
+        const newBuffSnapshot = { ...newBuffs, shield: (newBuffs.shield || 0) + (me.shield ? 1 : 0) };
         if (!skipBuffDetection) {
             for (const [type, label] of Object.entries(buffNames)) {
-                const prev = prevMyBuffs[type] || 0;
-                const curr = newBuffSnapshot[type] || 0;
-                if (curr > prev) {
-                    killIndicators.push({
-                        x: me.x, y: me.y,
-                        life: 50, maxLife: 50,
-                        text: `+${label}`,
-                        color: [100, 255, 160],
-                    });
+                if ((newBuffSnapshot[type] || 0) > (prevMyBuffs[type] || 0)) {
+                    killIndicators.push({ x: me.x, y: me.y, life: 50, maxLife: 50, text: `+${label}`, color: [100, 255, 160] });
                 }
             }
         }
@@ -326,19 +320,6 @@ socket.on('updatePlayers', (serverPlayers) => {
     }
 });
 
-socket.on('updateBullets', (serverBullets) => {
-    const now = Date.now();
-    const nextState = {};
-    serverBullets.forEach((b, i) => {
-        nextState[i] = { x: b.x, y: b.y, angle: b.angle, speed: b.speed, receivedAt: now };
-    });
-    bulletState = nextState;
-    bullets = serverBullets;
-});
-
-socket.on('updateLasers', (serverLasers) => {
-    lasers = serverLasers;
-});
 
 let chainRays = [];
 socket.on('chainRays', (data) => {
@@ -354,7 +335,6 @@ socket.on('tilesUpdated', (tiles) => {
     rebuildGroupedWalls();
 });
 
-socket.on('updateZones', (data) => { zoneProgress = data; });
 
 socket.on('updateLevel', (data) => {
     level = data.level; // Store the level received from the server
@@ -418,6 +398,7 @@ socket.on('nextLevel', () => {
     transitionTimeLeft = null;
     flares = [];
     companions = {};
+    companionVisionCache = {};
     spectateTargetId = null;
     killIndicators = [];
     smokeClouds = [];
@@ -430,10 +411,7 @@ socket.on('nextLevel', () => {
     prevMyBuffs = {};
 });
 
-socket.on('updateFlares', (data) => { flares = data; });
-socket.on('updateCompanions', (data) => { companions = data; });
 socket.on('smokeCloud', (sc) => { smokeClouds.push({ ...sc, framesLeft: sc.duration }); });
-socket.on('updateSmokeClouds', (data) => { smokeClouds = data; });
 socket.on('muzzleFlash', (data) => { muzzleFlashes.push({ ...data, life: 7 }); });
 
 socket.on('arenaMode', () => {
@@ -660,6 +638,14 @@ function draw() {
     const gridWidth = level[0].length * TILE_SIZE; // Width of the ground
     const gridHeight = level.length * TILE_SIZE; // Height of the ground
 
+    // Run prediction before any world drawing so all geometry uses the current-frame
+    // predicted position. The full camera setup (with panning/shake) runs again later.
+    if (smoothingEnabled) applySmoothing();
+    if (localPredValid && players[socket.id] && !players[socket.id].isDead) {
+        const me = players[socket.id];
+        camera(me.x, me.y + 200, 600, me.x, me.y, 0, 0, 1, 0);
+    }
+
     if (useTextures && floorTex) {
         const camCX = myTank ? myTank.x : gridWidth / 2;
         const camCY = myTank ? myTank.y : gridHeight / 2;
@@ -706,10 +692,6 @@ function draw() {
     drawWalls();
 
     drawDrops();
-
-    if (smoothingEnabled) {
-        applySmoothing();
-    }
 
     // Draw all tanks
     for (let id in players) {
@@ -892,25 +874,14 @@ function draw() {
 
     if (isFogOfWar && !allDead && !fogSuppressed) {
         const resolution = visionResolution;
-        // Build flare vision entries to inject into fog
-        const flareVision = flares.map(f => ({
-            x: f.x, y: f.y,
-            visionDistance: f.visionRadius,
-            points: calculateVision(f.x, f.y, level, f.visionRadius, resolution),
-        }));
-        // Build companion vision entries
-        const companionVisionRadius = TILE_SIZE * 3;
-        const companionVision = Object.values(companions)
-            .filter(c => !c.isDead)
-            .map(c => ({
-                x: c.x, y: c.y,
-                visionDistance: companionVisionRadius,
-                points: calculateVision(c.x, c.y, level, companionVisionRadius, resolution),
-            }));
+        // Flare vision drawn as direct circle punches in drawSharedFogOfWar — no raycasting
+        const flareVision = [];
+        // Companion vision drawn as a direct circle punch in drawSharedFogOfWar — no raycasting
+        const companionVision = [];
         const scopeExtra = sniperScopeVision ? [sniperScopeVision] : [];
-        // When spectating, anchor the fog plane to the camera so it covers the full view
-        const fogX = isSpectating ? spectateCamX : targetTank.x;
-        const fogY = isSpectating ? spectateCamY : targetTank.y;
+        // Fog plane anchored to the tank being viewed so the vision polygon aligns correctly
+        const fogX = targetTank.x;
+        const fogY = targetTank.y;
         if (gameMode == 'lobby') {
             const visiblePoints = calculateVision(targetTank.x, targetTank.y, level, targetTank.visionDistance, resolution);
             drawFogOfWar(fogX, fogY, visiblePoints, targetTank.x, targetTank.y);
@@ -2263,7 +2234,7 @@ function drawTank(tank, isSelf) {
         const shieldR = tank.tier === 15 ? size * 2.4
             : tank.tier === 11 ? size * 2.1
                 : (tank.tier === 10 || tank.tier === 14 || tank.tier === 16) ? size * 2.0
-                    : size * 1.6;
+                    : size * 1.9;
         push();
         translate(tank.x, tank.y, PLAYER_SIZE);
         fill(50, 100, 255, 100);
@@ -2521,9 +2492,9 @@ function drawWalls() {
     if (useTextures && wallTex) {
         // Per-tile draw so each box gets correct UV tiling
         const cStart = Math.max(0, Math.floor((camCX - marginX) / TILE_SIZE));
-        const cEnd   = Math.min(level[0].length - 1, Math.ceil((camCX + marginX) / TILE_SIZE));
+        const cEnd = Math.min(level[0].length - 1, Math.ceil((camCX + marginX) / TILE_SIZE));
         const rStart = Math.max(0, Math.floor((camCY - marginY) / TILE_SIZE));
-        const rEnd   = Math.min(level.length - 1, Math.ceil((camCY + marginY) / TILE_SIZE));
+        const rEnd = Math.min(level.length - 1, Math.ceil((camCY + marginY) / TILE_SIZE));
         for (let r = rStart; r <= rEnd; r++) {
             for (let c = cStart; c <= cEnd; c++) {
                 if (!level[r][c]) continue;
@@ -2959,8 +2930,9 @@ function drawExplosions() {
             }
             if (!explosion._debrisSpawned) {
                 explosion._debrisSpawned = true;
-                const n = 10 + floor(random(6));                 // count
-                const sizeScale = explosion.size ? explosion.size / 10 : 1;      // scale by blast size
+                const n = 8 + floor(random(4));                 // count
+                let sizeScale = explosion.size ? explosion.size / 10 : 1;      // scale by blast size
+                sizeScale *= 1.1;
 
                 explosion._debris = [];
                 for (let k = 0; k < n; k++) {
@@ -3261,23 +3233,7 @@ function drawBullets() {
         translate(x, y, bz);
         noStroke();
 
-        if (bullet.wallPiercing) {
-            // Sniper pierce shot — bright white-orange elongated glow
-            push();
-            fill(20, 10, 0);
-            sphere(BULLET_SIZE * 1.4);
-            pop();
-            fill(255, 200, 80);
-            sphere(BULLET_SIZE * 1.2);
-            // Streak trail hint
-            const dx = -Math.cos(bullet.angle) * BULLET_SIZE * 3;
-            const dy = -Math.sin(bullet.angle) * BULLET_SIZE * 3;
-            push();
-            translate(dx, dy, 0);
-            fill(255, 140, 20, 120);
-            sphere(BULLET_SIZE * 0.7);
-            pop();
-        } else if (bullet.isTurretBullet) {
+        if (bullet.isTurretBullet) {
             // Small orange turret bullet
             const bs = BULLET_SIZE * 0.55;
             push();
@@ -3291,10 +3247,11 @@ function drawBullets() {
             fill(255, 160, 0);
             sphere(bs);
         } else {
-            // Standard bullet rendering — also used for cannonballs (just larger)
+            // Standard bullet rendering — also used for cannonballs/sniper (just larger)
             const bs = bullet.isHeavyCannonball ? BULLET_SIZE * 2.2
                 : bullet.isCannonball ? BULLET_SIZE * 1.5
-                    : BULLET_SIZE;
+                    : bullet.wallPiercing ? BULLET_SIZE * 1.8
+                        : BULLET_SIZE;
             push();
             const cameraPos = new p5.Vector(camX, camY, camZ);
             const bulletPos = new p5.Vector(x, y, bz);
@@ -3324,13 +3281,13 @@ function drawBullets() {
         pop();
 
         // Trail
-        const trailSize = bullet.wallPiercing ? BULLET_SIZE * 2 : bullet.isHeavyCannonball ? BULLET_SIZE * 2.2 : bullet.isCannonball ? BULLET_SIZE * 1.5 : bullet.isTurretBullet ? BULLET_SIZE * 0.55 : BULLET_SIZE;
+        const trailSize = bullet.isHeavyCannonball ? BULLET_SIZE * 2.2 : bullet.isCannonball ? BULLET_SIZE * 1.5 : bullet.wallPiercing ? BULLET_SIZE * 1.8 : bullet.isTurretBullet ? BULLET_SIZE * 0.55 : BULLET_SIZE;
         trails.push({
             x, y,
             z: bz,
             size: trailSize,
             dSize: trailSize / 15,
-            alpha: bullet.wallPiercing ? 160 : 108,
+            alpha: 108,
         });
     });
 }

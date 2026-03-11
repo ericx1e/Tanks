@@ -84,7 +84,7 @@ function initializeAITank(id, x, y, tier, buttonType) {
     if (tier == 15) {
         // Sovereign — massive, orbiting orb shield, cannonball artillery
         tank.orbAngle = 0;
-        tank.buffs = { shield: 4 };
+        tank.buffs = { shield: 7 };
     }
     if (tier == 16) {
         // Phantom Sniper — omniscient, charges up and fires piercing wallPiercing shot
@@ -97,7 +97,7 @@ function initializeAITank(id, x, y, tier, buttonType) {
         tank.wraithStealthed = false;
         tank.wraithPhaseTimer = 300; // starts visible for 5s
         tank.wraithSmokeTimer = 200;
-        tank.buffs = { shield: 3 };
+        tank.buffs = { shield: 6 };
     }
     if (tier == 13) {
         tank = {
@@ -153,12 +153,26 @@ function initializeAITank(id, x, y, tier, buttonType) {
 // Update all AI tanks
 function updateAITanks(lobby, lobbyCode, players, level, bullets) {
     let allDead = true;
+
+    // Precompute human player positions once for culling
+    const humans = Object.values(players).filter(p => !p.isAI && !p.isDead);
+    const cullDist = TILE_SIZE * 30; // skip full AI logic beyond this range
+    const cullDistSq = cullDist * cullDist;
+
     for (let id in players) {
         const tank = players[id];
-        if (tank.isAI && !tank.isDead && tank.tier !== 'chest' && !tank.isMuseum) {
-            allDead = false;
-            updateAITank(lobby, lobbyCode, tank, level, players, bullets);
+        if (!tank.isAI || tank.isDead || tank.tier === 'chest' || tank.isMuseum) continue;
+        allDead = false;
+
+        // Distance cull: if no human is within range, only update movement (skip targeting/firing)
+        let nearestHumanDistSq = Infinity;
+        for (const h of humans) {
+            const dsq = (tank.x - h.x) ** 2 + (tank.y - h.y) ** 2;
+            if (dsq < nearestHumanDistSq) nearestHumanDistSq = dsq;
         }
+        tank._culled = humans.length > 0 && nearestHumanDistSq > cullDistSq;
+
+        updateAITank(lobby, lobbyCode, tank, level, players, bullets);
     }
     return allDead;
 }
@@ -171,11 +185,11 @@ function updateAITank(lobby, lobbyCode, tank, level, players, bullets) {
         const orbRadius = PLAYER_SIZE * 3.2;
         const wallHalfWidth = PLAYER_SIZE * 1.4;
         const wallHalfDepth = PLAYER_SIZE * 0.6;
-        // Splice in-place so the bullets array reference stays valid for fireBullet calls below
-        for (let k = bullets.length - 1; k >= 0; k--) {
+        for (let k = 0; k < bullets.length; k++) {
             const b = bullets[k];
-            if (b.owner === tank.id) continue;
-            let intercepted = false;
+            if (b._dead || b.owner === tank.id) continue; // skip own shots
+            const bOwner = players[b.owner];
+            if (bOwner && bOwner.isAI) continue; // don't block other bot bullets
             for (let r = 0; r < 4; r++) {
                 const a = tank.orbAngle + r * Math.PI / 2;
                 const ox = tank.x + Math.cos(a) * orbRadius;
@@ -188,15 +202,15 @@ function updateAITank(lobby, lobbyCode, tank, level, players, bullets) {
                 if (Math.abs(perp) > wallHalfWidth) continue;
                 const inward = Math.cos(b.angle) * Math.cos(a) + Math.sin(b.angle) * Math.sin(a);
                 if (inward >= 0) continue;
-                intercepted = true;
+                b._dead = true;
                 io.to(lobbyCode).emit('explosion', {
                     x: ox, y: oy, z: PLAYER_SIZE * 1.5,
                     size: PLAYER_SIZE * 0.8, dSize: 1.2, color: [100, 180, 255],
                 });
                 break;
             }
-            if (intercepted) bullets.splice(k, 1);
         }
+        lobby.bullets = bullets.filter(b => !b._dead);
     }
     let shootingRange = PLAYER_SIZE * 18; // Range for shooting players
     let turretSpeed = 0.12; // Speed of turret rotation
@@ -281,10 +295,10 @@ function updateAITank(lobby, lobbyCode, tank, level, players, bullets) {
             turretSpeed = 0.22;
             break;
         case 14: // Cannoneer — slow, fires explosive cannonballs
-            speed = 0.55 * AI_TANK_SPEED;
-            shootingRange = PLAYER_SIZE * 28;
-            fireCooldown = 110;
-            turretSpeed = 0.18;
+            speed = 0.75 * AI_TANK_SPEED;
+            shootingRange = Infinity;
+            fireCooldown = 70;
+            turretSpeed = 0.22;
             break;
         case 15: // Sovereign — massive boss, orbiting orb shield, heavy cannonballs
             speed = 0.45 * AI_TANK_SPEED;
@@ -365,8 +379,13 @@ function updateAITank(lobby, lobbyCode, tank, level, players, bullets) {
     const AVOID_DOT = 0.35;
     const SHOOT_DOT = 0.80;
 
-    // Scan all bullets once
+    // Scan all bullets once — skip for culled (distant) tanks
     const candidates = [];
+    if (tank._culled) {
+        // distant tank: just tick cooldown and skip avoidance/shooting
+        if (tank.fireCooldown > 0) tank.fireCooldown--;
+        return;
+    }
     for (const b of bullets) {
         if (b.owner === tank.id) continue; // ignore own shots
         const bulletOwner = players[b.owner];
@@ -528,7 +547,10 @@ function updateAITank(lobby, lobbyCode, tank, level, players, bullets) {
         }
     }
 
-    handleAITurret(lobby, lobbyCode, tank, level, players, bullets, shootingRange, turretSpeed, fireCooldown);
+    // Skip expensive targeting/firing for tanks far from all players
+    if (!tank._culled) {
+        handleAITurret(lobby, lobbyCode, tank, level, players, bullets, shootingRange, turretSpeed, fireCooldown);
+    }
 }
 
 function handleAITurret(lobby, lobbyCode, tank, level, players, bullets, shootingRange, turretSpeed, fireCooldown) {
@@ -556,8 +578,8 @@ function handleAITurret(lobby, lobbyCode, tank, level, players, bullets, shootin
             tank.prevTargetY = nearestPlayer.y;
             playerInSight = { player: nearestPlayer, angle: leadAngle };
         }
-    } else if (tank.tier === 11 || tank.tier === 15 || tank.tier === 17) {
-        // Boss tanks: omniscient — find nearest player regardless of LOS, lead shot
+    } else if (tank.tier === 11 || tank.tier === 14 || tank.tier === 15 || tank.tier === 17) {
+        // Boss tanks + Cannoneer: omniscient — find nearest player regardless of LOS, lead shot
         let nearestPlayer = null, nearestDist = Infinity;
         for (let id in players) {
             const player = players[id];
@@ -920,20 +942,20 @@ function fireBullet(lobbyCode, tank, angle, bullets, level) {
                 bounces: 0,
             }
             break;
-        case 14: // Cannoneer — slow heavy cannonball
+        case 14: // Cannoneer — heavy cannonball
             newBullet = {
                 id: bullets.length,
                 owner: player.id,
                 x: bulletX,
                 y: bulletY,
                 angle: angle,
-                speed: BULLET_SPEED * 1.3,
+                speed: BULLET_SPEED * 1.6,
                 bounces: 0,
                 isCannonball: true,
                 isHeavyCannonball: true,
-                hp: 2,
-                splashRadius: PLAYER_SIZE * 2.5,
-                explosionSize: BULLET_SIZE * 4,
+                hp: 4,
+                splashRadius: PLAYER_SIZE * 4,
+                explosionSize: BULLET_SIZE * 6,
             }
             break;
         case 15: // Sovereign — single massive wall-destroying cannonball
@@ -1088,42 +1110,44 @@ function handleBurstFiring(lobbyCode, tank, bullets, level, fireCooldown) {
     }
 }
 
+// DDA raycast — jumps directly to tile boundaries instead of small steps.
+// ~10-30x faster than the old step-based version for typical ranges.
 function detectObstacleAlongRay(playerX, playerY, angle, maxDistance, level) {
-    let x = playerX;
-    let y = playerY;
-
-    const stepSize = 1
-
     const dx = Math.cos(angle);
     const dy = Math.sin(angle);
 
-    for (let i = 0; i < maxDistance / stepSize; i++) {
-        x += dx * stepSize;
-        y += dy * stepSize;
+    let col = Math.floor(playerX / TILE_SIZE);
+    let row = Math.floor(playerY / TILE_SIZE);
 
-        const raySize = TILE_SIZE / 100
+    const stepCol = dx > 0 ? 1 : dx < 0 ? -1 : 0;
+    const stepRow = dy > 0 ? 1 : dy < 0 ? -1 : 0;
 
-        // Calculate the bounding box coordinates of the current ray position
-        const colStart = Math.floor((x - raySize) / TILE_SIZE);
-        const colEnd = Math.floor((x + raySize) / TILE_SIZE);
-        const rowStart = Math.floor((y - raySize) / TILE_SIZE);
-        const rowEnd = Math.floor((y + raySize) / TILE_SIZE);
+    // Distance along the ray to the next vertical/horizontal tile boundary
+    const tDeltaX = dx !== 0 ? Math.abs(TILE_SIZE / dx) : Infinity;
+    const tDeltaY = dy !== 0 ? Math.abs(TILE_SIZE / dy) : Infinity;
 
-        // Check multiple tiles in the level grid
-        for (let row = rowStart; row <= rowEnd; row++) {
-            for (let col = colStart; col <= colEnd; col++) {
-                if (level[row] && level[row][col] > 0) {
+    let tMaxX = dx !== 0
+        ? (dx > 0 ? (col + 1) * TILE_SIZE - playerX : playerX - col * TILE_SIZE) / Math.abs(dx)
+        : Infinity;
+    let tMaxY = dy !== 0
+        ? (dy > 0 ? (row + 1) * TILE_SIZE - playerY : playerY - row * TILE_SIZE) / Math.abs(dy)
+        : Infinity;
 
-                    if (level[row] && level[row][col] > 0) {
-                        // Ray hits a wall
-                        return true
-                    }
-                }
-            }
+    let dist = 0;
+    while (dist < maxDistance) {
+        if (tMaxX < tMaxY) {
+            dist = tMaxX;
+            tMaxX += tDeltaX;
+            col += stepCol;
+        } else {
+            dist = tMaxY;
+            tMaxY += tDeltaY;
+            row += stepRow;
         }
+        if (dist > maxDistance) return false;
+        if (level[row] && level[row][col] > 0) return true;
+        if (!level[row] || level[row][col] === undefined) return false; // out of bounds
     }
-
-    // Ray reached max distance without hitting a wall
     return false;
 }
 
@@ -1492,7 +1516,7 @@ function computeLeadAngle(sx, sy, bulletSpeed, tx, ty, tvx, tvy) {
 module.exports = {
     setIO,
     initializeAITank,
-    // initializeAITanks,
     updateAITanks,
     detectObstacleAlongRay,
+    computeLeadAngle,
 };

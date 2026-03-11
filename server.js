@@ -6,7 +6,7 @@ const { v4: uuidv4 } = require('uuid'); // Generates unique lobby codes
 const app = express();
 const server = http.createServer(app);
 
-const { initializeAITank, updateAITanks, setIO, detectObstacleAlongRay } = require('./bots.js');
+const { initializeAITank, updateAITanks, setIO, detectObstacleAlongRay, computeLeadAngle } = require('./bots.js');
 const { TILE_SIZE, BULLET_SIZE, BULLET_SPEED, PLAYER_SIZE, MAX_SPEED, ACCELERATION, FRICTION, TANK_CLASSES } = require('./public/constants.js');
 const { isCollidingWithWall, isCollidingWithPlayer, isWall, lerpAngle, getRandomNonWallPosition, getSpreadOutPosition } = require('./utils.js');
 const { loadLevel, getNumLevels } = require('./levels.js');
@@ -50,6 +50,7 @@ function createLobby() {
         levelNumber: -1,
         bullets: [],
         lasers: [],
+        activeLasers: {},
         flares: [],
         companions: {},
         spawn: {},
@@ -228,6 +229,7 @@ function createLevel(lobbyCode, levelNumber) {
         levelNumber: levelNumber,
         bullets: [],
         lasers: [],
+        activeLasers: {},
         flares: [],
         companions: newCompanions,
         spawn: spawn,
@@ -298,12 +300,13 @@ function startTransition(lobbyCode) {
         transitionTimers[lobbyCode] = duration;
 
         const intervalId = setInterval(() => {
+            if (!lobbies[lobbyCode]) { clearInterval(intervalId); return; }
             transitionTimers[lobbyCode]--;
             io.to(lobbyCode).emit('transitionTimer', { secondsLeft: transitionTimers[lobbyCode] });
 
             if (transitionTimers[lobbyCode] <= 0) {
                 clearInterval(intervalId);
-                createLevel(lobbyCode, lobby.levelNumber + 1);
+                createLevel(lobbyCode, lobbies[lobbyCode].levelNumber + 1);
                 io.to(lobbyCode).emit('nextLevel');
                 lobbies[lobbyCode].gameState = "playing";
                 transitionTimers[lobbyCode] = null;
@@ -884,14 +887,15 @@ function triggerChain(lobby, lobbyCode, owner, killedPlayer, sourceDepth) {
     const chainStacks = owner.buffs?.chain || 0;
     if (chainStacks <= 0) return;
     const depth = sourceDepth || 0;
-    if (depth >= 2) return;
+    if (depth >= 1) return;
 
     const players = lobby.players;
     const bullets = lobby.bullets;
     const explosiveStacks = owner.buffs?.explosive || 0;
     const isExplosive = explosiveStacks > 0;
     const splashMult = explosiveStacks > 0 ? 1 + 0.5 * Math.sqrt(explosiveStacks) : 1;
-    const chainCount = chainStacks + 1;
+    const chainCount = Math.ceil(Math.sqrt(chainStacks)); // 1, 2, 2, 2, 3, 
+    if (bullets.length > 200) return; // don't spawn chain bullets if already flooded
 
     const targets = Object.values(players)
         .filter(t => t.isAI && !t.isDead && t.id !== killedPlayer.id)
@@ -931,6 +935,7 @@ function fireLaser(lobby, lobbyCode, tank, players, level, isActive) {
     let laserEnd = { x: tank.x, y: tank.y };
     const stepSize = 5; // Precision of laser steps
     const maxDistance = TILE_SIZE * 20; // Maximum laser range
+    let hitTargetId = null;
 
     for (let i = 0; i < maxDistance; i += stepSize) {
         const x = tank.x + Math.cos(angle) * i;
@@ -946,59 +951,57 @@ function fireLaser(lobby, lobbyCode, tank, players, level, isActive) {
             const player = players[id];
             if (player.isAI && !player.isDead && isCollidingWithPlayer(x, y, player, 0)) {
                 laserEnd = { x, y }; // Stop at the player
-                if (isActive) { // Damage ticks every 5 frames
-                    if (true || lobby.mode !== 'lobby' || player.isAI) // No player damage in lobby
-
-                        // Apply damage to the player
-                        if ((player.laserShieldCooldown || 0) > 0) {
-                            // Cooldown active — block all laser damage (prevents insta-kill after shield strip)
-                            done = true;
-                            break;
-                        } else if (player.shield) {
-                            player.shield = false; // Remove shield instead of killing
-                            player.laserShieldCooldown = 30; // 0.5 s cooldown to prevent immediate follow-up damage
-                        } else if (!player.spawnGrace) {
-                            player.isDead = true;
-                            if (player.isAI && player.tier !== 'chest' && !tank.isAI) {
-                                tank.kills = (tank.kills || 0) + 1;
-                                triggerChain(lobby, lobbyCode, tank, player, 0);
-                            }
-                            if (!player.isAI) {
-                                player.deaths = (player.deaths || 0) + 1;
-                            }
-
-                            // Chest killed by laser — spawn drop (same as bullet kill)
-                            if (player.tier === 'chest' && !tank.isAI) {
-                                spawnDrop(lobbyCode, player.x, player.y, tank);
-                            }
-
-                            let color = player.id; // indicates human player hit
-                            if (player.isAI) {
-                                color = player.color;
-                            }
-                            if (player.shield) {
-                                color = [50, 100, 255];
-                            }
-
-                            io.to(lobbyCode).emit('explosion', {
-                                x: player.x,
-                                y: player.y,
-                                z: PLAYER_SIZE,
-                                size: 15,
-                                dSize: 2,
-                                color: color,
-                            });
-
-                        }
-                }
-                // HIT
+                hitTargetId = id;
                 done = true;
                 break;
             }
         }
-        if (done) {
-            break;
+        if (done) break;
+    }
+
+    if (isActive && hitTargetId) {
+        // Get or create per-laser damage cooldown entry
+        if (!lobby.activeLasers[tank.id]) {
+            lobby.activeLasers[tank.id] = { hitTargetId: null, damageCooldown: 0 };
         }
+        const al = lobby.activeLasers[tank.id];
+        // Reset cooldown when target changes
+        if (al.hitTargetId !== hitTargetId) {
+            al.hitTargetId = hitTargetId;
+            al.damageCooldown = 0;
+        }
+
+        if (al.damageCooldown <= 0) {
+            al.damageCooldown = 10;
+            const target = players[hitTargetId];
+            if (target && !target.isDead) {
+                if ((target.laserShieldCooldown || 0) > 0) {
+                    // Cooldown active — block damage
+                } else if (target.shield) {
+                    target.shield = false;
+                    target.laserShieldCooldown = 30;
+                } else if (!target.spawnGrace) {
+                    target.isDead = true;
+                    if (target.isAI && target.tier !== 'chest' && !tank.isAI) {
+                        tank.kills = (tank.kills || 0) + 1;
+                        triggerChain(lobby, lobbyCode, tank, target, 0);
+                    }
+                    if (!target.isAI) {
+                        target.deaths = (target.deaths || 0) + 1;
+                    }
+                    if (target.tier === 'chest' && !tank.isAI) {
+                        spawnDrop(lobbyCode, target.x, target.y, tank);
+                    }
+                    const color = target.isAI ? target.color : target.id;
+                    io.to(lobbyCode).emit('explosion', {
+                        x: target.x, y: target.y, z: PLAYER_SIZE, size: 15, dSize: 2, color,
+                    });
+                }
+            }
+        }
+    } else if (isActive && !hitTargetId && lobby.activeLasers[tank.id]) {
+        // Laser not hitting anything — clear target so cooldown resets on next hit
+        lobby.activeLasers[tank.id].hitTargetId = null;
     }
 
 
@@ -1101,6 +1104,11 @@ function updateBullets(lobby, lobbyCode) {
     const players = lobby.players
     const level = lobby.level
     if (!level) return;
+
+    // Precompute active shield interceptors once — avoids O(B×P) scan per bullet
+    const activeShields = Object.values(players).filter(p =>
+        !p.isDead && p.shieldActive && ((p.isAI && p.tier === 9) || (!p.isAI && p.hasShieldAbility))
+    );
 
     bullets.forEach((bullet, i) => {
         // Homing: curve player bullets toward nearest AI enemy
@@ -1226,12 +1234,8 @@ function updateBullets(lobby, lobbyCode) {
         });
 
         // Check for bullet interception by Shield Tanks (tier 9 AI) or Guardian players
-        for (const playerId in players) {
+        for (const shieldTank of activeShields) {
             if (bulletsToRemove.has(i)) break;
-            const shieldTank = players[playerId];
-            const isAIShield = shieldTank.isAI && shieldTank.tier === 9;
-            const isPlayerGuardian = !shieldTank.isAI && shieldTank.hasShieldAbility;
-            if ((!isAIShield && !isPlayerGuardian) || !shieldTank.shieldActive || shieldTank.isDead) continue;
             if (bullet.owner === shieldTank.id) continue; // never block own shots
 
             const sf = shieldTank.shieldFacing;
@@ -1276,11 +1280,16 @@ function updateBullets(lobby, lobbyCode) {
                     bulletsToRemove.add(i);
                     if (companion.shield) {
                         companion.shield = false;
+                        io.to(lobbyCode).emit('explosion', {
+                            x: companion.x, y: companion.y,
+                            z: PLAYER_SIZE, size: 10, dSize: 2,
+                            color: [50, 100, 255], effect: 'shield',
+                        });
                     } else {
                         companion.isDead = true;
                         io.to(lobbyCode).emit('explosion', {
                             x: companion.x, y: companion.y,
-                            z: PLAYER_SIZE, size: 10, dSize: 2,
+                            z: PLAYER_SIZE, size: 18, dSize: 1.6,
                             color: [255, 211, 42],
                         });
                     }
@@ -1310,6 +1319,14 @@ function updateBullets(lobby, lobbyCode) {
             if (/*playerId !== bullet.owner && */isCollidingWithPlayer(nextX, nextY, player)) {
                 if (bullet.isCannonball || bullet.hasSplash) {
                     explodeCannonball(lobby, lobbyCode, bullet, bulletsToRemove, i);
+                    // Piercing explosive bullets: undo removal if HP remains, continue piercing
+                    if (!bullet.isCannonball && bullet.hasSplash && (bullet.hp ?? 1) > 1) {
+                        bulletsToRemove.delete(i);
+                        bullet.hp--;
+                        if (!bullet.hitPlayers) bullet.hitPlayers = new Set();
+                        bullet.hitPlayers.add(playerId);
+                        continue;
+                    }
                     break;
                 }
                 bullet.hp = (bullet.hp ?? 1) - 1;
@@ -1508,8 +1525,8 @@ const CLASS_DUMMY_POSITIONS = [
 // 9 per row: tiers 0-8 in row 4, tiers 9-17 in row 9, spaced every 2 cols from col 22
 const MUSEUM_COLS = [22, 24, 26, 28, 30, 32, 34, 36, 38];
 const MUSEUM_TANK_POSITIONS = [
-    ...MUSEUM_COLS.map((col, i) => ({ col, row: 4,  tier: i,     angle: Math.PI / 2 })),
-    ...MUSEUM_COLS.map((col, i) => ({ col, row: 9,  tier: i + 9, angle: Math.PI / 2 })),
+    ...MUSEUM_COLS.map((col, i) => ({ col, row: 4, tier: i, angle: Math.PI / 2 })),
+    ...MUSEUM_COLS.map((col, i) => ({ col, row: 9, tier: i + 9, angle: Math.PI / 2 })),
 ];
 
 function hexToRgb(hex) {
@@ -1787,7 +1804,6 @@ function updateFlares(lobby, lobbyCode) {
         }
         return true;
     });
-    io.to(lobbyCode).emit('updateFlares', lobby.flares);
 }
 
 function autoSpawnCompanionIfReady(lobby, playerId, player) {
@@ -1866,7 +1882,7 @@ function bfsPath(level, startX, startY, endX, endY) {
     return path;
 }
 
-function updateCompanions(lobby, lobbyCode) {
+function updateCompanions(lobby) {
     if (!lobby.companions) return;
     for (const ownerId in lobby.companions) {
         const companion = lobby.companions[ownerId];
@@ -1900,12 +1916,18 @@ function updateCompanions(lobby, lobbyCode) {
             companion.wanderTimer = (companion.wanderTimer || 0) - 1;
             if (companion.wanderTimer <= 0 || !companion.wanderDest) {
                 const maxLeash = nearestEnemy ? 2 : 3;
+                // Offset wander center ahead of the player based on their movement direction
+                const ownerSpeed = Math.hypot(owner.vx || 0, owner.vy || 0);
+                const leadDist = Math.min(ownerSpeed * 30, TILE_SIZE * 2.5);
+                const leadDir = ownerSpeed > 0.1 ? Math.atan2(owner.vy, owner.vx) : owner.angle;
+                const wanderCX = owner.x + Math.cos(leadDir) * leadDist;
+                const wanderCY = owner.y + Math.sin(leadDir) * leadDist;
                 let picked = null;
                 for (let attempt = 0; attempt < 16; attempt++) {
                     const a = Math.random() * Math.PI * 2;
                     const d = (0.5 + Math.random() * maxLeash) * TILE_SIZE;
-                    const cx = owner.x + Math.cos(a) * d;
-                    const cy = owner.y + Math.sin(a) * d;
+                    const cx = wanderCX + Math.cos(a) * d;
+                    const cy = wanderCY + Math.sin(a) * d;
                     if (!isCollidingWithWall(cx, cy, PLAYER_SIZE * 0.6, lobby.level)) {
                         picked = { x: cx, y: cy };
                         break;
@@ -1980,33 +2002,64 @@ function updateCompanions(lobby, lobbyCode) {
             companion.pathWaypoints = null;
         }
 
-        // Auto-aim: only track and fire when a clear line of sight exists
+        // Targeting: priority 1 = intercept incoming bullets, priority 2 = lead-shot nearest enemy
         companion.fireCooldown--;
-        if (nearestEnemy) {
+
+        let targetAngle = null;
+        const bulletRange = 10 * TILE_SIZE;
+
+        // Priority 1: incoming bullet threat toward companion or owner
+        let bestThreat = Infinity;
+        for (const b of lobby.bullets) {
+            if (b.owner === companion.ownerId) continue;
+            const bOwner = lobby.players[b.owner];
+            if (bOwner && !bOwner.isAI) continue; // only intercept AI bullets
+            // Check threat to companion
+            const dx = b.x - companion.x, dy = b.y - companion.y;
+            const dist = Math.hypot(dx, dy);
+            if (dist > bulletRange) continue;
+            const approaching = -dx * Math.cos(b.angle) - dy * Math.sin(b.angle);
+            if (approaching > 0 && dist < bestThreat) {
+                bestThreat = dist;
+                targetAngle = Math.atan2(dy, dx);
+            }
+        }
+
+        // Priority 2: lead-shot nearest enemy with LOS
+        if (targetAngle === null && nearestEnemy) {
             const angleToEnemy = Math.atan2(nearestEnemy.y - companion.y, nearestEnemy.x - companion.x);
             const hasLOS = !detectObstacleAlongRay(companion.x, companion.y, angleToEnemy, nearestDist, lobby.level);
             if (hasLOS) {
-                companion.turretAngle = lerpAngle(companion.turretAngle, angleToEnemy, 0.18);
-                const d = companion.turretAngle - angleToEnemy;
-                const aimDiff = Math.abs(Math.atan2(Math.sin(d), Math.cos(d)));
-                if (companion.fireCooldown <= 0 && aimDiff < 0.15) {
-                    lobby.bullets.push({
-                        x: companion.x + Math.cos(companion.turretAngle) * PLAYER_SIZE,
-                        y: companion.y + Math.sin(companion.turretAngle) * PLAYER_SIZE,
-                        angle: companion.turretAngle,
-                        speed: BULLET_SPEED * 0.85,
-                        bounces: 1,
-                        piercing: 0,
-                        owner: companion.ownerId,
-                        isTurretBullet: true,
-                        bulletZ: PLAYER_SIZE * 1.1,
-                    });
-                    companion.fireCooldown = 90;
-                }
+                const bSpeed = (owner.bulletSpeed || BULLET_SPEED) * 0.85;
+                targetAngle = computeLeadAngle(
+                    companion.x, companion.y, bSpeed,
+                    nearestEnemy.x, nearestEnemy.y,
+                    nearestEnemy.vx || 0, nearestEnemy.vy || 0
+                );
+            }
+        }
+
+        if (targetAngle !== null) {
+            companion.turretAngle = lerpAngle(companion.turretAngle, targetAngle, 0.18);
+            const d = companion.turretAngle - targetAngle;
+            const aimDiff = Math.abs(Math.atan2(Math.sin(d), Math.cos(d)));
+            if (companion.fireCooldown <= 0 && aimDiff < 0.2) {
+                const bSpeed = (owner.bulletSpeed || BULLET_SPEED) * 0.85;
+                lobby.bullets.push({
+                    x: companion.x + Math.cos(companion.turretAngle) * PLAYER_SIZE,
+                    y: companion.y + Math.sin(companion.turretAngle) * PLAYER_SIZE,
+                    angle: companion.turretAngle,
+                    speed: bSpeed,
+                    bounces: 0,
+                    hp: 1 + (owner.piercing || 0),
+                    owner: companion.ownerId,
+                    isTurretBullet: true,
+                    bulletZ: PLAYER_SIZE * 1.1,
+                });
+                companion.fireCooldown = 90;
             }
         }
     }
-    io.to(lobbyCode).emit('updateCompanions', lobby.companions);
 }
 
 function updateBarrages(lobby, lobbyCode) {
@@ -2178,16 +2231,14 @@ function updatePlayerOrbits(lobby, lobbyCode) {
         const orbRadius = PLAYER_SIZE * 2.4;
         const hitRadius = PLAYER_SIZE * 0.72;
 
-        for (let k = bullets.length - 1; k >= 0; k--) {
-            const b = bullets[k];
-            if (b.owner === playerId || b.isTurretBullet) continue;
-            let intercepted = false;
+        for (const b of bullets) {
+            if (b.owner === playerId || b.isTurretBullet || b._dead) continue;
             for (let r = 0; r < numOrbs; r++) {
                 const a = player.orbAngle + r * (Math.PI * 2 / numOrbs);
                 const ox = player.x + Math.cos(a) * orbRadius;
                 const oy = player.y + Math.sin(a) * orbRadius;
                 if (Math.hypot(b.x - ox, b.y - oy) < hitRadius) {
-                    intercepted = true;
+                    b._dead = true;
                     io.to(lobbyCode).emit('explosion', {
                         x: ox, y: oy, z: PLAYER_SIZE,
                         size: PLAYER_SIZE * 0.6, dSize: 0.9, color: [80, 220, 140],
@@ -2195,9 +2246,9 @@ function updatePlayerOrbits(lobby, lobbyCode) {
                     break;
                 }
             }
-            if (intercepted) bullets.splice(k, 1);
         }
     }
+    lobby.bullets = bullets.filter(b => !b._dead);
 }
 
 // Weighted buff selection based on the player's current stacks.
@@ -2272,23 +2323,17 @@ function handlePlayerPickup(lobbyCode, playerId) {
     io.to(lobbyCode).emit('updateDrops', lobby.drops);
 }
 
+let _gameTick = 0;
+
 // Run lobby updates 60 times per second
 setInterval(() => {
+    _gameTick++;
+    const emit30 = (_gameTick % 2 === 0); // throttle heavy emissions to 30fps
+
     for (const [lobbyCode, lobby] of Object.entries(lobbies)) {
         if (lobby.gameState === "transition") continue;
 
         updateBullets(lobby, lobbyCode);
-
-        if (debug_lag) {
-            lagEmit(io.to(lobbyCode), 'updatePlayers', lobby.players);
-            lagEmit(io.to(lobbyCode), 'updateBullets', lobby.bullets);
-        } else {
-            io.to(lobbyCode).emit('updatePlayers', lobby.players);
-            io.to(lobbyCode).emit('updateBullets', lobby.bullets);
-        }
-
-
-
 
         if (lobby.gameState !== 'animating') {
             for (const [_, player] of Object.entries(lobby.players)) {
@@ -2297,6 +2342,8 @@ setInterval(() => {
                 }
             }
         }
+
+        let tickZones;
 
         // Zone voting in lobby
         if (lobby.mode === 'lobby') {
@@ -2325,7 +2372,7 @@ setInterval(() => {
                     }
                 }
             }
-            if (!modeTriggered) io.to(lobbyCode).emit('updateZones', zoneProgress);
+            if (!modeTriggered) tickZones = zoneProgress;
         }
 
         // Continue zone for endless loot rounds
@@ -2333,7 +2380,6 @@ setInterval(() => {
             const cz = lobby.continueZone;
             const czX = (cz.col + 0.5) * TILE_SIZE;
             const czY = (cz.row + 0.5) * TILE_SIZE;
-            let anyProgress = false;
             let triggered = false;
             let bestProg = 0;
             for (const player of Object.values(lobby.players)) {
@@ -2345,7 +2391,6 @@ setInterval(() => {
                         break;
                     }
                     bestProg = Math.max(bestProg, player.continueZoneTimer / ZONE_HOLD_FRAMES);
-                    anyProgress = true;
                 } else {
                     player.continueZoneTimer = Math.max(0, (player.continueZoneTimer || 0) - 3);
                 }
@@ -2355,7 +2400,7 @@ setInterval(() => {
                 io.to(lobbyCode).emit('levelComplete', { levelNumber: lobby.levelNumber });
                 startTransition(lobbyCode);
             } else {
-                io.to(lobbyCode).emit('updateZones', { continue: bestProg });
+                tickZones = { continue: bestProg };
             }
         }
 
@@ -2364,8 +2409,10 @@ setInterval(() => {
             return laser.duration > 0;
         });
 
-        io.to(lobbyCode).emit('updateLasers', lobby.lasers);
-
+        // Tick down per-laser damage cooldowns
+        for (const al of Object.values(lobby.activeLasers)) {
+            if (al.damageCooldown > 0) al.damageCooldown--;
+        }
 
         for (const playerId in lobby.players) {
             const player = lobby.players[playerId]
@@ -2380,7 +2427,7 @@ setInterval(() => {
         updatePlayerOrbits(lobby, lobbyCode);
         updateBarrages(lobby, lobbyCode);
         updateFlares(lobby, lobbyCode);
-        updateCompanions(lobby, lobbyCode);
+        updateCompanions(lobby);
 
         if (lobby.mode == 'lobby' || lobby.mode == 'campaign' || lobby.mode == 'endless') {
             if (lobby.gameState !== 'transition' && lobby.gameState !== 'animating' && lobby.level && !lobby.continueZone && updateAITanks(lobby, lobbyCode, lobby.players, lobby.level, lobby.bullets)) {
@@ -2438,18 +2485,37 @@ setInterval(() => {
                 }
             }
 
-            if (lobby.gameState !== 'transition' && lobby.gameState !== 'animating' && numPlayers > 0 && allDead) {
-                changeMode(lobbyCode, 'lobby');
+            if (lobby.gameState !== 'transition' && lobby.gameState !== 'animating' && numPlayers > 0 && allDead && !lobby.gameOverPending) {
+                lobby.gameOverPending = true;
                 io.to(lobbyCode).emit("gameOver");
-                lobby.levelNumber = -1;
-                startTransition(lobbyCode);
+                setTimeout(() => {
+                    if (!lobbies[lobbyCode]) return;
+                    lobby.gameOverPending = false;
+                    lobby.levelNumber = -1;
+                    changeMode(lobbyCode, 'lobby');
+                    startTransition(lobbyCode);
+                }, 1500);
             }
         }
 
         // Tick smoke clouds
         if (lobby.smokeClouds && lobby.smokeClouds.length) {
             lobby.smokeClouds = lobby.smokeClouds.filter(sc => --sc.framesLeft > 0);
-            io.to(lobbyCode).emit('updateSmokeClouds', lobby.smokeClouds);
+        }
+
+        // Single consolidated tick emission at 30fps
+        if (emit30) {
+            const tickData = {
+                players: lobby.players,
+                bullets: lobby.bullets,
+                companions: lobby.companions || {},
+                flares: lobby.flares || [],
+                lasers: lobby.lasers,
+                smoke: lobby.smokeClouds || [],
+            };
+            if (tickZones !== undefined) tickData.zones = tickZones;
+            if (debug_lag) lagEmit(io.to(lobbyCode), 'tick', tickData);
+            else io.to(lobbyCode).emit('tick', tickData);
         }
     }
 }, 1000 / 60);

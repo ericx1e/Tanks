@@ -1,45 +1,108 @@
 let isFogOfWar = true;
 
 function castRay(playerX, playerY, angle, maxDistance, level) {
-    let x = playerX;
-    let y = playerY;
-
-    const stepSize = 0.5;
     const dx = Math.cos(angle);
     const dy = Math.sin(angle);
 
-    for (let i = 0; i < maxDistance / stepSize; i++) {
-        const nextX = x + dx * stepSize;
-        const nextY = y + dy * stepSize;
+    let mapCol = Math.floor(playerX / TILE_SIZE);
+    let mapRow = Math.floor(playerY / TILE_SIZE);
 
-        const raySize = TILE_SIZE / 100;
-        const colStart = Math.floor((nextX - raySize) / TILE_SIZE);
-        const colEnd = Math.floor((nextX + raySize) / TILE_SIZE);
-        const rowStart = Math.floor((nextY - raySize) / TILE_SIZE);
-        const rowEnd = Math.floor((nextY + raySize) / TILE_SIZE);
+    const stepCol = dx >= 0 ? 1 : -1;
+    const stepRow = dy >= 0 ? 1 : -1;
 
-        let hit = false;
-        outer:
-        for (let row = rowStart; row <= rowEnd; row++) {
-            for (let col = colStart; col <= colEnd; col++) {
-                if (level[row] && level[row][col] > 0) { hit = true; break outer; }
-            }
+    const deltaDistX = dx === 0 ? Infinity : Math.abs(TILE_SIZE / dx);
+    const deltaDistY = dy === 0 ? Infinity : Math.abs(TILE_SIZE / dy);
+
+    let sideDistX = dx >= 0
+        ? ((mapCol + 1) * TILE_SIZE - playerX) / Math.abs(dx)
+        : (playerX - mapCol * TILE_SIZE) / Math.abs(dx);
+    let sideDistY = dy >= 0
+        ? ((mapRow + 1) * TILE_SIZE - playerY) / Math.abs(dy)
+        : (playerY - mapRow * TILE_SIZE) / Math.abs(dy);
+
+    while (true) {
+        let dist, hitX, hitY;
+
+        // Corner crossing: both sides hit at ~same distance — check both neighbour tiles
+        if (Math.abs(sideDistX - sideDistY) < 0.001) {
+            dist = sideDistX;
+            if (dist >= maxDistance) break;
+            hitX = playerX + dx * dist;
+            hitY = playerY + dy * dist;
+            const wallA = level[mapRow + stepRow] && level[mapRow + stepRow][mapCol] > 0;
+            const wallB = level[mapRow] && level[mapRow][mapCol + stepCol] > 0;
+            if (wallA || wallB) return { x: hitX, y: hitY, hitWall: true };
+            mapCol += stepCol;
+            mapRow += stepRow;
+            sideDistX += deltaDistX;
+            sideDistY += deltaDistY;
+        } else if (sideDistX < sideDistY) {
+            dist = sideDistX;
+            if (dist >= maxDistance) break;
+            hitX = playerX + dx * dist;
+            hitY = playerY + dy * dist;
+            mapCol += stepCol;
+            sideDistX += deltaDistX;
+        } else {
+            dist = sideDistY;
+            if (dist >= maxDistance) break;
+            hitX = playerX + dx * dist;
+            hitY = playerY + dy * dist;
+            mapRow += stepRow;
+            sideDistY += deltaDistY;
         }
 
-        if (hit) return { x, y, hitWall: true };
-        x = nextX;
-        y = nextY;
+        if (mapRow < 0 || mapCol < 0 || !level[mapRow]) break;
+        if (level[mapRow][mapCol] > 0) return { x: hitX, y: hitY, hitWall: true };
     }
 
-    return { x, y, hitWall: false };
+    return { x: playerX + dx * maxDistance, y: playerY + dy * maxDistance, hitWall: false };
 }
 
 function calculateVision(playerX, playerY, level, maxDistance, resolution) {
-    const visiblePoints = [];
+    // Regular angular sweep
+    const angles = [];
     for (let angle = 0; angle < TWO_PI; angle += resolution) {
-        visiblePoints.push(castRay(playerX, playerY, angle, maxDistance, level));
+        angles.push(angle);
     }
-    // Close the polygon back to angle 0 to prevent a seam artifact at fine resolutions
+
+    // Corner rays: cast rays aimed at each wall-tile corner within range.
+    // This ensures polygon vertices land exactly on corners, eliminating spill and choppiness.
+    const c0 = Math.floor((playerX - maxDistance) / TILE_SIZE);
+    const c1 = Math.floor((playerX + maxDistance) / TILE_SIZE);
+    const r0 = Math.floor((playerY - maxDistance) / TILE_SIZE);
+    const r1 = Math.floor((playerY + maxDistance) / TILE_SIZE);
+    const eps = 0.0001;
+
+    for (let row = r0; row <= r1; row++) {
+        for (let col = c0; col <= c1; col++) {
+            if (!level[row] || level[row][col] <= 0) continue;
+            // 4 corners of this wall tile
+            for (let cr = row; cr <= row + 1; cr++) {
+                for (let cc = col; cc <= col + 1; cc++) {
+                    const wx = cc * TILE_SIZE;
+                    const wy = cr * TILE_SIZE;
+                    if (Math.hypot(wx - playerX, wy - playerY) > maxDistance) continue;
+                    const a = Math.atan2(wy - playerY, wx - playerX);
+                    const norm = ((a % TWO_PI) + TWO_PI) % TWO_PI;
+                    if (norm - eps >= 0)      angles.push(norm - eps);
+                    angles.push(norm);
+                    if (norm + eps < TWO_PI)  angles.push(norm + eps);
+                }
+            }
+        }
+    }
+
+    angles.sort((a, b) => a - b);
+
+    const visiblePoints = [];
+    let prev = -Infinity;
+    for (const angle of angles) {
+        if (angle - prev < 0.00005) continue; // skip near-duplicates
+        visiblePoints.push(castRay(playerX, playerY, angle, maxDistance, level));
+        prev = angle;
+    }
+
     if (visiblePoints.length > 0) visiblePoints.push(visiblePoints[0]);
     return visiblePoints;
 }
@@ -144,12 +207,12 @@ function _drawVisionTiles(cx, cy, viewX, viewY, tiles) {
     fogLayer.image(_tileMaskLayer, 0, 0);
 }
 
-function _drawVisionPolygon(cx, cy, originX, originY, viewX, viewY, points) {
+function _drawVisionPolygon(cx, cy, originX, originY, viewX, viewY, points, fs) {
     fogLayer.fill(255, 255, 255);
     fogLayer.beginShape();
-    fogLayer.vertex(cx + originX - viewX, cy + originY - viewY);
+    fogLayer.vertex(cx + (originX - viewX) * fs, cy + (originY - viewY) * fs);
     for (const point of points) {
-        fogLayer.vertex(cx + point.x - viewX, cy + point.y - viewY);
+        fogLayer.vertex(cx + (point.x - viewX) * fs, cy + (point.y - viewY) * fs);
     }
     fogLayer.endShape(CLOSE);
 }
@@ -168,7 +231,16 @@ function drawFogOfWar(playerX, playerY, visiblePoints, originX, originY) {
 
     const cx = fogLayer.width / 2;
     const cy = fogLayer.height / 2;
-    _drawVisionPolygon(cx, cy, originX, originY, playerX, playerY, visiblePoints);
+    const fs = fogLayer.width / (width * 2);
+    _drawVisionPolygon(cx, cy, originX, originY, playerX, playerY, visiblePoints, fs);
+
+    // Flare vision: circle punch
+    if (typeof flares !== 'undefined') {
+        for (const f of flares) {
+            fogLayer.fill(255);
+            fogLayer.circle(cx + (f.x - playerX) * fs, cy + (f.y - playerY) * fs, f.visionRadius * 2 * fs);
+        }
+    }
 
     // Repaint smoke clouds — use full fog color so smoke is invisible outside vision
     // but restores opacity inside cleared (visible) areas, denying vision there.
@@ -176,11 +248,11 @@ function drawFogOfWar(playerX, playerY, visiblePoints, originX, originY) {
         fogLayer.blendMode(BLEND);
         fogLayer.noStroke();
         for (const sc of smokeClouds) {
-            const relX = cx + (sc.x - playerX);
-            const relY = cy + (sc.y - playerY);
+            const relX = cx + (sc.x - playerX) * fs;
+            const relY = cy + (sc.y - playerY) * fs;
             const fade = Math.min(1, sc.framesLeft / 60);
             fogLayer.fill(51, 51, 51, Math.round(255 * fade));
-            fogLayer.circle(relX, relY, sc.radius * 2);
+            fogLayer.circle(relX, relY, sc.radius * 2 * fs);
         }
     }
 
@@ -202,10 +274,28 @@ function drawSharedFogOfWar(viewX, viewY, sharedVisiblePoints) {
 
     const cx = fogLayer.width / 2;
     const cy = fogLayer.height / 2;
+    const fs = fogLayer.width / (width * 2);
 
     // Ray polygons at full alpha (direct line of sight fully clear)
     for (const { x: tankX, y: tankY, points } of sharedVisiblePoints) {
-        _drawVisionPolygon(cx, cy, tankX, tankY, viewX, viewY, points);
+        _drawVisionPolygon(cx, cy, tankX, tankY, viewX, viewY, points, fs);
+    }
+
+    // Companion vision: simple circle punch — no raycasting needed
+    if (typeof companions !== 'undefined') {
+        for (const c of Object.values(companions)) {
+            if (c.isDead) continue;
+            fogLayer.fill(255);
+            fogLayer.circle(cx + (c.x - viewX) * fs, cy + (c.y - viewY) * fs, TILE_SIZE * 3 * 2 * fs);
+        }
+    }
+
+    // Flare vision: circle punch — no raycasting needed
+    if (typeof flares !== 'undefined') {
+        for (const f of flares) {
+            fogLayer.fill(255);
+            fogLayer.circle(cx + (f.x - viewX) * fs, cy + (f.y - viewY) * fs, f.visionRadius * 2 * fs);
+        }
     }
 
     // Repaint smoke clouds — full fog color so smoke only denies vision, invisible outside it
@@ -213,11 +303,11 @@ function drawSharedFogOfWar(viewX, viewY, sharedVisiblePoints) {
         fogLayer.blendMode(BLEND);
         fogLayer.noStroke();
         for (const sc of smokeClouds) {
-            const relX = cx + (sc.x - viewX);
-            const relY = cy + (sc.y - viewY);
+            const relX = cx + (sc.x - viewX) * fs;
+            const relY = cy + (sc.y - viewY) * fs;
             const fade = Math.min(1, sc.framesLeft / 60);
             fogLayer.fill(51, 51, 51, Math.round(255 * fade));
-            fogLayer.circle(relX, relY, sc.radius * 2);
+            fogLayer.circle(relX, relY, sc.radius * 2 * fs);
         }
     }
 
