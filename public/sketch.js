@@ -1179,7 +1179,7 @@ function drawBulletIndicator() {
         ellipse(px, VH - 18, pipR * 2, pipR * 2);
     }
 
-    const barW = Math.max(totalW, 60);
+    const fixedBarW = 150;
     const barH = 4;
     let extraBarY = VH - 30;
 
@@ -1188,9 +1188,9 @@ function drawBulletIndicator() {
         const charge = Math.min(1, (myTank._regenCharge || 0) / 100);
         noStroke();
         fill(30, 30, 60, 160);
-        rect(-barW / 2, extraBarY, barW, barH, 2);
+        rect(-fixedBarW / 2, extraBarY, fixedBarW, barH, 2);
         fill(80, 180, 255, 230);
-        rect(-barW / 2, extraBarY, barW * charge, barH, 2);
+        rect(-fixedBarW / 2, extraBarY, fixedBarW * charge, barH, 2);
         textFont(font);
         textSize(8);
         textAlign(CENTER, CENTER);
@@ -1206,14 +1206,14 @@ function drawBulletIndicator() {
         const progress = Math.max(0, Math.min(1, myTank.ghostCooldown / maxCooldown));
         noStroke();
         fill(30, 20, 50, 160);
-        rect(-barW / 2, extraBarY, barW, barH, 2);
+        rect(-fixedBarW / 2, extraBarY, fixedBarW, barH, 2);
         // Cloaked = purple draining, visible = teal filling toward next cloak
         if (myTank.ghostCloaked) {
             fill(160, 60, 255, 230);
         } else {
             fill(80, 220, 200, 180);
         }
-        rect(-barW / 2, extraBarY, barW * progress, barH, 2);
+        rect(-fixedBarW / 2, extraBarY, fixedBarW * progress, barH, 2);
         textFont(font);
         textSize(8);
         textAlign(CENTER, CENTER);

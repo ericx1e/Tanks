@@ -1769,7 +1769,7 @@ function updatePlayerStats(lobby, lobbyCode, player) {
     if ((player.buffs?.ghost || 0) > 0 && lobby.mode !== 'lobby') {
         const stacks = player.buffs.ghost;
         if (player.ghostCooldown === undefined) {
-            player.ghostCooldown = 300; // start visible, 5s until first cloak
+            player.ghostCooldown = Math.ceil(Math.random() * 300); // random offset so multiple ghost players don't cloak in sync
             player.ghostCloaked = false;
         }
         player.ghostCooldown--;
@@ -1789,17 +1789,21 @@ function updatePlayerStats(lobby, lobbyCode, player) {
     if ((player.buffs?.afterimage || 0) > 0 && lobby.mode !== 'lobby' && !player.isDead) {
         const stacks = player.buffs.afterimage;
         // Sample position into ring buffer every 15 frames
-        player._aiTick = (player._aiTick || 0) + 1;
+        if (player._aiTick === undefined) player._aiTick = Math.floor(Math.random() * 15); // random offset
+        player._aiTick++;
         if (player._aiTick >= 15) {
             player._aiTick = 0;
             if (!player._aiPositions) player._aiPositions = [];
             player._aiPositions.push({ x: player.x, y: player.y, angle: player.angle, turretAngle: player.turretAngle || 0 });
             if (player._aiPositions.length > 12) player._aiPositions.shift();
         }
-        player._aiCooldown = (player._aiCooldown || 0) - 1;
+        const _aiBaseCooldown = Math.max(30, Math.round(90 - 15 * Math.sqrt(stacks)));
+        if (player._aiCooldown === undefined) player._aiCooldown = Math.floor(Math.random() * _aiBaseCooldown); // random offset
+        else player._aiCooldown--;
         if (player._aiCooldown <= 0 && player._aiPositions && player._aiPositions.length >= 3) {
-            player._aiCooldown = Math.max(45, Math.round(150 - 25 * Math.sqrt(stacks)));
-            const phantomCount = Math.ceil(Math.sqrt(stacks));
+            player._aiCooldown = _aiBaseCooldown;
+            // +1 phantom per stack for first 4 stacks, then sqrt falloff
+            const phantomCount = 1 + Math.min(stacks, 4) + Math.floor(Math.sqrt(Math.max(0, stacks - 4)));
             const positions = player._aiPositions;
             for (let k = 0; k < phantomCount && k < positions.length; k++) {
                 const pos = positions[Math.max(0, positions.length - 3 - k * 2)];

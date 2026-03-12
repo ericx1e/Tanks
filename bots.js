@@ -58,7 +58,7 @@ function initializeAITank(id, x, y, tier, buttonType) {
         }
     }
     if (tier == 8) {
-        tank.cloakTimer = 280;
+        tank.cloakTimer = Math.ceil(Math.random() * 280); // random offset so phantoms don't all cloak together
         tank.cloaked = false;
         tank.buffs = { shield: 1 };
     }
@@ -71,12 +71,12 @@ function initializeAITank(id, x, y, tier, buttonType) {
     }
     if (tier == 11) {
         // Harbinger — heavy spread artillery with ring burst
-        tank.ringCooldown = 100;
+        tank.ringCooldown = Math.ceil(Math.random() * 100);
         tank.buffs = { shield: 9 };
     }
     if (tier == 12) {
         tank.flankSide = 1;
-        tank.flankTimer = 150;
+        tank.flankTimer = Math.ceil(Math.random() * 150);
         tank.buffs = { shield: 1 };
     }
     if (tier == 14) {
@@ -85,7 +85,7 @@ function initializeAITank(id, x, y, tier, buttonType) {
     }
     if (tier == 15) {
         // Sovereign — massive, orbiting orb shield, cannonball artillery
-        tank.orbAngle = 0;
+        tank.orbAngle = Math.random() * Math.PI * 2;
         tank.buffs = { shield: 7 };
     }
     if (tier == 16) {
@@ -97,7 +97,7 @@ function initializeAITank(id, x, y, tier, buttonType) {
     if (tier == 17) {
         // Wraith — stealths (invulnerable+fast), rapid single-direction fire, smoke grenades
         tank.wraithStealthed = false;
-        tank.wraithPhaseTimer = 300; // starts visible for 5s
+        tank.wraithPhaseTimer = Math.ceil(Math.random() * 300); // random offset so wraiths don't all stealth together
         tank.wraithSmokeTimer = 200;
         tank.buffs = { shield: 6 };
     }
@@ -214,7 +214,12 @@ function updateAITank(lobby, lobbyCode, tank, level, players, bullets) {
                 break;
             }
         }
-        lobby.bullets = bullets.filter(b => !b._dead);
+        // Splice in-place so the same array reference is used by fireBullet below.
+        // Reassigning lobby.bullets here would detach it from the local `bullets` variable,
+        // causing any bullets fired later in this tick to be silently dropped.
+        for (let k = bullets.length - 1; k >= 0; k--) {
+            if (bullets[k]._dead) bullets.splice(k, 1);
+        }
     }
     let shootingRange = PLAYER_SIZE * 18; // Range for shooting players
     let turretSpeed = 0.12; // Speed of turret rotation
@@ -361,10 +366,9 @@ function updateAITank(lobby, lobbyCode, tank, level, players, bullets) {
     if (tank.endlessSpeedMult) speed *= tank.endlessSpeedMult;
     if (tank.endlessFireMult)  fireCooldown = Math.max(10, Math.round(fireCooldown * tank.endlessFireMult));
 
-    // Initialize fire cooldown
-    if (!tank.fireCooldown) {
-        // tank.fireCooldown = fireCooldown / 2;
-        tank.fireCooldown = 0;
+    // Initialize fire cooldown with a random offset so spawned groups don't all fire simultaneously
+    if (tank.fireCooldown === undefined || tank.fireCooldown === null) {
+        tank.fireCooldown = Math.floor(Math.random() * fireCooldown);
     }
 
     tank._defendingThisFrame = false; // reset flag used to suppress turret override
@@ -984,6 +988,7 @@ function fireBullet(lobbyCode, tank, angle, bullets, level) {
                 hp: 4,
                 splashRadius: PLAYER_SIZE * 3.5,
                 explosionSize: BULLET_SIZE * 7,
+                skipOwner: true, // prevent diagonal-spawn self-collision (bounding box > spawn radius at 45°)
             }
             break;
         case 16: // Phantom Sniper — fast piercing wallPiercing shot
