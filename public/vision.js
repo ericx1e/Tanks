@@ -154,7 +154,7 @@ function calculateSharedVision(players, level, resolution) {
     for (let id in players) {
         const tank = players[id];
         if (!tank.isDead && !tank.isAI) {
-            const points = calculateVision(tank.x, tank.y, level, tank.visionDistance, resolution);
+            const points = getCachedVision(id, tank.x, tank.y, tank.visionDistance, level, resolution);
             const entry = {
                 x: tank.x,
                 y: tank.y,
@@ -177,8 +177,27 @@ function calculateLimitedVision(playerX, playerY, startAngle, angleRange, level,
     return visiblePoints;
 }
 
-// No-op stub — vision is not cached, but the key handler calls this
-function clearVisionCache() { }
+// Vision cache: skip raycasting when the player/tank hasn't moved significantly.
+// Keyed by player id; invalidated on level change or vision resolution toggle.
+const _visionCache = {};
+const VISION_CACHE_THRESHOLD = 1.5; // pixels — tiny enough to be invisible
+
+function clearVisionCache() {
+    for (const k in _visionCache) delete _visionCache[k];
+}
+
+function getCachedVision(id, x, y, visionDistance, level, resolution) {
+    const c = _visionCache[id];
+    if (c && Math.abs(c.x - x) <= VISION_CACHE_THRESHOLD
+           && Math.abs(c.y - y) <= VISION_CACHE_THRESHOLD
+           && c.visionDistance === visionDistance
+           && c.resolution === resolution) {
+        return c.points;
+    }
+    const points = calculateVision(x, y, level, visionDistance, resolution);
+    _visionCache[id] = { x, y, visionDistance, resolution, points };
+    return points;
+}
 
 let _tileMaskLayer = null;
 

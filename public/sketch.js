@@ -334,6 +334,7 @@ socket.on('updateLevel', (data) => {
     lobbyZones = data.zones || [];
     zoneProgress = {};
     rebuildGroupedWalls();
+    clearVisionCache();
     tracks.length = 0;
     trackState = {};
     // Reset minimap exploration on every new level
@@ -928,10 +929,10 @@ function draw() {
         const fogX = targetTank.x;
         const fogY = targetTank.y;
         if (gameMode == 'lobby') {
-            const visiblePoints = calculateVision(targetTank.x, targetTank.y, level, targetTank.visionDistance, resolution);
+            const visiblePoints = getCachedVision(spectateTargetId || socket.id, targetTank.x, targetTank.y, targetTank.visionDistance, level, resolution);
             drawFogOfWar(fogX, fogY, visiblePoints, targetTank.x, targetTank.y);
         } else if (gameMode == 'arena') {
-            const visiblePoints = calculateVision(targetTank.x, targetTank.y, level, targetTank.visionDistance, resolution);
+            const visiblePoints = getCachedVision(spectateTargetId || socket.id, targetTank.x, targetTank.y, targetTank.visionDistance, level, resolution);
             drawFogOfWar(fogX, fogY, visiblePoints, targetTank.x, targetTank.y);
             if (!skipMarkExplored) {
                 const sharedVision = [...calculateSharedVision(players, level, resolution), ...scopeExtra];
@@ -1765,6 +1766,7 @@ function getBulletDisplayPos(index) {
 }
 
 // Apply client-side prediction (local player) and entity interpolation (remote players)
+let _lastPhysicsStepTime = 0;
 function applySmoothing() {
     // Local player: reconcile prediction against server authority at render-frame rate,
     // then write smoothed state back for rendering. Doing this here (not in the socket
@@ -1773,27 +1775,33 @@ function applySmoothing() {
         if (players[socket.id].isDead) {
             localPredValid = false; // reinitialize from server on respawn
         } else {
-            // Step 1: advance local physics exactly once per render frame.
-            // Running this here (not in setInterval) prevents timer drift from
-            // accumulating extra steps and overshooting the server near max speed.
-            const maxSpeed = myTank?.max_speed ?? MAX_SPEED;
-            if (currentKeys.w) localVy -= ACCELERATION;
-            if (currentKeys.s) localVy += ACCELERATION;
-            if (currentKeys.a) localVx -= ACCELERATION;
-            if (currentKeys.d) localVx += ACCELERATION;
-            localVx *= (1 - FRICTION);
-            localVy *= (1 - FRICTION);
-            const mag = Math.hypot(localVx, localVy);
-            if (mag > maxSpeed) { localVx = localVx / mag * maxSpeed; localVy = localVy / mag * maxSpeed; }
-            if (localVx !== 0 || localVy !== 0) {
-                localAngle = clientLerpAngle(localAngle, Math.atan2(localVy, localVx), 0.1);
-            }
-            const nx = localX + localVx, ny = localY + localVy;
-            if (!clientCollidesWithWall(nx, localY)) localX = nx; else localVx = 0;
-            if (!clientCollidesWithWall(localX, ny)) localY = ny; else localVy = 0;
-            localTurretAngle = currentTurretAngle;
+            // Step 1: advance local physics at a fixed 60fps cap.
+            // On 120Hz ProMotion displays draw() can run at 120fps; without this guard
+            // localX += localVx would execute twice as often, doubling movement speed.
+            const nowMs = performance.now();
+            const _runPhysics = nowMs - _lastPhysicsStepTime >= 14; // ~71fps max
+            if (_runPhysics) _lastPhysicsStepTime = nowMs;
 
-            // Step 2: reconcile against server authority at render-frame rate.
+            const maxSpeed = myTank?.max_speed ?? MAX_SPEED;
+            if (_runPhysics) {
+                if (currentKeys.w) localVy -= ACCELERATION;
+                if (currentKeys.s) localVy += ACCELERATION;
+                if (currentKeys.a) localVx -= ACCELERATION;
+                if (currentKeys.d) localVx += ACCELERATION;
+                localVx *= (1 - FRICTION);
+                localVy *= (1 - FRICTION);
+                const mag = Math.hypot(localVx, localVy);
+                if (mag > maxSpeed) { localVx = localVx / mag * maxSpeed; localVy = localVy / mag * maxSpeed; }
+                if (localVx !== 0 || localVy !== 0) {
+                    localAngle = clientLerpAngle(localAngle, Math.atan2(localVy, localVx), 0.1);
+                }
+                const nx = localX + localVx, ny = localY + localVy;
+                if (!clientCollidesWithWall(nx, localY)) localX = nx; else localVx = 0;
+                if (!clientCollidesWithWall(localX, ny)) localY = ny; else localVy = 0;
+                localTurretAngle = currentTurretAngle;
+            }
+
+            // Step 2: reconcile against server authority every render frame.
             const sp = players[socket.id];
             const errX = sp.x - localX;
             const errY = sp.y - localY;
