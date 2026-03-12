@@ -152,10 +152,9 @@ const TRACK_FADE_FRAMES = 120;
 
 // --- Client-side smoothing state ---
 let smoothingEnabled = true;
-let localX = 0, localY = 0;
-let localVx = 0, localVy = 0;
-let localAngle = 0, localTurretAngle = 0;
-let localPredValid = false;
+let localTurretAngle = 0;
+// Dead-reckoning baseline (captured from each server tick)
+let _serverTickX = 0, _serverTickY = 0, _serverTickVx = 0, _serverTickVy = 0, _lastLocalTickMs = 0;
 let currentKeys = { w: false, a: false, s: false, d: false };
 let currentTurretAngle = 0;
 let laserChanneling = false;   // true while right-click held for Laser class
@@ -186,7 +185,7 @@ window.addEventListener('mouseup', e => {
     }
 });
 const playerInterpBuf = {}; // id -> [{x, y, angle, turretAngle, t}, ...]
-const INTERP_DELAY_MS = 100;
+const INTERP_DELAY_MS = 50;
 let bulletState = {}; // id -> {x, y, angle, speed, receivedAt}
 
 
@@ -261,13 +260,10 @@ socket.on('tick', (data) => {
     const now = Date.now();
     for (const [id, p] of Object.entries(serverPlayers)) {
         if (id === socket.id) {
-            if (!localPredValid) {
-                localX = p.x; localY = p.y;
-                localVx = p.vx || 0; localVy = p.vy || 0;
-                localAngle = p.angle;
-                localTurretAngle = p.turretAngle || 0;
-                localPredValid = true;
-            }
+            // Capture server baseline for dead-reckoning
+            _serverTickX = p.x; _serverTickY = p.y;
+            _serverTickVx = p.vx || 0; _serverTickVy = p.vy || 0;
+            _lastLocalTickMs = now;
         } else {
             if (!playerInterpBuf[id]) playerInterpBuf[id] = [];
             playerInterpBuf[id].push({ x: p.x, y: p.y, angle: p.angle, turretAngle: p.turretAngle || 0, t: now });
@@ -1765,65 +1761,18 @@ function getBulletDisplayPos(index) {
     };
 }
 
-// Apply client-side prediction (local player) and entity interpolation (remote players)
-let _lastPhysicsStepTime = 0;
+// Apply dead-reckoning (local player) and entity interpolation (remote players)
 function applySmoothing() {
-    // Local player: reconcile prediction against server authority at render-frame rate,
-    // then write smoothed state back for rendering. Doing this here (not in the socket
-    // handler) means corrections blend in at 60fps instead of firing on each packet.
-    if (localPredValid && players[socket.id]) {
-        if (players[socket.id].isDead) {
-            localPredValid = false; // reinitialize from server on respawn
-        } else {
-            // Step 1: advance local physics at a fixed 60fps cap.
-            // On 120Hz ProMotion displays draw() can run at 120fps; without this guard
-            // localX += localVx would execute twice as often, doubling movement speed.
-            const nowMs = performance.now();
-            const _runPhysics = nowMs - _lastPhysicsStepTime >= 14; // ~71fps max
-            if (_runPhysics) _lastPhysicsStepTime = nowMs;
-
-            const maxSpeed = myTank?.max_speed ?? MAX_SPEED;
-            if (_runPhysics) {
-                if (currentKeys.w) localVy -= ACCELERATION;
-                if (currentKeys.s) localVy += ACCELERATION;
-                if (currentKeys.a) localVx -= ACCELERATION;
-                if (currentKeys.d) localVx += ACCELERATION;
-                localVx *= (1 - FRICTION);
-                localVy *= (1 - FRICTION);
-                const mag = Math.hypot(localVx, localVy);
-                if (mag > maxSpeed) { localVx = localVx / mag * maxSpeed; localVy = localVy / mag * maxSpeed; }
-                if (localVx !== 0 || localVy !== 0) {
-                    localAngle = clientLerpAngle(localAngle, Math.atan2(localVy, localVx), 0.1);
-                }
-                const nx = localX + localVx, ny = localY + localVy;
-                if (!clientCollidesWithWall(nx, localY)) localX = nx; else localVx = 0;
-                if (!clientCollidesWithWall(localX, ny)) localY = ny; else localVy = 0;
-                localTurretAngle = currentTurretAngle;
-            }
-
-            // Step 2: reconcile against server authority every render frame.
-            const sp = players[socket.id];
-            const errX = sp.x - localX;
-            const errY = sp.y - localY;
-            if (Math.hypot(errX, errY) > PLAYER_SIZE * 3) {
-                // Large divergence (wall collision mismatch) — snap immediately
-                localX = sp.x; localY = sp.y;
-                localVx = sp.vx || 0; localVy = sp.vy || 0;
-                localAngle = sp.angle;
-            } else {
-                // Blend position and velocity toward server to prevent drift at max speed
-                localX += errX * 0.1;
-                localY += errY * 0.1;
-                localVx += ((sp.vx || 0) - localVx) * 0.1;
-                localVy += ((sp.vy || 0) - localVy) * 0.1;
-            }
-
-            // Step 3: write smoothed state to render
-            sp.x = localX;
-            sp.y = localY;
-            sp.angle = localAngle;
-            sp.turretAngle = localTurretAngle;
-        }
+    // Local player: extrapolate from last server tick using server velocity.
+    // This eliminates prediction/reconcile drift — tank always tracks server authority,
+    // smoothed by physics velocity between 30fps ticks.
+    if (_lastLocalTickMs > 0 && players[socket.id] && !players[socket.id].isDead) {
+        const sp = players[socket.id];
+        const msSince = Math.min(Date.now() - _lastLocalTickMs, 80); // cap extrapolation at 80ms
+        const steps = msSince / (1000 / 60);
+        sp.x = _serverTickX + _serverTickVx * steps;
+        sp.y = _serverTickY + _serverTickVy * steps;
+        sp.turretAngle = currentTurretAngle; // turret tracks mouse instantly
     }
 
     // Remote players/bots: interpolate between buffered snapshots, extrapolate when ahead

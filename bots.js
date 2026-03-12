@@ -300,14 +300,14 @@ function updateAITank(lobby, lobbyCode, tank, level, players, bullets) {
         case 13: // Laser Pulse — fast, short-range laser with high uptime
             speed = 1.2 * AI_TANK_SPEED;
             shootingRange = PLAYER_SIZE * 20;
-            fireCooldown = 90;
-            turretSpeed = 0.22;
+            fireCooldown = 115;
+            turretSpeed = 0.11; // slow base tracking — must commit to an angle
             break;
         case 14: // Cannoneer — slow, fires explosive cannonballs
             speed = 0.75 * AI_TANK_SPEED;
             shootingRange = Infinity;
-            fireCooldown = 70;
-            turretSpeed = 0.22;
+            fireCooldown = 105;
+            turretSpeed = 0.16;
             break;
         case 15: // Sovereign — massive boss, orbiting orb shield, heavy cannonballs
             speed = 0.45 * AI_TANK_SPEED;
@@ -790,13 +790,14 @@ function handleAITurret(lobby, lobbyCode, tank, level, players, bullets, shootin
                         tank.isFiringLaser = false;
                         tank.fireCooldown = fireCooldown;
                     }
-                    tank.turretAngle = lerpAngle(tank.turretAngle, playerInSight.angle, 0.15);
+                    // Very slow tracking once committed — dodging sideways works
+                    tank.turretAngle = lerpAngle(tank.turretAngle, playerInSight.angle, 0.06);
                     tank.turretRotationalVelocity = 0;
                     return;
                 }
                 if (tank.fireCooldown <= 0) {
                     tank.isFiringLaser = true;
-                    tank.laserDuration = 55;
+                    tank.laserDuration = 70; // longer windup = more warning
                 }
                 break;
             case 14: // Cannoneer — fires a heavy cannonball
@@ -969,8 +970,8 @@ function fireBullet(lobbyCode, tank, angle, bullets, level) {
                 bounces: 0,
                 isCannonball: true,
                 isHeavyCannonball: true,
-                hp: 4,
-                splashRadius: PLAYER_SIZE * 4,
+                hp: 3,
+                splashRadius: PLAYER_SIZE * 3.2,
                 explosionSize: BULLET_SIZE * 6,
             }
             break;

@@ -56,7 +56,7 @@ function carveDiag(g, x1, y1, x2, y2) {
 
 // ── BSP ──────────────────────────────────────────────────────────────────────
 
-const MIN_LEAF = 11;
+const MIN_LEAF = 10;
 
 // Recursively split region.  Fills rooms[] and pairs[].
 // Returns array of room IDs belonging to this subtree.
@@ -122,16 +122,35 @@ function carveIrregularRoom(g, room) {
     const { x, y, w, h } = room;
     const shape = Math.random();
 
-    if (shape < 0.20 && w >= 10 && h >= 10) {
+    if (shape < 0.15 && w >= 10 && h >= 10) {
         // Cross/plus shape: narrow rectangle + arms extending out on each side
         const armW = Math.max(2, Math.floor(w * 0.35));
         const armH = Math.max(2, Math.floor(h * 0.35));
         const cx = x + Math.floor(w / 2), cy = y + Math.floor(h / 2);
-        // Center spine (horizontal)
         carveRect(g, x, cy - armH, w, armH * 2);
-        // Center spine (vertical)
         carveRect(g, cx - armW, y, armW * 2, h);
-    } else if (shape < 0.38 && w >= 8 && h >= 8) {
+    } else if (shape < 0.30 && w >= 9 && h >= 9) {
+        // L-shape: two rectangles sharing a corner
+        const splitX = x + Math.floor(w * (0.4 + Math.random() * 0.2));
+        const splitY = y + Math.floor(h * (0.4 + Math.random() * 0.2));
+        const corner = rng(0, 3);
+        if (corner === 0) { carveRect(g, x, y, w, splitY - y); carveRect(g, x, y, splitX - x, h); }
+        else if (corner === 1) { carveRect(g, x, y, w, splitY - y); carveRect(g, splitX, y, x + w - splitX, h); }
+        else if (corner === 2) { carveRect(g, x, splitY, w, y + h - splitY); carveRect(g, x, y, splitX - x, h); }
+        else { carveRect(g, x, splitY, w, y + h - splitY); carveRect(g, splitX, y, x + w - splitX, h); }
+    } else if (shape < 0.44 && w >= 10 && h >= 7) {
+        // U-shape / notch: rectangle with a wall block carved back in from one side
+        carveRect(g, x, y, w, h);
+        const side = rng(0, 3);
+        const nw = rng(Math.floor(w * 0.25), Math.floor(w * 0.5));
+        const nh = rng(Math.floor(h * 0.25), Math.floor(h * 0.5));
+        const nx = x + rng(1, Math.max(1, w - nw - 1));
+        const ny = y + rng(1, Math.max(1, h - nh - 1));
+        if (side === 0) { for (let r = y; r < y + nh; r++) for (let c = nx; c < nx + nw; c++) if (inBounds(g, c, r)) g[r][c] = 1; }
+        else if (side === 1) { for (let r = ny; r < ny + nh; r++) for (let c = x + w - nw; c < x + w; c++) if (inBounds(g, c, r)) g[r][c] = 1; }
+        else if (side === 2) { for (let r = y + h - nh; r < y + h; r++) for (let c = nx; c < nx + nw; c++) if (inBounds(g, c, r)) g[r][c] = 1; }
+        else { for (let r = ny; r < ny + nh; r++) for (let c = x; c < x + nw; c++) if (inBounds(g, c, r)) g[r][c] = 1; }
+    } else if (shape < 0.58 && w >= 8 && h >= 8) {
         // Octagonal: rectangle with all 4 corners cut
         carveRect(g, x, y, w, h);
         const cw = rng(2, Math.floor(w / 4));
@@ -217,34 +236,45 @@ function addRoomDetail(g, room) {
 }
 
 function connectRooms(g, a, b) {
-    const ax = Math.floor(a.cx), ay = Math.floor(a.cy);
-    const bx = Math.floor(b.cx), by = Math.floor(b.cy);
+    // Use random points within each room (not always centers) to break symmetric H patterns
+    const ax = a.x + 1 + rng(0, Math.max(0, a.w - 3));
+    const ay = a.y + 1 + rng(0, Math.max(0, a.h - 3));
+    const bx = b.x + 1 + rng(0, Math.max(0, b.w - 3));
+    const by = b.y + 1 + rng(0, Math.max(0, b.h - 3));
     const r = Math.random();
     const wide = Math.random() < 0.25; // 25% chance of a 3-wide corridor
     const H = wide ? carveH3 : carveH;
     const V = wide ? carveV3 : carveV;
 
-    if (r < 0.25) {
+    if (r < 0.18) {
         // Diagonal
         carveDiag(g, ax, ay, bx, by);
-    } else if (r < 0.50) {
+    } else if (r < 0.38) {
         // L-bend: H then V
         H(g, ax, bx, ay); V(g, ay, by, bx);
-    } else if (r < 0.75) {
+    } else if (r < 0.58) {
         // L-bend: V then H
         V(g, ay, by, ax); H(g, ax, bx, by);
-    } else {
+    } else if (r < 0.75) {
         // S-bend through midpoint — creates interesting zigzag corridors
         const mx = Math.floor((ax + bx) / 2);
         const my = Math.floor((ay + by) / 2);
         H(g, ax, mx, ay); V(g, ay, my, mx); H(g, mx, bx, my); V(g, my, by, bx);
+    } else if (r < 0.88) {
+        // T-route: go partway H, then branch V to target, then finish H
+        const mx = ax + Math.floor((bx - ax) * (0.3 + Math.random() * 0.4));
+        H(g, ax, mx, ay); V(g, ay, by, mx); H(g, mx, bx, by);
+    } else {
+        // Two parallel segments with a short cross — creates a loop pocket
+        const oy = rng(-2, 2);
+        H(g, ax, bx, ay); H(g, ax, bx, ay + oy); V(g, ay, ay + oy, Math.floor((ax + bx) / 2));
     }
 
     // Occasionally carve a small junction room at corridor midpoint
-    if (Math.random() < 0.20) {
+    if (Math.random() < 0.22) {
         const jx = Math.floor((ax + bx) / 2) - 1;
         const jy = Math.floor((ay + by) / 2) - 1;
-        carveRect(g, jx, jy, 4, 4);
+        carveRect(g, jx, jy, rng(3, 5), rng(3, 5));
     }
 }
 
@@ -306,7 +336,7 @@ function findSafeSpawn(g, room, enemies) {
 const BOSS_MIN_DIFF = { 11: 0.50, 15: 0.78, 16: 0.88, 17: 0.80 };
 
 function placeEnemies(g, rooms, diff) {
-    const totalCount = Math.floor(3 + diff * 12);
+    const totalCount = Math.min(31, Math.floor(5 + diff * 13));
     const maxTier = Math.min(17, Math.floor(diff * 18 + 0.5));
 
     const poolMin = Math.max(0, maxTier - 7);
@@ -320,6 +350,12 @@ function placeEnemies(g, rooms, diff) {
         for (let i = 0; i < w; i++) pool.push(t);
     }
     if (!pool.length) pool.push(0);
+
+    // Cannoneer (tier 14): introduce as rare mid-game encounter before they dominate the pool
+    if (diff >= 0.35 && !pool.includes(14)) {
+        pool.push(14);                          // 1 entry = rare at diff 0.35–0.5
+        if (diff >= 0.55) pool.push(14);        // 2 entries = occasional at diff 0.55–0.74
+    }
 
     // At mid-to-high difficulty guarantee one elite enemy type per level
     // Elites: Titan(10), Cloak(8), Guardian(9), Intelligence(12), Laser-Pulse(13), Cannoneer(14), + bosses
@@ -461,13 +497,13 @@ function generateLevel(levelIndex, totalLevels, endless) {
         ? levelIndex / 20
         : totalLevels <= 1 ? 0.5 : levelIndex / (totalLevels - 1);
 
-    const w = Math.max(14, Math.min(36, Math.floor(14 + diff * 22) + rng(-2, 2)));
-    const h = Math.max(12, Math.min(28, Math.floor(12 + diff * 16) + rng(-2, 2)));
+    const w = Math.max(20, Math.min(38, Math.floor(18 + diff * 20) + rng(-2, 2)));
+    const h = Math.max(16, Math.min(30, Math.floor(15 + diff * 15) + rng(-2, 2)));
 
     const g = makeGrid(w, h);
     const rooms = [], pairs = [];
 
-    const depth = w < 20 ? 2 : w < 27 ? 3 : 4;
+    const depth = w < 24 ? 2 : w < 30 ? 3 : 4;
     bsp({ x: 1, y: 1, w: w - 2, h: h - 2 }, depth, rooms, pairs);
 
     if (!rooms.length) {
@@ -479,10 +515,11 @@ function generateLevel(levelIndex, totalLevels, endless) {
     rooms.forEach(r => carveIrregularRoom(g, r));
     pairs.forEach(([a, b]) => connectRooms(g, rooms[a], rooms[b]));
 
-    // One extra loop corridor for shortcuts / variety
-    if (rooms.length >= 3) {
+    // Extra loop corridors for shortcuts and variety (more on larger maps)
+    const extraCorridors = rooms.length >= 6 ? rng(2, 3) : rooms.length >= 3 ? rng(1, 2) : 1;
+    for (let e = 0; e < extraCorridors; e++) {
         const ai = rng(0, rooms.length - 1);
-        const bi = (ai + 1 + rng(0, rooms.length - 2)) % rooms.length;
+        const bi = (ai + 1 + rng(1, Math.max(1, rooms.length - 1))) % rooms.length;
         connectRooms(g, rooms[ai], rooms[bi]);
     }
 

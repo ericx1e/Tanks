@@ -76,26 +76,25 @@ function createLevel(lobbyCode, levelNumber) {
     if (lobby.mode === 'endless' && levelNumber >= 10) {
         const t = levelNumber - 9; // t=1 at level 10
         const shieldBonus = Math.floor(Math.sqrt(t));           // +1 @ L10, +2 @ L14, +3 @ L19
-        const speedMult = 1 + 0.05 * Math.sqrt(t);           // +5% @ L10, ~+16% @ L20
-        const fireMult = Math.max(0.5, 1 - 0.06 * Math.sqrt(t)); // 0.94× @ L10, ~0.73× @ L20
+        const speedMult = 1 + 0.05 * Math.sqrt(t);             // +5% @ L10, ~+16% @ L20
+        const fireMult = 1 - 0.06 * Math.sqrt(t);              // 0.94× @ L10, ~0.80× @ L20
 
-        // Past level 15: exponential multiplier stacks on top of the sqrt base
+        // Past level 15: slower exponential stacks on top — L15-20 stays fair, L25+ gets hard
         let expMult = 1;
         let expShieldBonus = 0;
         if (levelNumber > 15) {
             const e = levelNumber - 15; // e=1 at L16, e=10 at L25
-            expMult = Math.pow(1.08, e); // ~1.47× at L20, ~2.16× at L25, ~3.17× at L30
-            expShieldBonus = Math.floor(Math.pow(e, 1.4)); // 1 @ L16, ~5 @ L20, ~14 @ L25
+            expMult = Math.pow(1.04, e);              // 1.22× at L20, 1.48× at L25, 1.80× at L30
+            expShieldBonus = Math.floor(e / 5);       // 0@L16-20, 1@L20, 2@L25, 3@L30, 4@L35
         }
 
         for (const tank of Object.values(newPlayers)) {
             if (!tank.isAI || tank.tier === 'button' || tank.tier === 'chest') continue;
             if (!tank.buffs) tank.buffs = {};
             tank.buffs.shield = (tank.buffs.shield || 0) + shieldBonus + expShieldBonus;
-            // Speed only gets sqrt of the exponential so it doesn't spiral out of control
             tank.endlessSpeedMult = speedMult * Math.sqrt(expMult);
-            tank.endlessFireMult = Math.max(0.15, fireMult / expMult); // faster fire rate, floor 0.15
-            tank.endlessDefensive = levelNumber > 15; // unlocks bullet-shooting for all tiers
+            tank.endlessFireMult = Math.max(0.28, fireMult / expMult); // floor 0.28 = max ~3.5× fire rate
+            tank.endlessDefensive = levelNumber > 15;
         }
     }
 
