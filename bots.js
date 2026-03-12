@@ -357,6 +357,10 @@ function updateAITank(lobby, lobbyCode, tank, level, players, bullets) {
         }
     }
 
+    // Endless mode scaling bonuses
+    if (tank.endlessSpeedMult) speed *= tank.endlessSpeedMult;
+    if (tank.endlessFireMult)  fireCooldown = Math.max(10, Math.round(fireCooldown * tank.endlessFireMult));
+
     // Initialize fire cooldown
     if (!tank.fireCooldown) {
         // tank.fireCooldown = fireCooldown / 2;
@@ -565,7 +569,7 @@ function handleAITurret(lobby, lobbyCode, tank, level, players, bullets, shootin
         let nearestPlayer = null, nearestDist = Infinity;
         for (let id in players) {
             const player = players[id];
-            if (!player.isAI && !player.isDead) {
+            if (!player.isAI && !player.isDead && !player.ghostCloaked) {
                 const dist = Math.hypot(player.x - tank.x, player.y - tank.y);
                 if (dist <= shootingRange && dist < nearestDist) {
                     nearestDist = dist;
@@ -587,7 +591,7 @@ function handleAITurret(lobby, lobbyCode, tank, level, players, bullets, shootin
         let nearestPlayer = null, nearestDist = Infinity;
         for (let id in players) {
             const player = players[id];
-            if (!player.isAI && !player.isDead) {
+            if (!player.isAI && !player.isDead && !player.ghostCloaked) {
                 const dist = Math.hypot(player.x - tank.x, player.y - tank.y);
                 if (dist <= shootingRange && dist < nearestDist) {
                     nearestDist = dist;
@@ -612,7 +616,7 @@ function handleAITurret(lobby, lobbyCode, tank, level, players, bullets, shootin
         let nearestPlayer = null, nearestDist = Infinity;
         for (let id in players) {
             const player = players[id];
-            if (!player.isAI && !player.isDead) {
+            if (!player.isAI && !player.isDead && !player.ghostCloaked) {
                 const dist = Math.hypot(player.x - tank.x, player.y - tank.y);
                 if (dist <= shootingRange && dist < nearestDist) {
                     nearestDist = dist;
@@ -632,7 +636,7 @@ function handleAITurret(lobby, lobbyCode, tank, level, players, bullets, shootin
         // Standard LOS detection
         for (let id in players) {
             const player = players[id];
-            if (!player.isAI && !player.isDead) {
+            if (!player.isAI && !player.isDead && !player.ghostCloaked) {
                 const dx = player.x - tank.x;
                 const dy = player.y - tank.y;
                 const distance = Math.sqrt(dx * dx + dy * dy);

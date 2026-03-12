@@ -72,8 +72,30 @@ function createLevel(lobbyCode, levelNumber) {
 
     let { players: newPlayers, level, spawn, continueZone } = loadLevel(lobby, levelNumber)
 
-    // Object.assign(newPlayers, lobby.players)
-    // console.log(newPlayers)
+    // Endless scaling: starting at level 10, AI tanks get bonus shields, speed, and fire rate
+    if (lobby.mode === 'endless' && levelNumber >= 10) {
+        const t = levelNumber - 9; // t=1 at level 10
+        const shieldBonus = Math.floor(Math.sqrt(t));           // +1 @ L10, +2 @ L14, +3 @ L19
+        const speedMult = 1 + 0.05 * Math.sqrt(t);           // +5% @ L10, ~+16% @ L20
+        const fireMult = Math.max(0.5, 1 - 0.06 * Math.sqrt(t)); // 0.94× @ L10, ~0.73× @ L20
+
+        // Past level 15: exponential multiplier stacks on top of the sqrt base
+        let expMult = 1;
+        let expShieldBonus = 0;
+        if (levelNumber > 15) {
+            const e = levelNumber - 15; // e=1 at L16, e=10 at L25
+            expMult = Math.pow(1.08, e); // ~1.47× at L20, ~2.16× at L25, ~3.17× at L30
+            expShieldBonus = Math.floor(Math.pow(e, 1.4)); // 1 @ L16, ~5 @ L20, ~14 @ L25
+        }
+
+        for (const tank of Object.values(newPlayers)) {
+            if (!tank.isAI || tank.tier === 'button' || tank.tier === 'chest') continue;
+            if (!tank.buffs) tank.buffs = {};
+            tank.buffs.shield = (tank.buffs.shield || 0) + shieldBonus + expShieldBonus;
+            tank.endlessSpeedMult = speedMult * expMult;
+            tank.endlessFireMult = Math.max(0.15, fireMult / expMult); // faster fire rate, floor 0.15
+        }
+    }
 
     for (const [id, player] of Object.entries(lobby.players)) {
         if (!player.isAI) {
@@ -81,6 +103,10 @@ function createLevel(lobbyCode, levelNumber) {
             player.spawnGrace = lobby.mode === 'lobby' ? 0 : 180; // 3 s at 60 fps
             if (lobby.mode === 'lobby') {
                 resetBuffs(player);
+                player.shield = false;
+                player._regenCharge = 0;
+                player.ghostCloaked = false;
+                player.ghostCooldown = undefined;
                 player.hasLaserAbility = false;
                 player.hasShieldAbility = false;
                 player.laserEnergy = 100;
@@ -210,17 +236,6 @@ function createLevel(lobbyCode, levelNumber) {
             newPlayers[dummyId] = dummy;
         });
 
-        // Museum tanks — one per enemy tier, static display only
-        MUSEUM_TANK_POSITIONS.forEach(pos => {
-            const museumId = `museum_${pos.tier}`;
-            const x = (pos.col + 0.5) * TILE_SIZE;
-            const y = (pos.row + 0.5) * TILE_SIZE;
-            const tank = initializeAITank(museumId, x, y, pos.tier, '');
-            tank.isMuseum = true;
-            tank.angle = pos.angle;
-            tank.turretAngle = pos.angle;
-            newPlayers[museumId] = tank;
-        });
     }
 
     lobbies[lobbyCode] = {
@@ -271,7 +286,7 @@ function startTransition(lobbyCode) {
                 if (d < nearestDist) { nearestDist = d; nearest = p; }
             }
             if (nearest) {
-                vacuumEvents.push({ id: drop.id, x: drop.x, y: drop.y, buff: drop.buff, targetX: nearest.x, targetY: nearest.y });
+                vacuumEvents.push({ id: drop.id, x: drop.x, y: drop.y, buff: drop.buff, rarity: drop.rarity, targetX: nearest.x, targetY: nearest.y });
                 if (nearest.buffs && nearest.buffs.hasOwnProperty(drop.buff)) {
                     nearest.buffs[drop.buff] += 1;
                     io.to(lobbyCode).emit('updatePlayerBuffs', { playerId: nearest.id, buffs: nearest.buffs });
@@ -407,7 +422,7 @@ io.on('connection', (socket) => {
         };
 
         resetBuffs(player);
-        updatePlayerStats(lobby, player);
+        updatePlayerStats(lobby, socketToLobby[socket.id], player);
 
         return player;
     }
@@ -661,7 +676,7 @@ io.on('connection', (socket) => {
         if (!player || !player.buffs) return;
         if (!player.buffs.hasOwnProperty(buff)) return;
         player.buffs[buff] += Math.max(1, Math.floor(count));
-        updatePlayerStats(lobby, player);
+        updatePlayerStats(lobby, lobbyCode, player);
         io.to(lobbyCode).emit('updatePlayerBuffs', { playerId: player.id, buffs: player.buffs });
     });
 
@@ -834,12 +849,13 @@ io.on('connection', (socket) => {
         if (!player || player.isDead || player.selectedClass !== 'assault') return;
         if ((player.pillageCharge || 0) < 100) return;
 
-        const buff = pickWeightedBuff(player);
+        const { buff, rarity } = pickWeightedBuff(player);
         if (player.buffs && player.buffs.hasOwnProperty(buff)) {
             player.buffs[buff] += 1;
         }
         player.pillageCharge = Math.max(0, player.pillageCharge - 100);
         io.to(lobbyCode).emit('updatePlayerBuffs', { playerId: player.id, buffs: player.buffs });
+        io.to(socket.id).emit('pillageAnim', { x: player.x, y: player.y, buff, rarity });
     });
 
     socket.on('createPlayer', () => {
@@ -881,6 +897,70 @@ io.on('connection', (socket) => {
         }
     });
 });
+
+// Regen buff: each kill grants charge toward a free shield. More stacks = more charge per kill.
+// Heavily penalised by current shield count so players can't easily stack many shields.
+function triggerRegen(owner) {
+    if (!owner || (owner.buffs?.regen || 0) === 0) return;
+    const totalShields = (owner.shield ? 1 : 0) + (owner.buffs.shield || 0);
+    const chargeGain = 25 * Math.sqrt(owner.buffs.regen) / (1 + totalShields * 2);
+    owner._regenCharge = (owner._regenCharge || 0) + chargeGain;
+    if (owner._regenCharge >= 100) {
+        owner._regenCharge -= 100;
+        if (!owner.shield) {
+            owner.shield = true;
+        } else {
+            owner.buffs.shield = (owner.buffs.shield || 0) + 1;
+        }
+    }
+}
+
+// Shockwave buff: when a player's shield breaks, deflect nearby enemy bullets radially outward.
+// Stacking increases radius and reflected bullet speed.
+function triggerShockwave(lobby, lobbyCode, player) {
+    const stacks = player.buffs?.shockwave || 0;
+    if (stacks === 0) return;
+    const radius = TILE_SIZE * (2.5 + Math.sqrt(stacks));
+    const speedMult = 1.3 + 0.1 * Math.sqrt(stacks);
+    const stunFrames = Math.round(45 + 20 * Math.sqrt(stacks));
+    for (const bullet of lobby.bullets) {
+        if (bullet.owner === player.id) continue; // don't deflect own bullets
+        const bDist = Math.hypot(bullet.x - player.x, bullet.y - player.y);
+        if (bDist > radius) continue;
+        // Deflect radially outward from player center
+        bullet.angle = Math.atan2(bullet.y - player.y, bullet.x - player.x);
+        bullet.speed = (bullet.speed || BULLET_SPEED) * speedMult;
+        bullet.owner = player.id; // redirect ownership
+        bullet.shockwaveCaptured = true;
+    }
+    // Stun nearby enemy tanks
+    for (const tank of Object.values(lobby.players)) {
+        if (tank.id === player.id || tank.isDead) continue;
+        if (tank.isAI === player.isAI) continue; // only stun enemies
+        if (Math.hypot(tank.x - player.x, tank.y - player.y) > radius) continue;
+        tank.disoriented = Math.max(tank.disoriented || 0, stunFrames);
+    }
+    io.to(lobbyCode).emit('explosion', {
+        x: player.x, y: player.y, z: PLAYER_SIZE * 1.5,
+        size: radius * 0.5, dSize: 2, color: [60, 180, 255],
+        effect: 'shockwave_pulse',
+    });
+}
+
+// Scavenge buff: each kill has a chance to drop a bonus buff. Diminishing returns on stacks.
+function triggerScavenge(lobbyCode, owner, killedPlayer) {
+    const stacks = owner.buffs?.scavenge || 0;
+    if (stacks === 0) return;
+    const chance = 1 - 1 / (1 + 0.18 * Math.sqrt(stacks));
+    if (Math.random() < chance) {
+        spawnDrop(lobbyCode, killedPlayer.x, killedPlayer.y, owner);
+        // Visual sparkle at kill site for the scavenge proc
+        const ownerSocket = io.sockets.sockets.get(owner.id);
+        if (ownerSocket) {
+            ownerSocket.emit('scavengeProc', { x: killedPlayer.x, y: killedPlayer.y });
+        }
+    }
+}
 
 // Fires chain bullets from a kill site on behalf of owner; chainDepth limits recursion to 2
 function triggerChain(lobby, lobbyCode, owner, killedPlayer, sourceDepth) {
@@ -980,11 +1060,14 @@ function fireLaser(lobby, lobbyCode, tank, players, level, isActive) {
                 } else if (target.shield) {
                     target.shield = false;
                     target.laserShieldCooldown = 30;
+                    triggerShockwave(lobby, lobbyCode, target);
                 } else if (!target.spawnGrace) {
                     target.isDead = true;
                     if (target.isAI && target.tier !== 'chest' && !tank.isAI) {
                         tank.kills = (tank.kills || 0) + 1;
                         triggerChain(lobby, lobbyCode, tank, target, 0);
+                        triggerRegen(tank);
+                        triggerScavenge(lobbyCode, tank, target);
                     }
                     if (!target.isAI) {
                         target.deaths = (target.deaths || 0) + 1;
@@ -1026,13 +1109,14 @@ function explodeCannonball(lobby, lobbyCode, bullet, bulletsToRemove, i) {
     const players = lobby.players;
     for (const playerId in players) {
         const player = players[playerId];
-        if (player.isDead || player.isMuseum) continue;
+        if (player.isDead) continue;
         if (Math.hypot(player.x - bullet.x, player.y - bullet.y) > splashRadius) continue;
         const owner = players[bullet.owner];
         if (lobby.mode !== 'lobby' || player.isAI) {
             if (!owner || lobby.friendlyFire || lobby.mode === 'arena' || (player.isAI !== owner.isAI)) {
                 if (player.shield) {
                     player.shield = false;
+                    triggerShockwave(lobby, lobbyCode, player);
                 } else if (!player.godMode && !player.spawnGrace) {
                     player.isDead = true;
                     if (player.isAI && player.tier !== 'chest') {
@@ -1040,6 +1124,8 @@ function explodeCannonball(lobby, lobbyCode, bullet, bulletsToRemove, i) {
                         if (killer && !killer.isAI) {
                             killer.kills = (killer.kills || 0) + 1;
                             triggerChain(lobby, lobbyCode, killer, player, bullet.chainDepth || 0);
+                            triggerRegen(killer);
+                            triggerScavenge(lobbyCode, killer, player);
                         }
                     }
                     if (!player.isAI) {
@@ -1047,7 +1133,7 @@ function explodeCannonball(lobby, lobbyCode, bullet, bulletsToRemove, i) {
                     }
                     if (lobby.mode === 'survival' && player.tier !== 'chest' && player.isAI) {
                         lobby.tankKills++;
-                        if (lobby.tankKills % 5 === 0) spawnDrop(lobbyCode, player.x, player.y, owner);
+                        spawnDrop(lobbyCode, player.x, player.y, owner);
                     }
                 }
             }
@@ -1143,6 +1229,33 @@ function updateBullets(lobby, lobbyCode) {
             if (bullet.slowedTimer <= 0) {
                 bullet.speed = bullet._baseSpeed;
                 bullet.slowed = false;
+            }
+        }
+
+        // Nullfield: slow enemy bullets near players with the buff each frame
+        {
+            let nullFactor = 1;
+            for (const pid in players) {
+                const p = players[pid];
+                if (p.isDead || !p.buffs?.nullfield) continue;
+                if (bullet.owner === pid) continue; // don't slow own bullets
+                const owner = players[bullet.owner];
+                if (owner && owner.isAI === p.isAI) continue; // only slow enemy bullets
+                const stacks = p.buffs.nullfield;
+                const radius = TILE_SIZE * (2 + Math.sqrt(stacks));
+                if (Math.hypot(bullet.x - p.x, bullet.y - p.y) <= radius) {
+                    nullFactor = Math.min(nullFactor, Math.max(0.25, 0.65 - 0.06 * Math.sqrt(stacks)));
+                }
+            }
+            if (nullFactor < 1) {
+                if (!bullet._nullfieldSlowed) {
+                    bullet._baseSpeedNF = bullet.speed;
+                    bullet._nullfieldSlowed = true;
+                }
+                bullet.speed = bullet._baseSpeedNF * nullFactor;
+            } else if (bullet._nullfieldSlowed) {
+                bullet.speed = bullet._baseSpeedNF;
+                bullet._nullfieldSlowed = false;
             }
         }
 
@@ -1319,7 +1432,6 @@ function updateBullets(lobby, lobbyCode) {
                 if (bOwner && bOwner.isAI) continue;
             }
             if (player.isAI && player.wraithStealthed) continue; // Wraith invulnerable while stealthed
-            if (player.isMuseum) continue; // Museum tanks are indestructible
             if (bullet.hitPlayers && bullet.hitPlayers.has(playerId)) continue; // still inside this tank
             if (/*playerId !== bullet.owner && */isCollidingWithPlayer(nextX, nextY, player)) {
                 if (bullet.isCannonball || bullet.hasSplash) {
@@ -1367,12 +1479,15 @@ function updateBullets(lobby, lobbyCode) {
                         // Apply damage to the player
                         if (player.shield) {
                             player.shield = false; // Remove shield instead of killing
+                            triggerShockwave(lobby, lobbyCode, player);
                         } else if (!player.godMode && !player.spawnGrace) {
                             player.isDead = true;
                             if (player.isAI && player.tier !== 'chest' && owner && !owner.isAI) {
                                 owner.kills = (owner.kills || 0) + 1;
                                 // Chain buff: fire bullets at nearby living enemies
                                 triggerChain(lobby, lobbyCode, owner, player, bullet.chainDepth || 0);
+                                triggerRegen(owner);
+                                triggerScavenge(lobbyCode, owner, player);
                             }
                             if (!player.isAI) {
                                 player.deaths = (player.deaths || 0) + 1;
@@ -1391,10 +1506,8 @@ function updateBullets(lobby, lobbyCode) {
                 if (lobby.mode === 'survival') {
                     if (player.tier !== 'chest' && player.isAI) {
                         lobby.tankKills++;
-                        if (lobby.tankKills % 5 === 0) {
-                            const bulletOwner = lobby.players[bullet.owner];
-                            spawnDrop(lobbyCode, player.x, player.y, bulletOwner);
-                        }
+                        const bulletOwner = lobby.players[bullet.owner];
+                        spawnDrop(lobbyCode, player.x, player.y, bulletOwner);
                     }
                 }
 
@@ -1526,13 +1639,6 @@ const CLASS_DUMMY_POSITIONS = [
     { col: 11, row: 11, angle: -Math.PI / 2 },
 ];
 
-// Museum — display tank for each tier in the right wing (cols 22-38, rows 4 and 9)
-// 9 per row: tiers 0-8 in row 4, tiers 9-17 in row 9, spaced every 2 cols from col 22
-const MUSEUM_COLS = [22, 24, 26, 28, 30, 32, 34, 36, 38];
-const MUSEUM_TANK_POSITIONS = [
-    ...MUSEUM_COLS.map((col, i) => ({ col, row: 4, tier: i, angle: Math.PI / 2 })),
-    ...MUSEUM_COLS.map((col, i) => ({ col, row: 9, tier: i + 9, angle: Math.PI / 2 })),
-];
 
 function hexToRgb(hex) {
     return [
@@ -1573,7 +1679,6 @@ function applyClassBuffs(player) {
 function resetBuffs(player) {
     player.buffs = {
         speed: 0,
-        fireRate: 0,
         shield: 0,
         bulletSpeed: 0,
         bulletBounces: 0,
@@ -1584,15 +1689,20 @@ function resetBuffs(player) {
         autoTurret: 0,
         explosive: 0,  // bullets deal small splash on player hit
         // homing: 0,     // bullets curve toward nearest enemy
-        regen: 0,      // passively restores shield over time
+        regen: 0,      // kills charge toward a free shield; penalised by current shield count
         chain: 0,      // killing an enemy fires chain bullets at nearby enemies
         orbit: 0,      // orbiting orbs that intercept incoming bullets
         haste: 0,      // reduces all ability cooldowns and energy drain
+        shockwave: 0,  // shield break triggers a bullet-deflecting pulse
+        scavenge: 0,   // kills have a chance to drop a buff
+        nullfield: 0,  // persistent aura slows nearby enemy bullets
+        ghost: 0,      // periodically become invisible and untargetable
+        afterimage: 0, // periodically fires phantom bullets from past positions
         currentFireCooldown: 0,
     };
 }
 
-function updatePlayerStats(lobby, player) {
+function updatePlayerStats(lobby, lobbyCode, player) {
     if (!player.buffs) return;
     if (player.isDead) return;
 
@@ -1627,18 +1737,17 @@ function updatePlayerStats(lobby, player) {
 
     // Apply buffs — sqrt diminishing returns for positive, linear penalty for negative
     if (player.buffs.speed > 0) {
-        player.max_speed *= 1 + 0.12 * Math.sqrt(player.buffs.speed);
+        player.max_speed *= 1 + 0.09 * Math.sqrt(player.buffs.speed);
     } else if (player.buffs.speed < 0) {
         player.max_speed *= Math.max(0.3, 1 + player.buffs.speed * 0.15);
     }
 
-    // Fire-rate buff: faster (positive) or slower (negative); also scales bullet count
-    const fr = player.buffs.fireRate;
-    const fireRateBulletBonus = fr > 0 ? Math.ceil(Math.sqrt(fr)) : Math.ceil(fr / 2);
-    if (player.buffs.fireRate > 0) {
-        player.fireRateMultiplier = Math.max(0.35, 1 - 0.09 * Math.sqrt(player.buffs.fireRate));
-    } else if (player.buffs.fireRate < 0) {
-        player.fireRateMultiplier = Math.min(2.5, 1 + Math.sqrt(-player.buffs.fireRate) * 0.15);
+    // maxBullets buff: also drives fire-rate multiplier (positive = faster, negative = slower)
+    const mb = player.buffs.maxBullets;
+    if (mb > 0) {
+        player.fireRateMultiplier = Math.max(0.55, 1 - 0.05 * Math.sqrt(mb));
+    } else if (mb < 0) {
+        player.fireRateMultiplier = Math.min(2.5, 1 + Math.sqrt(-mb) * 0.15);
     }
 
     if (player.buffs.shield > 0) {
@@ -1652,16 +1761,68 @@ function updatePlayerStats(lobby, player) {
         player.laserShieldCooldown--;
     }
 
-    // Regen: passively restore shield after a cooldown period
-    if ((player.buffs.regen || 0) > 0 && !player.shield && !player.spawnGrace) {
-        const period = Math.round(900 / Math.sqrt(player.buffs.regen)); // ~15s, 10s, 7.5s...
-        player._regenTimer = ((player._regenTimer ?? period) - 1);
-        if (player._regenTimer <= 0) {
-            player.shield = true;
-            player._regenTimer = period;
+    // Regen: kill-based — charge granted in triggerRegen() at each kill site
+
+    // Ghost buff: periodic cloak cycle. Cloaked = untargetable by bots, still takes damage.
+    if ((player.buffs?.ghost || 0) > 0 && lobby.mode !== 'lobby') {
+        const stacks = player.buffs.ghost;
+        if (player.ghostCooldown === undefined) {
+            player.ghostCooldown = 300; // start visible, 5s until first cloak
+            player.ghostCloaked = false;
         }
-    } else if (player.shield) {
-        player._regenTimer = null; // reset so next cycle starts fresh
+        player.ghostCooldown--;
+        if (player.ghostCooldown <= 0) {
+            player.ghostCloaked = !player.ghostCloaked;
+            // Cloaked duration scales with stacks; visible duration is fixed
+            player.ghostCooldown = player.ghostCloaked
+                ? Math.round(120 + 80 * Math.sqrt(stacks))   // 2s base + ~1.3s per sqrt stack
+                : Math.max(90, Math.round(300 - 60 * Math.sqrt(stacks))); // 5s → 2s min window
+        }
+    } else if (!(player.buffs?.ghost > 0)) {
+        player.ghostCloaked = false;
+        player.ghostCooldown = undefined;
+    }
+
+    // Afterimage: record position history, periodically fire phantom bullets from past positions
+    if ((player.buffs?.afterimage || 0) > 0 && lobby.mode !== 'lobby' && !player.isDead) {
+        const stacks = player.buffs.afterimage;
+        // Sample position into ring buffer every 15 frames
+        player._aiTick = (player._aiTick || 0) + 1;
+        if (player._aiTick >= 15) {
+            player._aiTick = 0;
+            if (!player._aiPositions) player._aiPositions = [];
+            player._aiPositions.push({ x: player.x, y: player.y, angle: player.angle, turretAngle: player.turretAngle || 0 });
+            if (player._aiPositions.length > 12) player._aiPositions.shift();
+        }
+        player._aiCooldown = (player._aiCooldown || 0) - 1;
+        if (player._aiCooldown <= 0 && player._aiPositions && player._aiPositions.length >= 3) {
+            player._aiCooldown = Math.max(45, Math.round(150 - 25 * Math.sqrt(stacks)));
+            const phantomCount = Math.ceil(Math.sqrt(stacks));
+            const positions = player._aiPositions;
+            for (let k = 0; k < phantomCount && k < positions.length; k++) {
+                const pos = positions[Math.max(0, positions.length - 3 - k * 2)];
+                lobby.bullets.push({
+                    id: Math.random(),
+                    owner: player.id,
+                    x: pos.x + Math.cos(pos.turretAngle) * PLAYER_SIZE * 1.3,
+                    y: pos.y + Math.sin(pos.turretAngle) * PLAYER_SIZE * 1.3,
+                    angle: pos.turretAngle,
+                    speed: player.bulletSpeed || BULLET_SPEED,
+                    bounces: player.bulletBounces || 0,
+                    hp: 1 + (player.piercing || 0),
+                    afterimageBullet: true,
+                    skipOwner: true,
+                });
+                io.to(lobbyCode).emit('afterimageFire', {
+                    x: pos.x, y: pos.y,
+                    angle: pos.angle, turretAngle: pos.turretAngle,
+                });
+            }
+        }
+    } else if (!(player.buffs?.afterimage > 0)) {
+        player._aiPositions = undefined;
+        player._aiCooldown = undefined;
+        player._aiTick = undefined;
     }
 
     // Pillage charge: assault earns 10 charge per kill
@@ -1675,13 +1836,13 @@ function updatePlayerStats(lobby, player) {
     }
 
     if (player.buffs.bulletSpeed > 0) {
-        player.bulletSpeedMultiplier *= 1 + 0.12 * Math.sqrt(player.buffs.bulletSpeed);
+        player.bulletSpeedMultiplier *= 1 + 0.09 * Math.sqrt(player.buffs.bulletSpeed);
     } else if (player.buffs.bulletSpeed < 0) {
         player.bulletSpeedMultiplier *= Math.max(0.3, 1 + player.buffs.bulletSpeed * 0.15);
     }
 
     if (player.buffs.multiShot > 0) {
-        player.multiShot += Math.ceil(Math.sqrt(player.buffs.multiShot));
+        player.multiShot += Math.ceil(Math.pow(player.buffs.multiShot, 0.38));
     }
 
     if (player.buffs.bulletBounces !== 0) {
@@ -1692,7 +1853,7 @@ function updatePlayerStats(lobby, player) {
     }
 
     if (player.buffs.visionRange > 0) {
-        player.visionDistance *= 1 + 0.3 * Math.sqrt(player.buffs.visionRange);
+        player.visionDistance *= 1 + 0.22 * Math.sqrt(player.buffs.visionRange);
         player.visionCornerBoost = 1;
     } else if (player.buffs.visionRange < 0) {
         player.visionDistance *= Math.max(0.2, 1 - 0.2 * Math.sqrt(-player.buffs.visionRange));
@@ -1706,7 +1867,7 @@ function updatePlayerStats(lobby, player) {
 
     // Haste: reduces all ability cooldowns and energy drain (sqrt diminishing returns)
     const hastStacks = player.buffs.haste || 0;
-    player.hasteMult = hastStacks > 0 ? 1 / (1 + 0.25 * Math.sqrt(hastStacks)) : 1;
+    player.hasteMult = hastStacks > 0 ? 1 / (1 + 0.32 * Math.sqrt(hastStacks)) : 1;
 
     // maxBullets buff: additive to base value, clamped to minimum 1
     if (player.buffs.maxBullets !== 0) {
@@ -1726,10 +1887,6 @@ function updatePlayerStats(lobby, player) {
             break;
     }
     player.playerFireCooldown = 60 * player.fireRateMultiplier;
-
-    // Apply fireRate bullet bonus on top of class base
-    player.maxBullets += fireRateBulletBonus;
-    player.maxBullets = Math.max(1, player.maxBullets);
 
     // Laser energy: drains via fireLaser events, recharges passively
     if (player.hasLaserAbility) {
@@ -2248,10 +2405,10 @@ function updatePlayerOrbits(lobby, lobbyCode) {
         const stacks = player.buffs?.orbit || 0;
         if (stacks === 0) continue;
 
-        player.orbAngle = ((player.orbAngle || 0) + 0.035) % (Math.PI * 2);
+        player.orbAngle = ((player.orbAngle || 0) + 0.045) % (Math.PI * 2);
         const numOrbs = stacks;
         const orbRadius = PLAYER_SIZE * 2.4;
-        const hitRadius = PLAYER_SIZE * 0.72;
+        const hitRadius = PLAYER_SIZE * 0.95;
 
         for (const b of bullets) {
             if (b.owner === playerId || b.isTurretBullet || b._dead) continue;
@@ -2273,36 +2430,56 @@ function updatePlayerOrbits(lobby, lobbyCode) {
     lobby.bullets = bullets.filter(b => !b._dead);
 }
 
-// Weighted buff selection based on the player's current stacks.
-// Buffs that are less useful in large quantities get reduced weight after each stack.
+// Rarity tiers — adjust weights here to tune drop rates.
+const BUFF_RARITIES = {
+    common: {
+        weight: 55,
+        buffs: ['speed', 'maxBullets', 'bulletSpeed', 'bulletBounces', 'shield', 'visionRange'],
+    },
+    rare: {
+        weight: 30,
+        buffs: ['multiShot', 'piercing', 'explosive', 'autoTurret', 'regen'],
+    },
+    epic: {
+        weight: 15,
+        buffs: ['orbit', 'haste', 'shockwave', 'scavenge', 'chain'],
+    },
+    legendary: {
+        weight: 5,
+        buffs: ['nullfield', 'ghost', 'afterimage'],
+    },
+};
+
+// Per-buff stack-decay rates (buffs not listed here get no decay).
+const BUFF_DECAY = { bulletBounces: 2, multiShot: 1.5, visionRange: 2, regen: 2, orbit: 0.8, scavenge: 1.5, shockwave: 1.2, nullfield: 1.2, ghost: 1.5, afterimage: 1.5 };
+
 function pickWeightedBuff(player) {
     const b = player?.buffs || {};
-    const w = (base, stacks, decay = 2) => Math.max(0.5, base - stacks * decay);
-    const weights = {
-        speed: 5,
-        fireRate: 5,
-        bulletSpeed: 5,
-        shield: 5,
-        piercing: 5,
-        autoTurret: 5,
-        explosive: 5,
-        // homing: 5, // disabled from drops for now
-        bulletBounces: w(5, b.bulletBounces || 0, 2),   // rapidly less useful after 2
-        multiShot: w(5, b.multiShot || 0, 1.5),
-        visionRange: w(5, b.visionRange || 0, 2),
-        regen: w(5, b.regen || 0, 2),
-        chain: 5,
-        orbit: w(5, b.orbit || 0, 0.8), // diminishing — each extra orb is very powerful
-        haste: 5,
-    };
-    const entries = Object.entries(weights);
-    const total = entries.reduce((s, [, v]) => s + v, 0);
-    let r = Math.random() * total;
-    for (const [buff, v] of entries) {
-        r -= v;
-        if (r <= 0) return buff;
+
+    // Stage 1: pick rarity
+    const rarityEntries = Object.entries(BUFF_RARITIES);
+    const rarityTotal = rarityEntries.reduce((s, [, r]) => s + r.weight, 0);
+    let rr = Math.random() * rarityTotal;
+    let chosenRarity = 'common';
+    for (const [name, { weight }] of rarityEntries) {
+        rr -= weight;
+        if (rr <= 0) { chosenRarity = name; break; }
     }
-    return 'speed';
+
+    // Stage 2: pick buff within rarity with per-stack decay
+    const pool = BUFF_RARITIES[chosenRarity].buffs;
+    const weights = {};
+    for (const buff of pool) {
+        const decay = BUFF_DECAY[buff] || 0;
+        weights[buff] = decay > 0 ? Math.max(0.5, 5 - (b[buff] || 0) * decay) : 5;
+    }
+    const total = Object.values(weights).reduce((s, v) => s + v, 0);
+    let r = Math.random() * total;
+    for (const [buff, v] of Object.entries(weights)) {
+        r -= v;
+        if (r <= 0) return { buff, rarity: chosenRarity };
+    }
+    return { buff: pool[0], rarity: chosenRarity };
 }
 
 function spawnDrop(lobbyCode, x, y, player) {
@@ -2310,8 +2487,8 @@ function spawnDrop(lobbyCode, x, y, player) {
     if (!lobby) return;
 
     // Pick buff at spawn time so it's visible on the ground
-    const buff = pickWeightedBuff(player);
-    lobby.drops.push({ id: uuidv4(), x, y, buff });
+    const { buff, rarity } = pickWeightedBuff(player);
+    lobby.drops.push({ id: uuidv4(), x, y, buff, rarity });
     io.to(lobbyCode).emit('updateDrops', lobby.drops);
 }
 
@@ -2441,7 +2618,7 @@ setInterval(() => {
             if (!player.isAI) {
                 handlePlayerPickup(lobbyCode, playerId);
             }
-            updatePlayerStats(lobby, player);
+            updatePlayerStats(lobby, lobbyCode, player);
             autoSpawnCompanionIfReady(lobby, playerId, player);
         }
 

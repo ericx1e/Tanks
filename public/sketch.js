@@ -107,28 +107,18 @@ let shakeIntensity = 0;
 let shakeDuration = 0;
 let smokeClouds = []; // { x, y, radius, framesLeft }
 
-const MUSEUM_DESCRIPTIONS = [
-    { name: 'Basic Tank', desc: 'The standard enemy. Balanced stats, no special tricks.' },
-    { name: 'Speedy', desc: 'Fast-moving and quick to fire. Dangerous in groups.' },
-    { name: 'Sniper', desc: 'Long-range specialist. Slow to fire but shots travel far.' },
-    { name: 'Rusher', desc: 'Aggressive flanker. High speed, fires in short bursts.' },
-    { name: 'Tracker', desc: 'Bullets curve toward you. Hard to dodge at range.' },
-    { name: 'Laser Tank', desc: 'Fires a sustained laser beam. Locks on and holds fire.' },
-    { name: 'Triple Shot', desc: 'Fires three bullets in a spread. Deadly up close.' },
-    { name: 'Machine Gun', desc: 'Rapid-fire, low accuracy. Overwhelms with volume.' },
-    { name: 'Phantom', desc: 'Turns nearly invisible. Listen for its shots.' },
-    { name: 'Shield Tank', desc: 'Raises a directional shield to block your bullets.' },
-    { name: 'Titan', desc: 'Heavily armored. Takes many hits to bring down.' },
-    { name: 'Harbinger', desc: '[BOSS] Captures nearby bullets and deflects them back with a pulse blast.' },
-    { name: 'Intelligence', desc: 'Coordinates nearby allies, boosting their targeting accuracy.' },
-    { name: 'Laser Pulse', desc: 'Charges up then unleashes a sweeping rapid-fire laser arc.' },
-    { name: 'Cannoneer', desc: 'Fires explosive cannonballs that destroy walls on impact.' },
-    { name: 'Sovereign', desc: '[BOSS] Massive. Wall-destroying cannonballs. Four orbiting shield walls intercept your bullets.' },
-    { name: 'Phantom Sniper', desc: '[BOSS] Cloaks, then charges and fires a wall-piercing shot.' },
-    { name: 'Wraith', desc: '[BOSS] Cycles stealth (invulnerable). Rapid-fires in one direction. Drops vision-blocking smoke grenades.' },
-];
 let killIndicators = []; // { x, y, life, maxLife, text, color? }
+let pillageAnims = [];  // { x, y, buff, rarity, life, maxLife }
 let prevMyKills = 0;
+
+const BUFF_LABELS = {
+    speed: 'SPEED', maxBullets: 'MAX BULLETS', bulletSpeed: 'BULLET SPD',
+    bulletBounces: 'BOUNCES', shield: 'SHIELD', multiShot: 'MULTISHOT',
+    visionRange: 'VISION', piercing: 'PIERCE', autoTurret: 'TURRET',
+    explosive: 'EXPLOSIVE', regen: 'SHIELD REGEN', chain: 'CHAIN', orbit: 'ORBIT', haste: 'HASTE',
+    shockwave: 'SHOCKWAVE', scavenge: 'SCAVENGE',
+    nullfield: 'NULLFIELD', ghost: 'GHOST', afterimage: 'AFTERIMAGE',
+};
 let skipKillDetection = false;
 let prevMyBuffs = {};
 let skipBuffDetection = false;
@@ -300,11 +290,13 @@ socket.on('tick', (data) => {
         skipKillDetection = false;
 
         const buffNames = {
-            speed: 'SPEED', fireRate: 'FIRE RATE', bulletSpeed: 'BULLET SPD',
+            speed: 'SPEED', maxBullets: 'FIRE RATE', bulletSpeed: 'BULLET SPD',
             bulletBounces: 'BOUNCES', shield: 'SHIELD', multiShot: 'MULTISHOT',
             visionRange: 'VISION', piercing: 'PIERCE', autoTurret: 'TURRET',
             explosive: 'EXPLODE', homing: 'HOMING', regen: 'REGEN',
             chain: 'CHAIN', orbit: 'ORBIT', haste: 'HASTE',
+            shockwave: 'SHOCKWAVE', scavenge: 'SCAVENGE',
+            nullfield: 'NULLFIELD', ghost: 'GHOST', afterimage: 'AFTERIMAGE',
         };
         const newBuffs = me.buffs || {};
         const newBuffSnapshot = { ...newBuffs, shield: (newBuffs.shield || 0) + (me.shield ? 1 : 0) };
@@ -401,6 +393,9 @@ socket.on('nextLevel', () => {
     companionVisionCache = {};
     spectateTargetId = null;
     killIndicators = [];
+    pillageAnims = [];
+    scavengeAnims = [];
+    afterimageAnims = [];
     smokeClouds = [];
     vacuumDrops = [];
     chainRays = [];
@@ -426,8 +421,22 @@ socket.on('dropsVacuum', (events) => {
     smoothingEnabled = false;
     fogSuppressed = true;
     for (const ev of events) {
-        vacuumDrops.push({ x: ev.x, y: ev.y, buff: ev.buff, targetX: ev.targetX, targetY: ev.targetY, life: 120 });
+        vacuumDrops.push({ x: ev.x, y: ev.y, buff: ev.buff, rarity: ev.rarity, targetX: ev.targetX, targetY: ev.targetY, life: 120 });
     }
+});
+
+socket.on('pillageAnim', ({ x, y, buff, rarity }) => {
+    pillageAnims.push({ x, y, buff, rarity, life: 85, maxLife: 85 });
+});
+
+let scavengeAnims = []; // { x, y, life, maxLife }
+socket.on('scavengeProc', ({ x, y }) => {
+    scavengeAnims.push({ x, y, life: 45, maxLife: 45 });
+});
+
+let afterimageAnims = []; // { x, y, angle, turretAngle, life, maxLife }
+socket.on('afterimageFire', ({ x, y, angle, turretAngle }) => {
+    afterimageAnims.push({ x, y, angle, turretAngle, life: 28, maxLife: 28 });
 });
 
 socket.on('laserFired', (laserData) => {
@@ -638,13 +647,76 @@ function draw() {
     const gridWidth = level[0].length * TILE_SIZE; // Width of the ground
     const gridHeight = level.length * TILE_SIZE; // Height of the ground
 
-    // Run prediction before any world drawing so all geometry uses the current-frame
-    // predicted position. The full camera setup (with panning/shake) runs again later.
+    // Run prediction so all geometry uses current-frame positions.
     if (smoothingEnabled) applySmoothing();
-    if (localPredValid && players[socket.id] && !players[socket.id].isDead) {
-        const me = players[socket.id];
-        camera(me.x, me.y + 200, 600, me.x, me.y, 0, 0, 1, 0);
+    myTank = players[socket.id] || myTank; // always prefer current server object
+
+    if (!myTank) return;
+
+    let targetTank = myTank;
+    let allDead = false;
+    let isSpectating = false;
+
+    if (myTank.isDead) {
+        isSpectating = true;
+        const spectatable = Object.entries(players)
+            .filter(([id, p]) => !p.isAI && !p.isDead && id !== socket.id)
+            .sort((a, b) => a[0].localeCompare(b[0]));
+
+        if (spectatable.length === 0) {
+            allDead = true;
+            targetTank = myTank;
+        } else {
+            if (!spectatable.find(([id]) => id === spectateTargetId)) {
+                spectateTargetId = spectatable[0][0];
+                spectateCamX = spectatable[0][1].x;
+                spectateCamY = spectatable[0][1].y;
+            }
+            targetTank = players[spectateTargetId] || spectatable[0][1];
+        }
+
+        spectateCamX += (targetTank.x - spectateCamX) * 0.10;
+        spectateCamY += (targetTank.y - spectateCamY) * 0.10;
+        camX = spectateCamX;
+        camY = spectateCamY + 200;
+        camZ = 600;
+    } else {
+        camX = targetTank.x;
+        camY = targetTank.y + 200;
+        camZ = 600;
     }
+
+    // Sniper scope pan: smoothly shift camera toward mouse world direction while right-click held
+    const panDist = 220;
+    if (sniperPanning && myTank && myTank.selectedClass === 'sniper') {
+        const panAngle = atan2(mouseY - height / 2, mouseX - width / 2);
+        const mouseDist = Math.hypot(mouseX - width / 2, mouseY - height / 2);
+        const scaledDist = panDist * Math.min(1, mouseDist / (Math.min(width, height) * 0.35));
+        sniperPanX = lerp(sniperPanX, cos(panAngle) * scaledDist, 0.07);
+        sniperPanY = lerp(sniperPanY, sin(panAngle) * scaledDist, 0.07);
+    } else {
+        sniperPanX = lerp(sniperPanX, 0, 0.10);
+        sniperPanY = lerp(sniperPanY, 0, 0.10);
+    }
+    camX += sniperPanX;
+    camY += sniperPanY;
+
+    let targetX = targetTank.x + sniperPanX;
+    let targetY = targetTank.y + sniperPanY;
+    let targetZ = 0;
+
+    let offsetX = 0;
+    let offsetY = 0;
+    let offsetZ = 0;
+
+    if (shakeDuration > 0) {
+        offsetX = random(-shakeIntensity, shakeIntensity);
+        offsetY = random(-shakeIntensity, shakeIntensity);
+        shakeDuration--;
+        if (shakeDuration <= 0) shakeIntensity = 0;
+    }
+
+    camera(camX + offsetX, camY + offsetY, camZ + offsetZ, targetX + offsetX, targetY + offsetY, targetZ, 0, 1, 0);
 
     if (useTextures && floorTex) {
         const camCX = myTank ? myTank.x : gridWidth / 2;
@@ -693,6 +765,53 @@ function draw() {
 
     drawDrops();
 
+    // Nullfield aura — electric rippling field around players with the buff
+    for (const id in players) {
+        const tank = players[id];
+        if (tank.isDead || !(tank.buffs?.nullfield > 0)) continue;
+        const stacks = tank.buffs.nullfield;
+        const radius = TILE_SIZE * (2 + Math.sqrt(stacks));
+        const t = frameCount;
+        push();
+        translate(tank.x, tank.y, PLAYER_SIZE * 0.2);
+
+        // Outer rippling edge — wavy ring with per-vertex sin perturbation
+        noFill();
+        const waveFreq = 7;     // number of ripple crests around the ring
+        const waveAmp = radius * 0.06;
+        const waveSpeed = t * 0.055;
+        const waveAmp2 = radius * 0.04;
+        const waveSpeed2 = t * 0.08 + 1.3;
+
+        stroke(80, 170, 255, 55);
+        strokeWeight(2.5);
+        beginShape();
+        for (let a = 0; a <= TWO_PI; a += 0.08) {
+            const r = radius + sin(a * waveFreq + waveSpeed) * waveAmp + sin(a * (waveFreq + 2) + waveSpeed2) * waveAmp2;
+            vertex(cos(a) * r, sin(a) * r);
+        }
+        endShape(CLOSE);
+
+        // Inner softer ring, counter-phase
+        stroke(120, 210, 255, 30);
+        strokeWeight(1.5);
+        beginShape();
+        for (let a = 0; a <= TWO_PI; a += 0.1) {
+            const r = radius * 0.82 + sin(a * (waveFreq - 1) - waveSpeed * 0.7) * waveAmp * 0.7;
+            vertex(cos(a) * r, sin(a) * r);
+        }
+        endShape(CLOSE);
+
+        // Faint filled disc — dim blue interior tint
+        noStroke();
+        fill(60, 130, 255, 8);
+        beginShape();
+        for (let a = 0; a <= TWO_PI; a += 0.15) vertex(cos(a) * radius, sin(a) * radius);
+        endShape(CLOSE);
+
+        pop();
+    }
+
     // Draw all tanks
     for (let id in players) {
         const tank = players[id];
@@ -738,83 +857,6 @@ function draw() {
     // // Set orthogonal projection
     // ortho(left, right, bottom, top);
 
-    if (!myTank) {
-        return;
-    }
-
-    let targetTank = myTank;
-    let allDead = false;
-    let isSpectating = false;
-
-    if (myTank && myTank.isDead) {
-        isSpectating = true;
-        // Stable-ordered list of spectatable living players
-        const spectatable = Object.entries(players)
-            .filter(([id, p]) => !p.isAI && !p.isDead && id !== socket.id)
-            .sort((a, b) => a[0].localeCompare(b[0]));
-
-        if (spectatable.length === 0) {
-            allDead = true;
-            targetTank = myTank;
-        } else {
-            // If current target died or was never set, pick first and snap camera to them
-            if (!spectatable.find(([id]) => id === spectateTargetId)) {
-                spectateTargetId = spectatable[0][0];
-                spectateCamX = spectatable[0][1].x;
-                spectateCamY = spectatable[0][1].y;
-            }
-            targetTank = players[spectateTargetId] || spectatable[0][1];
-        }
-
-        // Smooth camera pan toward spectated player
-        spectateCamX += (targetTank.x - spectateCamX) * 0.10;
-        spectateCamY += (targetTank.y - spectateCamY) * 0.10;
-        camX = spectateCamX;
-        camY = spectateCamY + 200;
-        camZ = 600;
-    } else {
-        // Normal live camera
-        camX = targetTank.x;
-        camY = targetTank.y + 200;
-        camZ = 600;
-    }
-
-    // Sniper scope pan: smoothly shift camera toward mouse world direction while right-click held
-    const panDist = 220;
-    if (sniperPanning && myTank && myTank.selectedClass === 'sniper') {
-        const panAngle = atan2(mouseY - height / 2, mouseX - width / 2);
-        const mouseDist = Math.hypot(mouseX - width / 2, mouseY - height / 2);
-        const scaledDist = panDist * Math.min(1, mouseDist / (Math.min(width, height) * 0.35));
-        sniperPanX = lerp(sniperPanX, cos(panAngle) * scaledDist, 0.07);
-        sniperPanY = lerp(sniperPanY, sin(panAngle) * scaledDist, 0.07);
-    } else {
-        sniperPanX = lerp(sniperPanX, 0, 0.10);
-        sniperPanY = lerp(sniperPanY, 0, 0.10);
-    }
-    camX += sniperPanX;
-    camY += sniperPanY;
-
-    let targetX = targetTank.x + sniperPanX;
-    let targetY = targetTank.y + sniperPanY;
-    let targetZ = 0;
-
-    let offsetX = 0;
-    let offsetY = 0;
-    let offsetZ = 0;
-
-    if (shakeDuration > 0) {
-        offsetX = random(-shakeIntensity, shakeIntensity);
-        offsetY = random(-shakeIntensity, shakeIntensity);
-        // offsetZ = random(-shakeIntensity, shakeIntensity / 2); // Subtle Z-axis shake
-
-        shakeDuration--;
-        if (shakeDuration <= 0) {
-            shakeIntensity = 0; // Reset intensity
-        }
-    }
-
-    camera(camX + offsetX, camY + offsetY, camZ + offsetZ, targetX + offsetX, targetY + offsetY, targetZ, 0, 1, 0);
-
     // Show fog/vision hint for first 5 seconds, then briefly every 10 s
     if (frameCount < 300 || frameCount % 600 < 120) {
         const VH = 630 * Math.tan(Math.PI / 6);
@@ -836,6 +878,9 @@ function draw() {
 
     drawFlares();
     drawSmokeClouds();
+    drawPillageAnims();
+    drawScavengeAnims();
+    drawAfterimageAnims();
     drawCompanions();
     drawEngineerRallyIndicator();
     drawSniperScopeRay();
@@ -921,7 +966,6 @@ function draw() {
         drawKDABoard();
     } else if (gameMode === 'lobby') {
         drawClassInfoPanel();
-        drawMuseumTooltip();
     }
 
     // Spectate overlay
@@ -1053,57 +1097,61 @@ function drawMinimap() {
     gl.enable(gl.DEPTH_TEST);
 }
 
-// Draw active buff icons in the top-right corner (screen space).
+// Draw active buff icons in the top-right corner (screen space), 8 per row.
 function drawBuffHUD() {
     if (!myTank || !myTank.buffs) return;
 
     const VH = 250;
     const VW = VH * (width / height);
-    const margin = 14;
-    const iconScale = 0.85;
-    const slotH = 30;
+    const margin = 10;
+    const slotW = 28;   // horizontal spacing per icon
+    const slotH = 30;   // vertical spacing per row
+    const iconsPerRow = 8;
 
     const gl = drawingContext;
     gl.disable(gl.DEPTH_TEST);
 
-    const buffTypes = ['speed', 'fireRate', 'bulletSpeed', 'bulletBounces', 'shield', 'multiShot', 'visionRange', 'piercing', 'autoTurret', 'explosive', 'homing', 'regen', 'chain', 'orbit', 'haste'];
-    let slotY = -VH + margin + 10;
+    const buffTypes = ['speed', 'maxBullets', 'bulletSpeed', 'bulletBounces', 'shield', 'multiShot', 'visionRange', 'piercing', 'autoTurret', 'explosive', 'homing', 'regen', 'chain', 'orbit', 'haste', 'shockwave', 'scavenge', 'nullfield', 'ghost', 'afterimage'];
 
+    // Collect active buffs in order
+    const active = [];
     for (const buffType of buffTypes) {
-        let count;
-        if (buffType === 'shield') {
-            count = (myTank.buffs.shield || 0) + (myTank.shield ? 1 : 0);
-        } else {
-            count = myTank.buffs[buffType] || 0;
-        }
-        if (count === 0) continue;
+        const count = buffType === 'shield'
+            ? (myTank.buffs.shield || 0) + (myTank.shield ? 1 : 0)
+            : (myTank.buffs[buffType] || 0);
+        if (count > 0) active.push({ buffType, count });
+    }
 
-        const iconX = VW - margin - 10;
+    for (let i = 0; i < active.length; i++) {
+        const { buffType, count } = active[i];
+        const col = i % iconsPerRow;
+        const row = Math.floor(i / iconsPerRow);
 
-        // Count badge (no depth test — flat HUD text)
+        // Right-align: rightmost slot at VW - margin, going left
+        const iconX = VW - margin - col * slotW;
+        const iconY = -VH + margin + 10 + row * slotH;
+
+        // Count badge
         push();
-        translate(iconX - 20, slotY, 0);
+        translate(iconX - 8, iconY + 10, 0);
         fill(255, 255, 255, 220);
         noStroke();
         textFont(font);
-        textSize(11);
-        textAlign(RIGHT, CENTER);
-        text(`x${count}`, 0, 0);
+        textSize(9);
+        textAlign(CENTER, CENTER);
+        text(`${count}`, 0, 0);
         pop();
 
-        // 3D drop model icon — needs depth test for correct face ordering
-        // Clear scene depth so fog doesn't occlude icons; re-enable for face sorting within the model.
+        // 3D icon
         gl.clear(gl.DEPTH_BUFFER_BIT);
         gl.enable(gl.DEPTH_TEST);
         push();
-        translate(iconX, slotY, 0);
-        scale(iconScale);
+        translate(iconX, iconY, 0);
+        scale(0.78);
         rotateZ(frameCount / 45);
         drawDrop(0, 0, frameCount / 45, buffType);
         pop();
         gl.disable(gl.DEPTH_TEST);
-
-        slotY += slotH;
     }
 
     gl.enable(gl.DEPTH_TEST);
@@ -1128,6 +1176,49 @@ function drawBulletIndicator() {
         const px = -totalW / 2 + i * (pipR * 2 + gap) + pipR;
         fill(i < myBulletCount ? color(220, 70, 70, 220) : color(210, 210, 210, 180));
         ellipse(px, VH - 18, pipR * 2, pipR * 2);
+    }
+
+    const barW = Math.max(totalW, 60);
+    const barH = 4;
+    let extraBarY = VH - 30;
+
+    // Regen charge bar
+    if ((myTank.buffs?.regen || 0) > 0) {
+        const charge = Math.min(1, (myTank._regenCharge || 0) / 100);
+        noStroke();
+        fill(30, 30, 60, 160);
+        rect(-barW / 2, extraBarY, barW, barH, 2);
+        fill(80, 180, 255, 230);
+        rect(-barW / 2, extraBarY, barW * charge, barH, 2);
+        textFont(font);
+        textSize(8);
+        textAlign(CENTER, CENTER);
+        fill(140, 200, 255, 180);
+        text('REGEN', 0, extraBarY - 6);
+        extraBarY -= 18;
+    }
+
+    // Ghost cloak timer bar
+    if ((myTank.buffs?.ghost || 0) > 0 && myTank.ghostCooldown !== undefined) {
+        const stacks = myTank.buffs.ghost;
+        const maxCooldown = myTank.ghostCloaked ? Math.round(120 + 80 * Math.sqrt(stacks)) : Math.max(90, Math.round(300 - 60 * Math.sqrt(stacks)));
+        const progress = Math.max(0, Math.min(1, myTank.ghostCooldown / maxCooldown));
+        noStroke();
+        fill(30, 20, 50, 160);
+        rect(-barW / 2, extraBarY, barW, barH, 2);
+        // Cloaked = purple draining, visible = teal filling toward next cloak
+        if (myTank.ghostCloaked) {
+            fill(160, 60, 255, 230);
+        } else {
+            fill(80, 220, 200, 180);
+        }
+        rect(-barW / 2, extraBarY, barW * progress, barH, 2);
+        textFont(font);
+        textSize(8);
+        textAlign(CENTER, CENTER);
+        fill(myTank.ghostCloaked ? color(180, 100, 255, 200) : color(100, 220, 200, 180));
+        text(myTank.ghostCloaked ? 'GHOST' : 'GHOST', 0, extraBarY - 6);
+        extraBarY -= 18;
     }
 
     gl.enable(gl.DEPTH_TEST);
@@ -1515,52 +1606,6 @@ function drawKDABoard() {
     gl.enable(gl.DEPTH_TEST);
 }
 
-// Draw museum tooltip when the player is near a museum tank
-function drawMuseumTooltip() {
-    if (!myTank) return;
-    const HOVER_DIST = typeof PLAYER_SIZE !== 'undefined' ? PLAYER_SIZE * 3.5 : 50;
-    let nearest = null, nearestDist = Infinity;
-    for (const id in players) {
-        const t = players[id];
-        if (!t.isMuseum) continue;
-        const d = Math.hypot(t.x - myTank.x, t.y - myTank.y);
-        if (d < HOVER_DIST && d < nearestDist) { nearest = t; nearestDist = d; }
-    }
-    if (!nearest) return;
-    const info = MUSEUM_DESCRIPTIONS[nearest.tier];
-    if (!info) return;
-
-    const gl = drawingContext;
-    gl.disable(gl.DEPTH_TEST);
-
-    const VH = 250;
-    const panW = 340, panH = 72;
-    const [r, g, b] = nearest.color || [200, 200, 200];
-
-    push();
-    translate(-panW / 2, VH - panH - 14, 0);
-    rectMode(CORNER);
-    noStroke();
-    fill(10, 10, 18, 210);
-    rect(0, 0, panW, panH, 8);
-    stroke(r, g, b, 160);
-    strokeWeight(1.5);
-    noFill();
-    rect(0, 0, panW, panH, 8);
-
-    textFont(font);
-    noStroke();
-    textAlign(LEFT, TOP);
-    textSize(14);
-    fill(r, g, b);
-    text(info.name, 12, 10);
-    textSize(11);
-    fill(210, 210, 220);
-    text(info.desc, 12, 30, panW - 24, panH - 34);
-    pop();
-
-    gl.enable(gl.DEPTH_TEST);
-}
 
 // Draw class info panel in lobby mode — shows selected class description + trade-offs
 function drawClassInfoPanel() {
@@ -1901,7 +1946,7 @@ function drawTracks() {
 
 function drawTank(tank, isSelf) {
     const size = PLAYER_SIZE;
-    const cloakAlpha = (tank.tier === 8 && tank.cloaked) ? 10 : (tank.tier === 17 && tank.wraithStealthed) ? 15 : 255;
+    const cloakAlpha = (tank.tier === 8 && tank.cloaked) ? 10 : (tank.tier === 17 && tank.wraithStealthed) ? 15 : (tank.ghostCloaked && tank.id !== socket.id) ? 0 : (tank.ghostCloaked) ? 40 : 255;
     // Grace period ring: draw a pulsing aura in world space
     if (tank.spawnGrace > 0) {
         const pulse = 0.7 + 0.3 * Math.sin(frameCount * 0.25);
@@ -2175,24 +2220,7 @@ function drawTank(tank, isSelf) {
     }
 
     // Draw nametag
-    if (tank.isMuseum) {
-        // ── Museum display tank — tier name label ──────────────────────
-        const info = MUSEUM_DESCRIPTIONS[tank.tier] || { name: `Tier ${tank.tier}` };
-        push();
-        translate(tank.x, tank.y, PLAYER_SIZE * 3.5);
-        rotateX(atan2(tank.y - camY, camZ));
-        textAlign(CENTER, CENTER);
-        if (font) textFont(font);
-        textSize(13);
-        noStroke();
-        translate(0, 0, -1);
-        fill(0, 0, 0, 180);
-        text(info.name, 1.5, 1.5);
-        translate(0, 0, 1);
-        fill(...tank.color);
-        text(info.name, 0, 0);
-        pop();
-    } else if (tank.classId) {
+    if (tank.classId) {
         // ── Class selection dummy ──────────────────────────────────────
         const cls = typeof TANK_CLASSES !== 'undefined'
             ? TANK_CLASSES.find(c => c.id === tank.classId) : null;
@@ -2253,10 +2281,13 @@ function drawTank(tank, isSelf) {
 
     if (tank.shield) {
         // Scale the bubble to enclose each tank's hull
+        // Shield tank (tier 9) and guardian have a wall panel in front — use smaller bubble
+        const isShieldPanel = tank.tier === 9 || (!tank.isAI && tank.selectedClass === 'guardian');
         const shieldR = tank.tier === 15 ? size * 2.4
             : tank.tier === 11 ? size * 2.1
                 : (tank.tier === 10 || tank.tier === 14 || tank.tier === 16) ? size * 2.0
-                    : size * 1.9;
+                    : isShieldPanel ? size * 1.3
+                        : size * 1.9;
         push();
         translate(tank.x, tank.y, PLAYER_SIZE);
         fill(50, 100, 255, 100);
@@ -2280,7 +2311,7 @@ function drawTank(tank, isSelf) {
     const isGuardianPlayer = !tank.isAI && tank.selectedClass === 'guardian';
     if ((isAIShield || isGuardianPlayer) && tank.shieldActive && !tank.isDead) {
         const sf = tank.shieldFacing;
-        const shieldDist = PLAYER_SIZE * 1.5;
+        const shieldDist = PLAYER_SIZE * 1.8;
         // Guardian gets a slightly different color to distinguish from AI
         const r = isGuardianPlayer ? 80 : 60;
         const g = isGuardianPlayer ? 180 : 120;
@@ -2679,6 +2710,41 @@ function drawExplosions() {
             noStroke();
             fill(200, 80, 255, 180 * (1 - tp));
             sphere(explosion.size * 0.5 * (1 - tp));
+            pop();
+            continue;
+        }
+
+        if (explosion.effect === 'shockwave_pulse') {
+            if (!explosion._swInit) {
+                explosion._swInit = true;
+                explosion._life = 32;
+                explosion._maxLife = 32;
+                explosion._maxR = explosion.size * 5;
+            }
+            explosion._life--;
+            if (explosion._life <= 0) { explosions.splice(i, 1); continue; }
+            const tsw = 1 - explosion._life / explosion._maxLife;
+            const asw = explosion._life / explosion._maxLife;
+            const rsw = explosion._maxR * tsw;
+            push();
+            translate(explosion.x, explosion.y, explosion.z);
+            noFill();
+            // Outer cyan ring
+            stroke(60, 200, 255, 255 * asw);
+            strokeWeight(6 * asw);
+            beginShape();
+            for (let a = 0; a <= TWO_PI; a += 0.14) vertex(cos(a) * rsw, sin(a) * rsw);
+            endShape(CLOSE);
+            // Inner white ring
+            stroke(180, 230, 255, 180 * asw);
+            strokeWeight(2.5 * asw);
+            beginShape();
+            for (let a = 0; a <= TWO_PI; a += 0.14) vertex(cos(a) * rsw * 0.65, sin(a) * rsw * 0.65);
+            endShape(CLOSE);
+            // Central flash
+            noStroke();
+            fill(120, 220, 255, 200 * (1 - tsw));
+            sphere(explosion.size * 0.4 * (1 - tsw));
             pop();
             continue;
         }
@@ -3086,16 +3152,36 @@ function drawTrails() {
     }
 }
 
+const RARITY_GLOW = {
+    common: [220, 220, 220],
+    rare: [80, 140, 255],
+    epic: [200, 60, 255],
+    legendary: [255, 140, 20],
+};
+
+function drawDropGlow(rarity) {
+    const [r, g, b] = RARITY_GLOW[rarity] || RARITY_GLOW.common;
+    const pulse = 0.7 + 0.3 * Math.sin(frameCount * 0.07);
+    noStroke();
+    fill(r, g, b, 70 * pulse);
+    ellipse(0, 0, TILE_SIZE * 0.9, TILE_SIZE * 0.9);
+    fill(r, g, b, 30 * pulse);
+    ellipse(0, 0, TILE_SIZE * 1.4, TILE_SIZE * 1.4);
+}
+
 function drawDrops() {
     drops.forEach((drop) => {
-        const { x, y, buff } = drop;
+        const { x, y, buff, rarity } = drop;
+
+        push();
+        translate(x, y, 1);
+        drawDropGlow(rarity);
+        pop();
 
         push();
         translate(x, y, TILE_SIZE / 4);
         const angle = frameCount / 45;
         rotateZ(angle);
-
-        // TODO: Custom icons
         drawDrop(x, y, angle, buff);
         pop();
     });
@@ -3117,6 +3203,11 @@ function drawDrops() {
         }
 
         const angle = frameCount / 45;
+        push();
+        translate(vd.x, vd.y, 1);
+        scale(sz, sz, sz);
+        drawDropGlow(vd.rarity);
+        pop();
         push();
         translate(vd.x, vd.y, TILE_SIZE / 4 * sz);
         rotateZ(angle);
@@ -3300,6 +3391,49 @@ function drawBullets() {
             sphere(BULLET_SIZE * (1.7 + 0.4 * pulse));
         }
 
+        // Shockwave-captured bullet: cyan electric aura
+        if (bullet.shockwaveCaptured) {
+            const pulse = 0.5 + 0.5 * Math.sin(frameCount * 0.3);
+            noStroke();
+            fill(60, 200, 255, 80 + 100 * pulse);
+            sphere(BULLET_SIZE * (1.6 + 0.5 * pulse));
+            // Hard inner core flash
+            fill(200, 240, 255, 120 * pulse);
+            sphere(BULLET_SIZE * 0.9);
+        }
+
+        // Afterimage bullet: cyan ghost trail aura
+        if (bullet.afterimageBullet) {
+            const pulse = 0.5 + 0.5 * Math.sin(frameCount * 0.25);
+            noStroke();
+            fill(160, 220, 255, 60 + 60 * pulse);
+            sphere(BULLET_SIZE * (1.5 + 0.4 * pulse));
+        }
+
+        // Nullfield-slowed bullet: icy blue drag ring perpendicular to travel
+        if (bullet._nullfieldSlowed) {
+            const pulse = 0.5 + 0.5 * Math.sin(frameCount * 0.18);
+            noFill();
+            // Flat ring oriented perpendicular to bullet travel direction
+            push();
+            rotateZ(bullet.angle + HALF_PI);
+            stroke(80, 180, 255, 120 + 80 * pulse);
+            strokeWeight(1.8);
+            beginShape();
+            for (let a = 0; a <= TWO_PI; a += 0.25) vertex(cos(a) * BULLET_SIZE * (1.8 + 0.5 * pulse), sin(a) * BULLET_SIZE * (0.5 + 0.2 * pulse));
+            endShape(CLOSE);
+            stroke(160, 220, 255, 60 * pulse);
+            strokeWeight(1);
+            beginShape();
+            for (let a = 0; a <= TWO_PI; a += 0.25) vertex(cos(a) * BULLET_SIZE * (2.4 + 0.6 * pulse), sin(a) * BULLET_SIZE * (0.7 + 0.2 * pulse));
+            endShape(CLOSE);
+            pop();
+            // Faint blue tint over the bullet core
+            noStroke();
+            fill(100, 180, 255, 50 + 40 * pulse);
+            sphere(BULLET_SIZE * 1.1);
+        }
+
         pop();
 
         // Trail
@@ -3370,6 +3504,120 @@ function drawChainRays() {
         cylinder(2.5 * t, len);
         pop();
         r.life--;
+    }
+}
+
+function drawPillageAnims() {
+    pillageAnims = pillageAnims.filter(p => p.life > 0);
+    for (const p of pillageAnims) {
+        const t = 1 - p.life / p.maxLife;               // 0→1 over lifetime
+        const rise = TILE_SIZE * 3 * Math.sqrt(t);       // ease-out rise
+        const fadeT = t < 0.55 ? 1 : 1 - (t - 0.55) / 0.45;
+        const popT = Math.min(1, t / 0.12);              // quick pop-in over first 12%
+        const sz = popT < 1 ? 0.3 + 0.7 * popT : 1;
+
+        const [r, g, b] = RARITY_GLOW[p.rarity] || RARITY_GLOW.common;
+        const label = BUFF_LABELS[p.buff] || p.buff;
+
+        // Rarity glow halo
+        push();
+        translate(p.x, p.y, TILE_SIZE * 0.3 + rise);
+        noStroke();
+        fill(r, g, b, 90 * fadeT * sz);
+        ellipse(0, 0, TILE_SIZE * 1.1 * sz, TILE_SIZE * 1.1 * sz);
+        fill(r, g, b, 35 * fadeT * sz);
+        ellipse(0, 0, TILE_SIZE * 1.8 * sz, TILE_SIZE * 1.8 * sz);
+        pop();
+
+        // Spinning 3D drop icon
+        push();
+        translate(p.x, p.y, TILE_SIZE * 0.3 + rise);
+        rotateZ(frameCount / 18);
+        scale(sz * 1.3);
+        drawDrop(p.x, p.y, frameCount / 18, p.buff);
+        pop();
+
+        // Buff label text rising above icon
+        push();
+        translate(p.x, p.y, TILE_SIZE * 0.3 + rise + TILE_SIZE * 0.85);
+        rotateX(atan2(p.y - camY, camZ));
+        noStroke();
+        textFont(font);
+        textSize(PLAYER_SIZE * 0.85);
+        textAlign(CENTER, CENTER);
+        fill(0, 0, 0, 180 * fadeT);
+        text(label, 1.5, 1.5);
+        fill(r, g, b, 255 * fadeT);
+        text(label, 0, 0);
+        pop();
+
+        p.life--;
+    }
+}
+
+function drawAfterimageAnims() {
+    afterimageAnims = afterimageAnims.filter(a => a.life > 0);
+    for (const a of afterimageAnims) {
+        const alpha = (a.life / a.maxLife) * 130;
+        const s = PLAYER_SIZE;
+        push();
+        translate(a.x, a.y, s);
+        rotateZ(a.angle);
+
+        noStroke();
+        // Hull — matches standard tank: two overlapping boxes
+        fill(160, 220, 255, alpha);
+        box(2 * s, 1.5 * s, s);
+        fill(150, 210, 255, alpha * 0.85);
+        box(1.8 * s, 1.7 * s, s * 0.8);
+
+        // Turret
+        push();
+        rotateZ(PI / 2 + a.turretAngle - a.angle);
+        translate(0, 0, s);
+        fill(180, 235, 255, alpha);
+        box(s, 1.15 * s, s);
+
+        // Barrel — standard single barrel
+        push();
+        translate(0, -(0.25 * s + 0.75 * s), 0); // matches drawBarrel centerY at lengthMult=1
+        rotateX(HALF_PI);
+        fill(200, 240, 255, alpha * 0.9);
+        cylinder(s * 0.15, s * 1.5);
+        pop();
+        pop();
+
+        pop();
+        a.life--;
+    }
+}
+
+function drawScavengeAnims() {
+    scavengeAnims = scavengeAnims.filter(a => a.life > 0);
+    for (const a of scavengeAnims) {
+        const t = 1 - a.life / a.maxLife;
+        const alpha = a.life / a.maxLife;
+        // Expanding gold sparkle ring
+        const ringR = TILE_SIZE * 0.9 * Math.sqrt(t + 0.1);
+        push();
+        translate(a.x, a.y, PLAYER_SIZE * 0.5);
+        noFill();
+        stroke(255, 200, 40, 220 * alpha);
+        strokeWeight(3 * alpha);
+        beginShape();
+        for (let ag = 0; ag <= TWO_PI; ag += 0.2) vertex(cos(ag) * ringR, sin(ag) * ringR);
+        endShape(CLOSE);
+        // 6 radiating sparkle lines
+        for (let k = 0; k < 6; k++) {
+            const ang = (k / 6) * TWO_PI + t * 1.5;
+            const inner = ringR * 0.4;
+            const outer = ringR * 0.95;
+            stroke(255, 230, 80, 200 * alpha);
+            strokeWeight(1.5 * alpha);
+            line(cos(ang) * inner, sin(ang) * inner, cos(ang) * outer, sin(ang) * outer);
+        }
+        pop();
+        a.life--;
     }
 }
 

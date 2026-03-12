@@ -23,7 +23,7 @@ function drawDrop(x, y, angle, buff) {
             translate(2 * size / 4, 0, 0);
             cone(size / 10, size * 1 / 2)
             break;
-        case 'fireRate':
+        case 'maxBullets':
             noStroke();
             push();
             fill(255, 0, 0);
@@ -304,6 +304,113 @@ function drawDrop(x, y, angle, buff) {
             box(size * 0.65, size * 0.18, size * 0.18);
             pop();
             break;
+        case 'nullfield':
+            noStroke();
+            // Concentric rings suggesting a field
+            fill(60, 140, 255, 50);
+            torus(size * 0.58, size * 0.13);
+            fill(80, 180, 255, 40);
+            torus(size * 0.35, size * 0.08);
+            // Center core — small glowing orb
+            fill(160, 210, 255, 200);
+            sphere(size * 0.16);
+            // Three tick marks around the outer ring
+            for (let k = 0; k < 3; k++) {
+                push();
+                rotateZ((k / 3) * TWO_PI);
+                translate(size * 0.58, 0, 0);
+                fill(200, 230, 255, 220);
+                box(size * 0.07, size * 0.18, size * 0.07);
+                pop();
+            }
+            break;
+        case 'afterimage': {
+            noStroke();
+            // Three staggered tank silhouettes offset behind each other — motion trail
+            const offsets = [0, size * 0.28, size * 0.52];
+            const alphas = [200, 120, 55];
+            for (let k = 0; k < 3; k++) {
+                fill(160, 220, 255, alphas[k]);
+                push();
+                translate(0, offsets[k], 0);
+                box(size * 0.85, size * 0.6, size * 0.3);
+                // Turret nub
+                translate(0, 0, size * 0.22);
+                cylinder(size * 0.18, size * 0.18);
+                pop();
+            }
+            break;
+        }
+        case 'ghost': {
+            noStroke();
+            // Tank silhouette — dark body, very faint so it reads as "invisible"
+            fill(30, 20, 50, 180);
+            push();
+            box(size * 0.9, size * 0.65, size * 0.38);
+            pop();
+            // Turret stub
+            fill(20, 15, 40, 160);
+            push();
+            translate(0, 0, size * 0.28);
+            cylinder(size * 0.22, size * 0.22);
+            pop();
+            // Barrel
+            push();
+            translate(0, -size * 0.55, size * 0.28);
+            rotateX(HALF_PI);
+            cylinder(size * 0.07, size * 0.5);
+            pop();
+            // Ghostly dissolve overlay — wispy translucent rings drifting upward
+            for (let k = 0; k < 3; k++) {
+                push();
+                translate(0, 0, size * (0.1 + k * 0.22));
+                fill(180, 140, 255, 55 - k * 15);
+                push(); scale(1, 1, 0.15); sphere(size * (0.7 - k * 0.1)); pop();
+                pop();
+            }
+            // Two glowing eyes
+            fill(200, 160, 255, 220);
+            push(); translate(size * 0.18, -size * 0.2, size * 0.32); sphere(size * 0.08); pop();
+            push(); translate(-size * 0.18, -size * 0.2, size * 0.32); sphere(size * 0.08); pop();
+            break;
+        }
+        case 'shockwave':
+            noStroke();
+            // Outer expanding ring
+            fill(60, 200, 255, 60);
+            torus(size * 0.55, size * 0.12);
+            // Inner shield core
+            fill(140, 220, 255, 180);
+            sphere(size * 0.28);
+            // Three small arrows radiating outward
+            for (let k = 0; k < 3; k++) {
+                push();
+                rotateZ((k / 3) * TWO_PI);
+                translate(size * 0.48, 0, 0);
+                fill(255, 255, 255, 220);
+                cone(size * 0.10, size * 0.22, 6);
+                pop();
+            }
+            break;
+        case 'scavenge': {
+            noStroke();
+            // Chest body — dark wood base
+            fill(100, 60, 25, 240);
+            push(); translate(0, 0, -size * 0.1); box(size * 1.0, size * 0.72, size * 0.42); pop();
+            // Chest lid — slightly wider, raised
+            fill(130, 78, 30, 240);
+            push(); translate(0, 0, size * 0.18); box(size * 1.04, size * 0.74, size * 0.28); pop();
+            // Gold trim band across middle
+            fill(220, 175, 40, 255);
+            push(); translate(0, 0, size * 0.02); box(size * 1.06, size * 0.76, size * 0.07); pop();
+            // Latch — small gold rectangle on front face
+            fill(240, 200, 50, 255);
+            push(); translate(0, -size * 0.38, size * 0.08); box(size * 0.18, size * 0.06, size * 0.18); pop();
+            // Glow from inside — gold light leaking out of the seam
+            fill(255, 220, 60, 50);
+            push(); translate(0, 0, size * 0.04); box(size * 0.88, size * 0.62, size * 0.06); pop();
+            break;
+        }
         case null:
         case undefined:
             // Mystery crate — brown box with question mark
