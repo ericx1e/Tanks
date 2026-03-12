@@ -1113,13 +1113,13 @@ function drawBuffHUD() {
 
     const buffTypes = ['speed', 'maxBullets', 'bulletSpeed', 'bulletBounces', 'shield', 'multiShot', 'visionRange', 'piercing', 'autoTurret', 'explosive', 'homing', 'regen', 'chain', 'orbit', 'haste', 'shockwave', 'scavenge', 'nullfield', 'ghost', 'afterimage'];
 
-    // Collect active buffs in order
+    // Collect active buffs in order (include negatives)
     const active = [];
     for (const buffType of buffTypes) {
         const count = buffType === 'shield'
             ? (myTank.buffs.shield || 0) + (myTank.shield ? 1 : 0)
             : (myTank.buffs[buffType] || 0);
-        if (count > 0) active.push({ buffType, count });
+        if (count !== 0) active.push({ buffType, count });
     }
 
     for (let i = 0; i < active.length; i++) {
@@ -1134,7 +1134,7 @@ function drawBuffHUD() {
         // Count badge
         push();
         translate(iconX - 8, iconY + 10, 0);
-        fill(255, 255, 255, 220);
+        fill(count < 0 ? color(255, 80, 80, 220) : color(255, 255, 255, 220));
         noStroke();
         textFont(font);
         textSize(9);
