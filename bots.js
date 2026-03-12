@@ -481,7 +481,11 @@ function updateAITank(lobby, lobbyCode, tank, level, players, bullets) {
     // }
 
     // Tiers >= 4 can shoot down bullets; exclude laser (5) and cannon (11) which can't usefully intercept
-    if (tank.tier >= 4 && tank.tier !== 5 && tank.tier !== 11 && tank.tier !== 9 && tank.tier !== 13 && tank.tier !== 14 && tank.tier !== 15 && tank.tier !== 16 && shootThreats.length) {
+    // Endless-scaled tanks (endlessDefensive) can shoot down bullets regardless of tier
+    const canDefend = (tank.endlessDefensive || tank.tier >= 4)
+        && tank.tier !== 5 && tank.tier !== 11 && tank.tier !== 9
+        && tank.tier !== 13 && tank.tier !== 14 && tank.tier !== 15 && tank.tier !== 16;
+    if (canDefend && shootThreats.length) {
         for (const { bullet } of shootThreats) {
             if (fireAtDangerBullet(lobbyCode, tank, bullet, bullets, level, players)) break;
         }
@@ -1486,9 +1490,11 @@ function fireAtDangerBullet(lobbyCode, tank, dangerBullet, bullets, level, playe
     tank._defendingThisFrame = true; // suppress offensive turret override this frame
 
     // Use a separate defenseCooldown so defensive shots don’t block offensive ones and vice-versa
+    // Endless-scaled tanks react faster (down to 10 frames based on fire mult)
+    const baseDC = tank.endlessDefensive ? Math.max(10, Math.round(20 * (tank.endlessFireMult || 1))) : 20;
     if ((tank.defenseCooldown || 0) <= 0) {
         fireBullet(lobbyCode, tank, tank.turretAngle, bullets, level);
-        tank.defenseCooldown = 20; // 20-frame independent cooldown for point-defense
+        tank.defenseCooldown = baseDC;
         return true;
     }
     return false;

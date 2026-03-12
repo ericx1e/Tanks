@@ -92,8 +92,10 @@ function createLevel(lobbyCode, levelNumber) {
             if (!tank.isAI || tank.tier === 'button' || tank.tier === 'chest') continue;
             if (!tank.buffs) tank.buffs = {};
             tank.buffs.shield = (tank.buffs.shield || 0) + shieldBonus + expShieldBonus;
-            tank.endlessSpeedMult = speedMult * expMult;
+            // Speed only gets sqrt of the exponential so it doesn't spiral out of control
+            tank.endlessSpeedMult = speedMult * Math.sqrt(expMult);
             tank.endlessFireMult = Math.max(0.15, fireMult / expMult); // faster fire rate, floor 0.15
+            tank.endlessDefensive = levelNumber > 15; // unlocks bullet-shooting for all tiers
         }
     }
 
