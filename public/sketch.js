@@ -22,6 +22,41 @@ let exploredTiles = null;
 let skipMarkExplored = false; // true for one updatePlayers cycle after a level load
 
 let camX = 0, camY = 0, camZ = 600;
+
+// ---- Sound System (Web Audio API) ----
+const _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+const _soundBuffers = {};
+
+async function _loadSound(name, url) {
+    try {
+        const resp = await fetch(url);
+        const arrayBuf = await resp.arrayBuffer();
+        _soundBuffers[name] = await _audioCtx.decodeAudioData(arrayBuf);
+    } catch (e) {
+        console.warn(`Sound '${name}' failed to load:`, e);
+    }
+}
+
+// worldX/worldY: position in game world. Volume attenuates with distance from camera.
+function _playSound(name, worldX, worldY, { volume = 1, pitchScale = 1 } = {}) {
+    const buf = _soundBuffers[name];
+    if (!buf) return;
+    if (_audioCtx.state === 'suspended') _audioCtx.resume();
+    const dx = worldX - camX, dy = worldY - camY;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    const MAX_DIST = 900;
+    const distVol = Math.max(0, 1 - dist / MAX_DIST);
+    if (distVol <= 0) return;
+    const gainNode = _audioCtx.createGain();
+    gainNode.gain.value = volume * distVol;
+    gainNode.connect(_audioCtx.destination);
+    const source = _audioCtx.createBufferSource();
+    source.buffer = buf;
+    source.playbackRate.value = pitchScale * (0.92 + Math.random() * 0.5);
+    source.connect(gainNode);
+    source.start(0);
+}
+// ---- End Sound System ----
 let groupedWalls = [];
 let floorTex = null, wallTex = null;
 let useTextures = false; // toggle with T
@@ -306,6 +341,7 @@ socket.on('tick', (data) => {
             for (const [type, label] of Object.entries(buffNames)) {
                 if ((newBuffSnapshot[type] || 0) > (prevMyBuffs[type] || 0)) {
                     killIndicators.push({ x: me.x, y: me.y, life: 50, maxLife: 50, text: `+${label}`, color: [100, 255, 160] });
+                    _playSound('powerup', me.x, me.y, { volume: 0.7 });
                 }
             }
         }
@@ -352,6 +388,22 @@ socket.on('explosion', (data) => {
     createExplosion(data.x, data.y, data.z, data.size, data.color, data.effect)
     if (data.size > BULLET_SIZE + 1) {
         triggerScreenShake(data.size / 12, Math.min(8, Math.round(data.size / 7)));
+    }
+    // Distance-attenuated sound based on explosion size / effect:
+    // shield hit → shield_hit
+    // size < 3   → muzzle flash / shoot sound
+    // 3–11       → bullet impact
+    // 12+        → big explosion (tank death, splash, cannon)
+    if (data.effect === 'shield') {
+        _playSound('shield_hit', data.x, data.y, { volume: 0.5 });
+    } else if (data.size < 3) {
+        _playSound('shoot', data.x, data.y, { volume: 0.18 });
+    } else if (data.size < 12) {
+        _playSound('bullet_collision', data.x, data.y, { volume: 0.25 });
+    } else {
+        const vol = Math.min(0.85, 0.4 + data.size / 40);
+        const pitch = Math.max(0.7, 1.2 - data.size / 60);
+        _playSound('bigexplosion', data.x, data.y, { volume: vol, pitchScale: pitch });
     }
     // explosions.push({
     //     x: data.x,
@@ -494,6 +546,12 @@ async function setup() {
     fogLayer = createGraphics(width * 2, height * 2);
     createLevelTextures();
     // Dev console helper: type godMode() in the browser console to toggle invincibility
+    _loadSound('shoot', 'assets/sounds/shoot.wav');
+    _loadSound('bigexplosion', 'assets/sounds/bigexplosion.wav');
+    _loadSound('bullet_collision', 'assets/sounds/bullet_collision.wav');
+    _loadSound('shield_hit', 'assets/sounds/shield_hit.wav');
+    _loadSound('powerup', 'assets/sounds/powerup.wav');
+
     window.godMode = () => socket.emit('toggleGodMode');
     socket.on('godModeStatus', (on) => console.log(`%cGod mode ${on ? 'ON ✓' : 'OFF ✗'}`, `color:${on ? 'lime' : 'red'};font-weight:bold`))
     // fogLayer.clear();

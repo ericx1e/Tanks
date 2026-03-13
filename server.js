@@ -12,6 +12,19 @@ const { isCollidingWithWall, isCollidingWithPlayer, isWall, lerpAngle, getRandom
 const { loadLevel, getNumLevels } = require('./levels.js');
 
 app.use(cors({ origin: true }));
+
+// Serve index.html with a build timestamp injected so browsers never serve
+// a stale cached version of local JS files.
+const fs = require('fs');
+const path = require('path');
+const BUILD_TS = Date.now();
+app.get('/', (_req, res) => {
+    const html = fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8')
+        .replaceAll('__BUILDTS__', BUILD_TS);
+    res.setHeader('Content-Type', 'text/html');
+    res.send(html);
+});
+
 app.use(express.static('public'));
 
 const io = require('socket.io')(server, {
