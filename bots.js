@@ -303,9 +303,9 @@ function updateAITank(lobby, lobbyCode, tank, level, players, bullets) {
             fireCooldown = 115;
             turretSpeed = 0.11; // slow base tracking — must commit to an angle
             break;
-        case 14: // Cannoneer — slow, fires explosive cannonballs
-            speed = 0.75 * PLAYER_SIZE * 30;
-            shootingRange = Infinity;
+        case 14: // Cannoneer — slow, fires explosive cannonballs; shoots through walls but has finite range
+            speed = 0.75 * AI_TANK_SPEED;
+            shootingRange = PLAYER_SIZE * 35;
             fireCooldown = 95;
             turretSpeed = 0.16;
             break;

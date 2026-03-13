@@ -1929,7 +1929,8 @@ function drawTracks() {
 
 function drawTank(tank, isSelf) {
     const size = PLAYER_SIZE;
-    const cloakAlpha = (tank.tier === 8 && tank.cloaked) ? 10 : (tank.tier === 17 && tank.wraithStealthed) ? 15 : (tank.ghostCloaked && tank.id !== socket.id) ? 0 : (tank.ghostCloaked) ? 40 : 255;
+    const _isAlly = !tank.isAI && tank.id !== socket.id && gameMode !== 'arena';
+    const cloakAlpha = (tank.tier === 8 && tank.cloaked) ? 10 : (tank.tier === 17 && tank.wraithStealthed) ? 15 : (tank.ghostCloaked && tank.id !== socket.id && !_isAlly) ? 0 : (tank.ghostCloaked) ? 40 : 255;
     // Grace period ring: draw a pulsing aura in world space
     if (tank.spawnGrace > 0) {
         const pulse = 0.7 + 0.3 * Math.sin(frameCount * 0.25);
