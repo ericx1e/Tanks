@@ -50,7 +50,7 @@ const TANK_CLASSES = [
     {
         id: 'laser', name: 'Laser', label: '[L]',
         description: 'Right-click to fire a laser beam. Normal bullets are slower with no ricochets and limited ammo.',
-        buffs: { bulletSpeed: -2, bulletBounces: -1, maxBullets: -3 },
+        buffs: { bulletSpeed: -2, bulletBounces: -1, maxBullets: -3, speed: 2, visionRange: 1 },
         special: 'laser',
         color: '#ff6b6b',
     },

@@ -146,6 +146,10 @@ function createLevel(lobbyCode, levelNumber) {
                 player.cannonCooldown = 0;
                 player.laserDepleted = false;
                 player.laserEnergy = 100;
+                // Clear afterimage position history so old-level positions don't fire on new level
+                player._aiPositions = undefined;
+                player._aiCooldown = undefined;
+                player._aiTick = undefined;
             }
 
             newPlayers[id] = player;
@@ -600,7 +604,7 @@ io.on('connection', (socket) => {
                 return;
             }
         } else {
-            const playerBulletCount = bullets.filter(bullet => bullet.owner === player.id && !bullet.isTurretBullet && !bullet.isChainBullet).length;
+            const playerBulletCount = bullets.filter(bullet => bullet.owner === player.id && !bullet.isTurretBullet && !bullet.isChainBullet && !bullet.afterimageBullet).length;
 
             // Enforce the 6-bullet limit
             if (playerBulletCount >= player.maxBullets) {
@@ -708,8 +712,19 @@ io.on('connection', (socket) => {
         if (!isLaserClass && !isDevLaser) return;
         if (isLaserClass) {
             if (player.laserDepleted || (player.laserEnergy || 0) <= 0) return;
-            player.laserEnergy -= 4 * (player.hasteMult || 1);
+            // Activation cost on first frame of each burst to prevent spam toggling.
+            // Use tick gap instead of laserChanneling since that flag resets every physics step.
+            if ((_gameTick - (player.laserLastFiredTick || 0)) > 2) {
+                player.laserEnergy -= 15;
+                if (player.laserEnergy <= 0) {
+                    player.laserEnergy = 0;
+                    player.laserDepleted = true;
+                    return;
+                }
+            }
+            player.laserEnergy -= 2 * (player.hasteMult || 1);
             player.laserChanneling = true;
+            player.laserLastFiredTick = _gameTick;
             if (player.laserEnergy <= 0) {
                 player.laserEnergy = 0;
                 player.laserDepleted = true;
@@ -1592,8 +1607,10 @@ function handlePlayerMovement(lobby, player) {
         player.vy = 0; // Stop vertical movement on collision
     }
 
-    // Update the turret angle (limited while channeling laser)
-    if (player.laserChanneling) {
+    // Rate-limit turret while laser is channeling. laserChanneling resets each physics step before
+    // playerInput is processed, so use laserLastFiredTick (within 2 ticks = actively firing).
+    const isLaserChanneling = player.hasLaserAbility && (_gameTick - (player.laserLastFiredTick || 0)) <= 2;
+    if (isLaserChanneling) {
         const maxTurnRate = 0.05; // ~2.9 degrees per frame
         let diff = input.turretAngle - player.turretAngle;
         while (diff > Math.PI) diff -= 2 * Math.PI;
@@ -1805,7 +1822,9 @@ function updatePlayerStats(lobby, lobbyCode, player) {
             const phantomCount = 1 + Math.min(stacks, 4) + Math.floor(Math.sqrt(Math.max(0, stacks - 4)));
             const positions = player._aiPositions;
             for (let k = 0; k < phantomCount && k < positions.length; k++) {
-                const pos = positions[Math.max(0, positions.length - 3 - k * 2)];
+                const idx = positions.length - 3 - k * 2;
+                if (idx < 0) break; // no more distinct history entries
+                const pos = positions[idx];
                 lobby.bullets.push({
                     id: Math.random(),
                     owner: player.id,
@@ -1896,7 +1915,7 @@ function updatePlayerStats(lobby, lobbyCode, player) {
     // Laser energy: drains via fireLaser events, recharges passively
     if (player.hasLaserAbility) {
         player.laserChanneling = false; // reset each tick; fireLaser handler re-sets if fired
-        player.laserEnergy = Math.min(100, (player.laserEnergy || 0) + 0.15 / (player.hasteMult || 1));
+        player.laserEnergy = Math.min(100, (player.laserEnergy || 0) + 0.4 / (player.hasteMult || 1));
         if (player.laserDepleted && player.laserEnergy >= 25) player.laserDepleted = false;
     }
 
@@ -2709,8 +2728,32 @@ setInterval(() => {
 
         // Single consolidated tick emission at 30fps
         if (emit30) {
+            const slimPlayers = {};
+            for (const id in lobby.players) {
+                const p = lobby.players[id];
+                slimPlayers[id] = {
+                    id: p.id, name: p.name, tier: p.tier, isAI: p.isAI, isDead: p.isDead,
+                    x: p.x, y: p.y, z: p.z, vx: p.vx, vy: p.vy,
+                    angle: p.angle, turretAngle: p.turretAngle,
+                    color: p.color, speed: p.speed, selectedClass: p.selectedClass, classId: p.classId,
+                    shield: p.shield, shieldActive: p.shieldActive, shieldFacing: p.shieldFacing,
+                    spawnGrace: p.spawnGrace, cloaked: p.cloaked, wraithStealthed: p.wraithStealthed, ghostCloaked: p.ghostCloaked,
+                    buffs: p.buffs, multiShot: p.multiShot, autoTurretAngle: p.autoTurretAngle,
+                    orbAngle: p.orbAngle, disoriented: p.disoriented,
+                    sniperCharging: p.sniperCharging, sniperChargeTimer: p.sniperChargeTimer,
+                    maxBullets: p.maxBullets, kills: p.kills, deaths: p.deaths, visionDistance: p.visionDistance,
+                    laserCooldown: p.laserCooldown, laserEnergy: p.laserEnergy, laserDepleted: p.laserDepleted,
+                    ghostCooldown: p.ghostCooldown, flareCooldown: p.flareCooldown,
+                    barrageCooldown: p.barrageCooldown, barrageActive: p.barrageActive,
+                    companionSpawnCooldown: p.companionSpawnCooldown,
+                    cannonCooldown: p.cannonCooldown, sniperShotCooldown: p.sniperShotCooldown,
+                    pillageCharge: p.pillageCharge, currentFireCooldown: p.currentFireCooldown,
+                    shieldEnergy: p.shieldEnergy, shieldDepleted: p.shieldDepleted,
+                    _regenCharge: p._regenCharge, _regenTimer: p._regenTimer,
+                };
+            }
             const tickData = {
-                players: lobby.players,
+                players: slimPlayers,
                 bullets: lobby.bullets,
                 companions: lobby.companions || {},
                 flares: lobby.flares || [],

@@ -201,7 +201,7 @@ function updateAITank(lobby, lobbyCode, tank, level, players, bullets) {
                 const dx = b.x - ox;
                 const dy = b.y - oy;
                 const along = dx * Math.cos(a) + dy * Math.sin(a);
-                const perp  = -dx * Math.sin(a) + dy * Math.cos(a);
+                const perp = -dx * Math.sin(a) + dy * Math.cos(a);
                 if (Math.abs(along) > wallHalfDepth) continue;
                 if (Math.abs(perp) > wallHalfWidth) continue;
                 const inward = Math.cos(b.angle) * Math.cos(a) + Math.sin(b.angle) * Math.sin(a);
@@ -304,9 +304,9 @@ function updateAITank(lobby, lobbyCode, tank, level, players, bullets) {
             turretSpeed = 0.11; // slow base tracking — must commit to an angle
             break;
         case 14: // Cannoneer — slow, fires explosive cannonballs
-            speed = 0.75 * AI_TANK_SPEED;
+            speed = 0.75 * PLAYER_SIZE * 30;
             shootingRange = Infinity;
-            fireCooldown = 105;
+            fireCooldown = 95;
             turretSpeed = 0.16;
             break;
         case 15: // Sovereign — massive boss, orbiting orb shield, heavy cannonballs
@@ -364,7 +364,7 @@ function updateAITank(lobby, lobbyCode, tank, level, players, bullets) {
 
     // Endless mode scaling bonuses
     if (tank.endlessSpeedMult) speed *= tank.endlessSpeedMult;
-    if (tank.endlessFireMult)  fireCooldown = Math.max(10, Math.round(fireCooldown * tank.endlessFireMult));
+    if (tank.endlessFireMult) fireCooldown = Math.max(10, Math.round(fireCooldown * tank.endlessFireMult));
 
     // Initialize fire cooldown with a random offset so spawned groups don't all fire simultaneously
     if (tank.fireCooldown === undefined || tank.fireCooldown === null) {
@@ -612,8 +612,8 @@ function handleAITurret(lobby, lobbyCode, tank, level, players, bullets, shootin
             const vy = nearestPlayer.y - (tank.prevTargetY ?? nearestPlayer.y);
             // Use each boss's actual bullet speed for accurate lead
             const bSpeed = tank.tier === 15 ? BULLET_SPEED * 1.5
-                         : tank.tier === 17 ? BULLET_SPEED * 1.6
-                         : BULLET_SPEED;
+                : tank.tier === 17 ? BULLET_SPEED * 1.6
+                    : BULLET_SPEED;
             const leadAngle = computeLeadAngle(tank.x, tank.y, bSpeed, nearestPlayer.x, nearestPlayer.y, vx, vy);
             tank.prevTargetX = nearestPlayer.x;
             tank.prevTargetY = nearestPlayer.y;
@@ -1099,6 +1099,7 @@ function fireLaser(lobby, tank, players, level, isActive) {
         isActive: isActive,
         duration: 2,
         color: [255, 50, 0],
+        owner: tank.id,
     });
 }
 

@@ -151,12 +151,15 @@ const TRACK_SPACING = PLAYER_SIZE * 0.8;     // increase for wider spacing
 const TRACK_FADE_FRAMES = 120;
 
 // --- Client-side smoothing state ---
+const BULLET_PREDICTION_ENABLED = false; // show predicted bullet immediately on fire; disable if ghost bullets become an issue
 let smoothingEnabled = true;
+const aiTurretSmoothed = {}; // id -> smoothed turret angle for rate-limited AI tanks
 let localTurretAngle = 0;
 // Dead-reckoning baseline (captured from each server tick)
 let _serverTickX = 0, _serverTickY = 0, _serverTickVx = 0, _serverTickVy = 0, _lastLocalTickMs = 0;
 let currentKeys = { w: false, a: false, s: false, d: false };
 let currentTurretAngle = 0;
+let localLaserTurretAngle = null; // client-side accumulated angle during laser channeling, immune to tick snaps
 let laserChanneling = false;   // true while right-click held for Laser class
 let guardianShielding = false; // true while right-click held for Guardian class
 let sniperPanning = false;     // true while right-click held for Sniper class
@@ -187,6 +190,7 @@ window.addEventListener('mouseup', e => {
 const playerInterpBuf = {}; // id -> [{x, y, angle, turretAngle, t}, ...]
 const INTERP_DELAY_MS = 50;
 let bulletState = {}; // id -> {x, y, angle, speed, receivedAt}
+let predictedBullets = []; // client-side predicted bullets fired by local player (before server echo)
 
 
 function getViewportBounds(playerX, playerY) {
@@ -243,13 +247,15 @@ socket.on('error', (err) => {
 
 socket.on('tick', (data) => {
     if (data.bullets) {
-        const now = Date.now();
+        const now = performance.now();
         const nextState = {};
         data.bullets.forEach((b, i) => {
             nextState[i] = { x: b.x, y: b.y, angle: b.angle, speed: b.speed, receivedAt: now };
         });
         bulletState = nextState;
         bullets = data.bullets;
+        // Expire predicted bullets — real bullets are now in bulletState
+        predictedBullets = predictedBullets.filter(pb => now - pb.createdAt < 150);
     }
     if (data.lasers !== undefined) lasers = data.lasers;
     if (data.flares !== undefined) flares = data.flares;
@@ -257,7 +263,7 @@ socket.on('tick', (data) => {
     if (data.smoke !== undefined) smokeClouds = data.smoke;
     if (data.zones !== undefined) zoneProgress = data.zones;
     const serverPlayers = data.players;
-    const now = Date.now();
+    const now = performance.now();
     for (const [id, p] of Object.entries(serverPlayers)) {
         if (id === socket.id) {
             // Capture server baseline for dead-reckoning
@@ -1157,7 +1163,7 @@ function drawBuffHUD() {
 function drawBulletIndicator() {
     if (!myTank || myTank.isDead) return;
 
-    const myBulletCount = bullets.filter(b => b.owner === socket.id && !b.isTurretBullet).length;
+    const myBulletCount = bullets.filter(b => b.owner === socket.id && !b.isTurretBullet && !b.afterimageBullet).length;
     const maxBullets = myTank.maxBullets || 6;
 
     const VH = 250;
@@ -1754,7 +1760,7 @@ function getBulletDisplayPos(index) {
     const s = bulletState[index];
     const b = bullets[index];
     if (!s || !b) return b ? { x: b.x, y: b.y } : { x: 0, y: 0 };
-    const framesElapsed = (Date.now() - s.receivedAt) / (1000 / 60);
+    const framesElapsed = (performance.now() - s.receivedAt) / (1000 / 60);
     return {
         x: s.x + Math.cos(s.angle) * s.speed * framesElapsed,
         y: s.y + Math.sin(s.angle) * s.speed * framesElapsed,
@@ -1768,15 +1774,24 @@ function applySmoothing() {
     // smoothed by physics velocity between 30fps ticks.
     if (_lastLocalTickMs > 0 && players[socket.id] && !players[socket.id].isDead) {
         const sp = players[socket.id];
-        const msSince = Math.min(Date.now() - _lastLocalTickMs, 80); // cap extrapolation at 80ms
+        const msSince = Math.min(performance.now() - _lastLocalTickMs, 80); // cap extrapolation at 80ms
         const steps = msSince / (1000 / 60);
         sp.x = _serverTickX + _serverTickVx * steps;
         sp.y = _serverTickY + _serverTickVy * steps;
-        sp.turretAngle = currentTurretAngle; // turret tracks mouse instantly
+        if (laserChanneling && sp.selectedClass === 'laser') {
+            // Maintain angle client-side so server tick snaps don't override it
+            if (localLaserTurretAngle === null) localLaserTurretAngle = sp.turretAngle;
+            const diff = ((currentTurretAngle - localLaserTurretAngle + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
+            localLaserTurretAngle += Math.max(-0.05, Math.min(0.05, diff));
+            sp.turretAngle = localLaserTurretAngle;
+        } else {
+            localLaserTurretAngle = null;
+            sp.turretAngle = currentTurretAngle;
+        }
     }
 
     // Remote players/bots: interpolate between buffered snapshots, extrapolate when ahead
-    const renderTime = Date.now() - INTERP_DELAY_MS;
+    const renderTime = performance.now() - INTERP_DELAY_MS;
     for (const [id, buf] of Object.entries(playerInterpBuf)) {
         if (!players[id] || buf.length < 2) continue;
         let i = buf.length - 2;
@@ -1808,7 +1823,18 @@ function applySmoothing() {
             players[id].x = before.x + (after.x - before.x) * t;
             players[id].y = before.y + (after.y - before.y) * t;
             players[id].angle = clientLerpAngle(before.angle, after.angle, t);
-            players[id].turretAngle = before.turretAngle + (after.turretAngle - before.turretAngle) * t;
+            players[id].turretAngle = clientLerpAngle(before.turretAngle, after.turretAngle, t);
+        }
+
+        // Rate-limit turret angle for tier 13 (tracking laser) — cap at server lerp speed
+        const p = players[id];
+        if (p && p.isAI && p.tier === 13) {
+            if (aiTurretSmoothed[id] === undefined) aiTurretSmoothed[id] = p.turretAngle;
+            const diff = ((p.turretAngle - aiTurretSmoothed[id] + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
+            aiTurretSmoothed[id] += Math.max(-0.06, Math.min(0.06, diff));
+            p.turretAngle = aiTurretSmoothed[id];
+        } else if (!p || !p.isAI || p.isDead) {
+            delete aiTurretSmoothed[id];
         }
     }
 }
@@ -3275,7 +3301,22 @@ function mousePressed() {
     if (myTank && myTank.selectedClass === 'sniper' && sniperPanning && !(myTank.sniperShotCooldown > 0)) {
         socket.emit('sniperShot');
     } else if (myTank) {
-        socket.emit('fireBullet', { angle: myTank.turretAngle });
+        const _fAngle = myTank.turretAngle;
+        if (BULLET_PREDICTION_ENABLED) {
+            const _ownedBullets = bullets.filter(b => b.owner === socket.id && !b.isTurretBullet && !b.isChainBullet && !b.afterimageBullet).length
+                + predictedBullets.length;
+            if ((myTank.currentFireCooldown || 0) <= 0 && _ownedBullets < (myTank.maxBullets || 6)) {
+                const _spawnDist = PLAYER_SIZE + BULLET_SIZE * 2;
+                predictedBullets.push({
+                    x: myTank.x + Math.cos(_fAngle) * _spawnDist,
+                    y: myTank.y + Math.sin(_fAngle) * _spawnDist,
+                    angle: _fAngle,
+                    speed: BULLET_SPEED,
+                    createdAt: performance.now(),
+                });
+            }
+        }
+        socket.emit('fireBullet', { angle: _fAngle });
     }
 }
 
@@ -3391,6 +3432,27 @@ function drawBullets() {
             sphere(BULLET_SIZE * 1.1);
         }
 
+        // Chain bullet: yellow-green electric arcs
+        if (bullet.isChainBullet) {
+            const pulse = 0.5 + 0.5 * Math.sin(frameCount * 0.35 + bullet.id * 2.7);
+            noStroke();
+            fill(180, 255, 80, 70 + 80 * pulse);
+            sphere(BULLET_SIZE * (1.6 + 0.5 * pulse));
+            // Crackling outer ring perpendicular to travel
+            push();
+            rotateZ(bullet.angle + HALF_PI);
+            noFill();
+            stroke(220, 255, 100, 130 + 80 * pulse);
+            strokeWeight(1.5);
+            beginShape();
+            for (let a = 0; a <= TWO_PI; a += 0.3) {
+                const jitter = 1 + 0.25 * Math.sin(frameCount * 0.6 + a * 3.1 + bullet.id);
+                vertex(cos(a) * BULLET_SIZE * 2.0 * jitter, sin(a) * BULLET_SIZE * 0.5 * jitter);
+            }
+            endShape(CLOSE);
+            pop();
+        }
+
         pop();
 
         // Trail
@@ -3403,32 +3465,64 @@ function drawBullets() {
             alpha: 108,
         });
     });
+
+    // Draw client-side predicted bullets (fired locally, not yet echoed by server)
+    if (!BULLET_PREDICTION_ENABLED) return;
+    const frameMs = 1000 / 60;
+    predictedBullets.forEach(pb => {
+        const framesElapsed = (performance.now() - pb.createdAt) / frameMs;
+        const px = pb.x + Math.cos(pb.angle) * pb.speed * framesElapsed;
+        const py = pb.y + Math.sin(pb.angle) * pb.speed * framesElapsed;
+        const pbz = PLAYER_SIZE * 1.4 - BULLET_SIZE;
+        push();
+        translate(px, py, pbz);
+        noStroke();
+        const cameraPos = new p5.Vector(camX, camY, camZ);
+        const bulletPos = new p5.Vector(px, py, pbz);
+        const offset = p5.Vector.sub(cameraPos, bulletPos).normalize().mult(-2);
+        push();
+        translate(offset.x, offset.y, offset.z);
+        fill(0);
+        sphere(BULLET_SIZE + 1);
+        pop();
+        fill(150);
+        sphere(BULLET_SIZE);
+        pop();
+        trails.push({ x: px, y: py, z: pbz, size: BULLET_SIZE, dSize: BULLET_SIZE / 15, alpha: 108 });
+    });
 }
 
 function drawLasers() {
     lasers.forEach(laser => {
         push();
-        const dx = laser.x2 - laser.x1;
-        const dy = laser.y2 - laser.y1;
+        // Recompute origin from visual tank (turretAngle already throttled by pre-draw pass)
+        let x1 = laser.x1, y1 = laser.y1;
+        if (laser.owner && players[laser.owner]) {
+            const t = players[laser.owner];
+            const spawnDist = 1.3 * (PLAYER_SIZE + BULLET_SIZE);
+            x1 = t.x + Math.cos(t.turretAngle) * spawnDist;
+            y1 = t.y + Math.sin(t.turretAngle) * spawnDist;
+        }
+        const dx = laser.x2 - x1;
+        const dy = laser.y2 - y1;
         const len = Math.sqrt(dx * dx + dy * dy);
         const angle = atan2(dy, dx) + PI / 2;
-        translate((laser.x1 + laser.x2) / 2, (laser.y1 + laser.y2) / 2, PLAYER_SIZE * 1.4 - BULLET_SIZE);
+        translate((x1 + laser.x2) / 2, (y1 + laser.y2) / 2, PLAYER_SIZE * 1.4);
         rotateZ(angle)
         let r = PLAYER_SIZE / 2
         if (laser.isActive) {
             fill(255, 50, 0);
             if (frameCount % 5 == 0 && random() < particleScale()) {
-                createExplosion(laser.x1 + random(-r, r), laser.y1 + random(-r, r), PLAYER_SIZE * 1.4 - BULLET_SIZE + random(-r, r), BULLET_SIZE);
+                createExplosion(x1 + random(-r, r), y1 + random(-r, r), PLAYER_SIZE * 1.4 - BULLET_SIZE + random(-r, r), BULLET_SIZE);
                 createExplosion(laser.x2 + random(-r, r), laser.y2 + random(-r, r), PLAYER_SIZE * 1.4 - BULLET_SIZE + random(-r, r), BULLET_SIZE);
             }
         } else {
-            // stroke(150);
             fill(150);
 
             if (frameCount % 10 == 0) {
                 trails.push({
-                    x: laser.x1 + random(-r, r),
-                    y: laser.y1 + random(-r, r),
+                    x: x1 + random(-r, r),
+                    y: y1 + random(-r, r),
                     z: PLAYER_SIZE * 1.4 - BULLET_SIZE + random(-r, r),
                     size: BULLET_SIZE,
                     dSize: BULLET_SIZE / 10,
@@ -3535,10 +3629,9 @@ function drawAfterimageAnims() {
         fill(180, 235, 255, alpha);
         box(s, 1.15 * s, s);
 
-        // Barrel — standard single barrel
+        // Barrel — standard single barrel (centerY = 0.25s - 0.75s = -0.5s, no rotateX needed)
         push();
-        translate(0, -(0.25 * s + 0.75 * s), 0); // matches drawBarrel centerY at lengthMult=1
-        rotateX(HALF_PI);
+        translate(0, -(0.5 * s), 0);
         fill(200, 240, 255, alpha * 0.9);
         cylinder(s * 0.15, s * 1.5);
         pop();

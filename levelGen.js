@@ -546,6 +546,10 @@ function generateLevel(levelIndex, totalLevels, endless) {
                     g[ry][rx] = 1;
     }
 
+    // Seal border — alcove/corridor carving can accidentally open edge tiles
+    for (let c = 0; c < w; c++) { g[0][c] = 1; g[h - 1][c] = 1; }
+    for (let r = 0; r < h; r++) { g[r][0] = 1; g[r][w - 1] = 1; }
+
     // Place map chests for endless mode (scale: 1 chest for first ~10 levels, grows gradually)
     if (endless) {
         const chestBase = Math.floor(1 + levelIndex / 5);
