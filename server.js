@@ -29,10 +29,10 @@ const socketToNames = {};
 const transitionTimers = {};
 
 const debug_lag = false;
-// Lag simulation for development. Set LAG_MS > 0 to enable.
+// Lag simulation for development. Simulates typical Heroku (US) conditions.
 // JITTER_MS adds random variance around LAG_MS, causing packets to arrive out of order.
-const LAG_MS = 0;
-const JITTER_MS = 60;
+const LAG_MS = 60;
+const JITTER_MS = 15;
 const lagEmit = (target, event, data) => {
     if (LAG_MS > 0 || JITTER_MS > 0) {
         const delay = Math.max(0, LAG_MS + (Math.random() * 2 - 1) * JITTER_MS);
@@ -76,8 +76,12 @@ function createLevel(lobbyCode, levelNumber) {
     if (lobby.mode === 'endless' && levelNumber >= 10) {
         const t = levelNumber - 9; // t=1 at level 10
         const shieldBonus = Math.floor(Math.sqrt(t));           // +1 @ L10, +2 @ L14, +3 @ L19
-        const speedMult = 1 + 0.05 * Math.sqrt(t);             // +5% @ L10, ~+16% @ L20
-        const fireMult = 1 - 0.06 * Math.sqrt(t);              // 0.94× @ L10, ~0.80× @ L20
+
+        // Flatten the speed/fire-rate curve during L14-20 (boss introduction window) —
+        // tEff grows at half speed from t=5 onward, resuming full speed past L20.
+        const tEff = t <= 5 ? t : 5 + (t - 5) * (levelNumber <= 20 ? 0.5 : 1.0);
+        const speedMult = 1 + 0.05 * Math.sqrt(tEff);          // gentler ramp through L15-20
+        const fireMult = 1 - 0.06 * Math.sqrt(tEff);           // ~0.87× at L20 (was ~0.80×)
 
         // Past level 15: slower exponential stacks on top — L15-20 stays fair, L25+ gets hard
         let expMult = 1;
@@ -88,13 +92,31 @@ function createLevel(lobbyCode, levelNumber) {
             expShieldBonus = Math.floor(e / 5);       // 0@L16-20, 1@L20, 2@L25, 3@L30, 4@L35
         }
 
+        // Bullet speed: +4% per sqrt(t), capped at +30% — makes dodging harder gradually
+        const bulletSpeedMult = Math.min(1.30, 1 + 0.04 * Math.sqrt(t));
+        // Pierce: kicks in at L21 (all bosses shown), ramps faster than before
+        const pierceBonus = levelNumber >= 20
+            ? Math.floor(Math.sqrt(Math.max(0, t - 10) / 2))   // pierce 1 @ L21, 2 @ L27
+            : Math.floor(Math.sqrt(Math.max(0, t - 10) / 3));  // old slow rollout before L20
+
         for (const tank of Object.values(newPlayers)) {
             if (!tank.isAI || tank.tier === 'button' || tank.tier === 'chest') continue;
             if (!tank.buffs) tank.buffs = {};
             tank.buffs.shield = (tank.buffs.shield || 0) + shieldBonus + expShieldBonus;
             tank.endlessSpeedMult = speedMult * Math.sqrt(expMult);
             tank.endlessFireMult = Math.max(0.28, fireMult / expMult); // floor 0.28 = max ~3.5× fire rate
+            tank.endlessBulletSpeedMult = bulletSpeedMult;
+            tank.endlessPierce = pierceBonus;
             tank.endlessDefensive = levelNumber > 15;
+
+            // Intelligence and Wraith: cap fire rate and move speed scaling — buff pierce/bullet speed instead
+            if (tank.tier === 12 || tank.tier === 17) {
+                tank.endlessSpeedMult = Math.min(1.15, tank.endlessSpeedMult);
+                tank.endlessFireMult = Math.max(0.65, tank.endlessFireMult); // max 1.5× rate (not 3.5×)
+                // Extra pierce and bullet speed in place of fire rate
+                tank.endlessPierce = pierceBonus + Math.floor(Math.sqrt(Math.max(0, t - 3) / 2));
+                tank.endlessBulletSpeedMult = Math.min(1.6, bulletSpeedMult * 1.15);
+            }
         }
     }
 
@@ -121,7 +143,8 @@ function createLevel(lobbyCode, levelNumber) {
                 player.barrageCooldown = 0;
                 player.barrageActive = false;
                 player.barrageShots = 0;
-                player.classBuffsApplied = false; // reset so next game start applies them once
+                applyClassBuffs(player); // apply current class in lobby so players can test it
+                player.classBuffsApplied = true; // prevent double-apply on game start
                 player.pillageCharge = 0;
                 player._lastPillageKills = 0;
             }
@@ -263,6 +286,8 @@ function createLevel(lobbyCode, levelNumber) {
         numBots: 0,
         smokeClouds: [],
         continueZone: continueZone || null,
+        gameState: 'playing',
+        levelAge: 0,
     };
 
     // io.to(lobbyCode).emit('updateLevel', level)
@@ -672,6 +697,17 @@ io.on('connection', (socket) => {
         }
     });
 
+    socket.on('devGotoLevel', (levelNumber) => {
+        const lobbyCode = socketToLobby[socket.id];
+        if (!lobbyCode) return;
+        const lobby = lobbies[lobbyCode];
+        if (!lobby || lobby.mode !== 'endless') return;
+        const n = Math.max(0, Math.floor(Number(levelNumber)));
+        if (isNaN(n)) return;
+        lobby.gameState = 'playing';
+        createLevel(lobbyCode, n);
+    });
+
     socket.on('devGiveBuff', ({ buff, count = 1 }) => {
         const lobbyCode = socketToLobby[socket.id];
         if (!lobbyCode) return;
@@ -695,6 +731,11 @@ io.on('connection', (socket) => {
         if (!TANK_CLASSES.find(c => c.id === classId)) return; // validate
         player.selectedClass = classId;
         io.to(lobbyCode).emit('playerClassChanged', { playerId: socket.id, classId });
+        if (lobby.mode === 'lobby') {
+            resetBuffs(player);
+            applyClassBuffs(player);
+            player.classBuffsApplied = true;
+        }
     });
 
 
@@ -789,7 +830,7 @@ io.on('connection', (socket) => {
         const lobbyCode = socketToLobby[socket.id];
         if (!lobbyCode) return;
         const lobby = lobbies[lobbyCode];
-        if (!lobby || lobby.mode === 'lobby') return;
+        if (!lobby) return;
         const player = lobby.players[socket.id];
         if (!player || player.isDead || !player.hasCannonAbility) return;
         if ((player.cannonCooldown || 0) > 0) return;
@@ -1070,14 +1111,14 @@ function fireLaser(lobby, lobbyCode, tank, players, level, isActive) {
         if (al.damageCooldown <= 0) {
             al.damageCooldown = 10;
             const target = players[hitTargetId];
-            if (target && !target.isDead) {
+            if (target && !target.isDead && !(lobby.gameState === 'animating' && !target.isAI)) {
                 if ((target.laserShieldCooldown || 0) > 0) {
                     // Cooldown active — block damage
                 } else if (target.shield) {
                     target.shield = false;
                     target.laserShieldCooldown = 30;
                     triggerShockwave(lobby, lobbyCode, target);
-                } else if (!target.spawnGrace) {
+                } else if (!target.spawnGrace && target.tier !== 'button') {
                     target.isDead = true;
                     if (target.isAI && target.tier !== 'chest' && !tank.isAI) {
                         tank.kills = (tank.kills || 0) + 1;
@@ -1128,7 +1169,7 @@ function explodeCannonball(lobby, lobbyCode, bullet, bulletsToRemove, i) {
         if (player.isDead) continue;
         if (Math.hypot(player.x - bullet.x, player.y - bullet.y) > splashRadius) continue;
         const owner = players[bullet.owner];
-        if (lobby.mode !== 'lobby' || player.isAI) {
+        if ((lobby.mode !== 'lobby' || (player.isAI && player.tier !== 'button')) && !(lobby.gameState === 'animating' && !player.isAI)) {
             if (!owner || lobby.friendlyFire || lobby.mode === 'arena' || (player.isAI !== owner.isAI)) {
                 if (player.shield) {
                     player.shield = false;
@@ -1152,6 +1193,17 @@ function explodeCannonball(lobby, lobbyCode, bullet, bulletsToRemove, i) {
                         spawnDrop(lobbyCode, player.x, player.y, owner);
                     }
                 }
+            }
+        }
+        // Lobby: cannonball splash hitting a class dummy selects that class for the shooter
+        if (lobby.mode === 'lobby' && player.isAI && player.tier === 'button' && player.classId) {
+            const shooter = players[bullet.owner];
+            if (shooter && !shooter.isAI) {
+                shooter.selectedClass = player.classId;
+                resetBuffs(shooter);
+                applyClassBuffs(shooter);
+                shooter.classBuffsApplied = true;
+                io.to(lobbyCode).emit('playerClassChanged', { playerId: bullet.owner, classId: player.classId });
             }
         }
         if (player.tier === 'chest' && player.isDead) spawnDrop(lobbyCode, player.x, player.y, owner);
@@ -1217,9 +1269,36 @@ function updateBullets(lobby, lobbyCode) {
         !p.isDead && p.shieldActive && ((p.isAI && p.tier === 9) || (!p.isAI && p.hasShieldAbility))
     );
 
+    // Precompute global flags to skip expensive per-bullet loops when features aren't active
+    let anyNullfield = false;
+    let anyHoming = false;
+    for (const pid in players) {
+        const p = players[pid];
+        if (p.isDead) continue;
+        if (p.buffs?.nullfield) anyNullfield = true;
+        if (!p.isAI && (p.buffs?.homing || 0) > 0) anyHoming = true;
+        if (anyNullfield && anyHoming) break;
+    }
+
+    // Hard cap: if too many bullets have accumulated, cull the oldest AI bullets first
+    if (bullets.length > 250) {
+        let removed = 0;
+        let w = 0;
+        for (let r = 0; r < bullets.length; r++) {
+            const b = bullets[r];
+            const isAIBullet = players[b.owner]?.isAI ?? true;
+            if (isAIBullet && removed < bullets.length - 250) { removed++; continue; }
+            bullets[w++] = b;
+        }
+        bullets.length = w;
+    }
+
     bullets.forEach((bullet, i) => {
+        // Cache bullet owner's AI status once — used in several checks below
+        const bulletOwnerIsAI = players[bullet.owner]?.isAI ?? true;
+
         // Homing: curve player bullets toward nearest AI enemy
-        if (!bullet.isCannonball && !bullet.wallPiercing && !bullet.isTurretBullet && !bullet.hasSplash) {
+        if (anyHoming && !bullet.isCannonball && !bullet.wallPiercing && !bullet.isTurretBullet && !bullet.hasSplash) {
             const owner = players[bullet.owner];
             if (owner && !owner.isAI && (owner.buffs?.homing || 0) > 0) {
                 let nearestDist = TILE_SIZE * 10, nearestAngle = null;
@@ -1249,14 +1328,13 @@ function updateBullets(lobby, lobbyCode) {
         }
 
         // Nullfield: slow enemy bullets near players with the buff each frame
-        {
+        if (anyNullfield) {
             let nullFactor = 1;
             for (const pid in players) {
                 const p = players[pid];
                 if (p.isDead || !p.buffs?.nullfield) continue;
                 if (bullet.owner === pid) continue; // don't slow own bullets
-                const owner = players[bullet.owner];
-                if (owner && owner.isAI === p.isAI) continue; // only slow enemy bullets
+                if (bulletOwnerIsAI === p.isAI) continue; // only slow enemy bullets
                 const stacks = p.buffs.nullfield;
                 const radius = TILE_SIZE * (2 + Math.sqrt(stacks));
                 if (Math.hypot(bullet.x - p.x, bullet.y - p.y) <= radius) {
@@ -1342,11 +1420,13 @@ function updateBullets(lobby, lobbyCode) {
 
 
         // Check for collisions with other bullets
+        // AI bullets never cancel each other — skip AI-AI pairs to avoid O(B²) explosion at late levels
         bullets.forEach((otherBullet, j) => {
             if (bulletsToRemove.has(i) || hitThisTick.has(i)) return;
             if (i === j || bulletsToRemove.has(j) || hitThisTick.has(j)) return;
-            // Same owner bullets never collide with each other
             if (bullet.owner === otherBullet.owner) return;
+            // Skip AI-AI collisions: reduces O(B²) to O(B_player × B_ai) at late levels
+            if (bulletOwnerIsAI && (players[otherBullet.owner]?.isAI ?? true)) return;
             const dx = bullet.x - otherBullet.x;
             const dy = bullet.y - otherBullet.y;
             if (dx * dx + dy * dy >= (2 * BULLET_SIZE) * (2 * BULLET_SIZE)) return;
@@ -1485,7 +1565,7 @@ function updateBullets(lobby, lobbyCode) {
                     effect: effect,
                 });
 
-                if (lobby.mode !== 'lobby' || player.isAI) {// No player damage in lobby
+                if ((lobby.mode !== 'lobby' || (player.isAI && player.tier !== 'button')) && !(lobby.gameState === 'animating' && !player.isAI)) {// No player damage in lobby or during vacuum
                     const owner = lobby.players[bullet.owner];
 
                     // Sniper pierce shot and cannonball pass through allies
@@ -1498,7 +1578,7 @@ function updateBullets(lobby, lobbyCode) {
                             triggerShockwave(lobby, lobbyCode, player);
                         } else if (!player.godMode && !player.spawnGrace) {
                             player.isDead = true;
-                            if (player.isAI && player.tier !== 'chest' && owner && !owner.isAI) {
+                            if (player.isAI && player.tier !== 'chest' && player.tier !== 'button' && owner && !owner.isAI) {
                                 owner.kills = (owner.kills || 0) + 1;
                                 // Chain buff: fire bullets at nearby living enemies
                                 triggerChain(lobby, lobbyCode, owner, player, bullet.chainDepth || 0);
@@ -1534,6 +1614,9 @@ function updateBullets(lobby, lobbyCode) {
                         const shooter = lobby.players[bullet.owner];
                         if (shooter && !shooter.isAI) {
                             shooter.selectedClass = player.classId;
+                            resetBuffs(shooter);
+                            applyClassBuffs(shooter);
+                            shooter.classBuffsApplied = true;
                             io.to(lobbyCode).emit('playerClassChanged', { playerId: bullet.owner, classId: player.classId });
                         }
                         player.isDead = false; // Dummy stays alive
@@ -1550,7 +1633,12 @@ function updateBullets(lobby, lobbyCode) {
         }
     });
 
-    lobby.bullets = bullets.filter((_, index) => !bulletsToRemove.has(index));
+    // Compact-in-place removal — O(B) single pass, no new array allocation
+    let w = 0;
+    for (let r = 0; r < bullets.length; r++) {
+        if (!bulletsToRemove.has(r)) bullets[w++] = bullets[r];
+    }
+    bullets.length = w;
 }
 
 function handlePlayerMovement(lobby, player) {
@@ -1636,10 +1724,10 @@ function handlePlayerMovement(lobby, player) {
 
 // Lobby mode-select zones (right section, col 17) — player stands in zone for ZONE_HOLD_FRAMES to activate
 const LOBBY_ZONES = [
-    { col: 15, row: 2, mode: 'campaign', label: 'CAMPAIGN', color: [80, 220, 120] },
-    { col: 15, row: 5, mode: 'arena', label: 'ARENA', color: [220, 80, 80] },
-    { col: 15, row: 8, mode: 'survival', label: 'SURVIVAL', color: [220, 160, 60] },
-    { col: 15, row: 11, mode: 'endless', label: 'ENDLESS', color: [140, 100, 220] },
+    // { col: 15, row: 2, mode: 'campaign', label: 'CAMPAIGN', color: [80, 220, 120] },
+    // { col: 15, row: 5, mode: 'arena', label: 'ARENA', color: [220, 80, 80] },
+    // { col: 15, row: 8, mode: 'survival', label: 'SURVIVAL', color: [220, 160, 60] },
+    { col: 15, row: 6.5, mode: 'endless', label: 'ENDLESS', color: [140, 100, 220] },
 ];
 const ZONE_RADIUS = TILE_SIZE * 1.2;
 const ZONE_HOLD_FRAMES = 180; // 3 seconds at 60 fps
@@ -1782,7 +1870,7 @@ function updatePlayerStats(lobby, lobbyCode, player) {
     // Regen: kill-based — charge granted in triggerRegen() at each kill site
 
     // Ghost buff: periodic cloak cycle. Cloaked = untargetable by bots, still takes damage.
-    if ((player.buffs?.ghost || 0) > 0 && lobby.mode !== 'lobby') {
+    if ((player.buffs?.ghost || 0) > 0) {
         const stacks = player.buffs.ghost;
         if (player.ghostCooldown === undefined) {
             player.ghostCooldown = Math.ceil(Math.random() * 300); // random offset so multiple ghost players don't cloak in sync
@@ -1793,8 +1881,8 @@ function updatePlayerStats(lobby, lobbyCode, player) {
             player.ghostCloaked = !player.ghostCloaked;
             // Cloaked duration scales with stacks; visible duration is fixed
             player.ghostCooldown = player.ghostCloaked
-                ? Math.round(120 + 80 * Math.sqrt(stacks))   // 2s base + ~1.3s per sqrt stack
-                : Math.max(90, Math.round(300 - 60 * Math.sqrt(stacks))); // 5s → 2s min window
+                ? Math.round(80 + 40 * Math.sqrt(stacks))    // 1.3s base + ~0.67s per sqrt stack (was 2s+1.3s)
+                : Math.max(120, Math.round(360 - 60 * Math.sqrt(stacks))); // 6s → 2s min visible window (was 5s→1.5s)
         }
     } else if (!(player.buffs?.ghost > 0)) {
         player.ghostCloaked = false;
@@ -1802,7 +1890,7 @@ function updatePlayerStats(lobby, lobbyCode, player) {
     }
 
     // Afterimage: record position history, periodically fire phantom bullets from past positions
-    if ((player.buffs?.afterimage || 0) > 0 && lobby.mode !== 'lobby' && !player.isDead) {
+    if ((player.buffs?.afterimage || 0) > 0 && !player.isDead) {
         const stacks = player.buffs.afterimage;
         // Sample position into ring buffer every 15 frames
         if (player._aiTick === undefined) player._aiTick = Math.floor(Math.random() * 15); // random offset
@@ -2346,6 +2434,7 @@ function updateAutoTurrets(lobby, lobbyCode) {
                 const t = lobby.players[id];
                 if (t.isDead) continue;
                 if (!t.isAI && lobby.mode !== 'arena') continue;
+                if (t.tier === 'button') continue; // don't target lobby dummies/buttons
                 const dx = t.x - player.x;
                 const dy = t.y - player.y;
                 const dist = Math.hypot(dx, dy);
@@ -2551,7 +2640,8 @@ let _gameTick = 0;
 // Run lobby updates 60 times per second
 setInterval(() => {
     _gameTick++;
-    const emit30 = (_gameTick % 2 === 0); // throttle heavy emissions to 30fps
+    const emit30 = (_gameTick % 2 === 0); // emit at 30fps — cleaner timer precision than 60fps
+    const aiTick = emit30; // AI logic also runs at 30fps — halves AI CPU cost with no visible difference
 
     for (const [lobbyCode, lobby] of Object.entries(lobbies)) {
         if (lobby.gameState === "transition") continue;
@@ -2641,19 +2731,24 @@ setInterval(() => {
             const player = lobby.players[playerId]
             if (!player.isAI) {
                 handlePlayerPickup(lobbyCode, playerId);
+                updatePlayerStats(lobby, lobbyCode, player);
+            } else if (aiTick) {
+                updatePlayerStats(lobby, lobbyCode, player);
             }
-            updatePlayerStats(lobby, lobbyCode, player);
-            autoSpawnCompanionIfReady(lobby, playerId, player);
+            if (aiTick) autoSpawnCompanionIfReady(lobby, playerId, player);
         }
 
-        updateAutoTurrets(lobby, lobbyCode);
-        updatePlayerOrbits(lobby, lobbyCode);
-        updateBarrages(lobby, lobbyCode);
-        updateFlares(lobby, lobbyCode);
-        updateCompanions(lobby);
+        if (aiTick) {
+            updateAutoTurrets(lobby, lobbyCode);
+            updatePlayerOrbits(lobby, lobbyCode);
+            updateBarrages(lobby, lobbyCode);
+            updateFlares(lobby, lobbyCode);
+            updateCompanions(lobby);
+        }
 
         if (lobby.mode == 'lobby' || lobby.mode == 'campaign' || lobby.mode == 'endless') {
-            if (lobby.gameState !== 'transition' && lobby.gameState !== 'animating' && lobby.level && !lobby.continueZone && updateAITanks(lobby, lobbyCode, lobby.players, lobby.level, lobby.bullets)) {
+            lobby.levelAge = (lobby.levelAge || 0) + 1;
+            if (aiTick && lobby.gameState !== 'transition' && lobby.gameState !== 'animating' && lobby.level && !lobby.continueZone && lobby.levelAge > 60 && updateAITanks(lobby, lobbyCode, lobby.players, lobby.level, lobby.bullets)) {
                 // createLevel(lobbyCode, lobby.levelNumber + 1);
                 // console.log(lobby.levelNumber, lobby.totalLevels - 1)
                 if (lobby.levelNumber == lobby.totalLevels - 1) {
@@ -2668,7 +2763,7 @@ setInterval(() => {
             }
         }
 
-        if (lobby.mode == 'survival') {
+        if (lobby.mode == 'survival' && aiTick) {
             updateAITanks(lobby, lobbyCode, lobby.players, lobby.level, lobby.bullets)
 
             // Remove dead AI tanks (player stats already updated in the main loop above)
@@ -2738,9 +2833,10 @@ setInterval(() => {
                     color: p.color, speed: p.speed, selectedClass: p.selectedClass, classId: p.classId,
                     shield: p.shield, shieldActive: p.shieldActive, shieldFacing: p.shieldFacing,
                     spawnGrace: p.spawnGrace, cloaked: p.cloaked, wraithStealthed: p.wraithStealthed, ghostCloaked: p.ghostCloaked,
+                    coordBuff: p.coordBuff, nullAngle: p.nullAngle, auraActive: p.auraActive,
+                    sniperPhase: p.sniperPhase, sniperChargeTimer: p.sniperChargeTimer, sniperShotsLeft: p.sniperShotsLeft,
                     buffs: p.buffs, multiShot: p.multiShot, autoTurretAngle: p.autoTurretAngle,
                     orbAngle: p.orbAngle, disoriented: p.disoriented,
-                    sniperCharging: p.sniperCharging, sniperChargeTimer: p.sniperChargeTimer,
                     maxBullets: p.maxBullets, kills: p.kills, deaths: p.deaths, visionDistance: p.visionDistance,
                     laserCooldown: p.laserCooldown, laserEnergy: p.laserEnergy, laserDepleted: p.laserDepleted,
                     ghostCooldown: p.ghostCooldown, flareCooldown: p.flareCooldown,

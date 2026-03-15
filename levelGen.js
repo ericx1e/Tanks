@@ -281,10 +281,10 @@ function connectRooms(g, a, b) {
 // ── Entities ──────────────────────────────────────────────────────────────────
 
 // Entity char → numeric value (levels.js format)
-const SPAWN_VAL = 'A'.charCodeAt(0) - 'S'.charCodeAt(0) - 1; // = -19
+const SPAWN_VAL = -100; // matches SPAWN_CELL in levels.js ('s' in level text files)
 
 function enemyVal(tier) {
-    return -(Math.min(17, Math.max(0, tier)) + 1); // -1 for tier 0, -18 for tier 17
+    return -(Math.min(18, Math.max(0, tier)) + 1); // -1 for tier 0, -19 for tier 18
 }
 
 // Grid LOS check with 2× tile-step sampling — correctly blocks diagonal sight lines.
@@ -332,19 +332,22 @@ function findSafeSpawn(g, room, enemies) {
 }
 
 // Returns array of placed enemy grid positions [{ex, ey}].
-// Minimum difficulty required for each boss-tier enemy to appear in the pool
-const BOSS_MIN_DIFF = { 11: 0.50, 15: 0.78, 16: 0.88, 17: 0.80 };
+// Minimum difficulty required for each boss-tier enemy to appear in the pool.
+// Staggered so each boss is introduced 2-3 levels after the previous one:
+// L10: Harbinger, L13: Sovereign, L16: Wraith, L18: Phantom Sniper, L20: Commander
+const BOSS_MIN_DIFF = { 11: 0.50, 15: 0.65, 16: 0.90, 17: 0.80, 18: 0.98 };
 
 function placeEnemies(g, rooms, diff) {
     const totalCount = Math.min(31, Math.floor(5 + diff * 13));
-    const maxTier = Math.min(17, Math.floor(diff * 18 + 0.5));
+    const maxTier = Math.min(18, Math.floor(diff * 19 + 0.5));
 
     const poolMin = Math.max(0, maxTier - 7);
     const pool = [];
     for (let t = poolMin; t <= maxTier; t++) {
         // Boss tiers only enter the pool once their minimum difficulty is reached
         if (BOSS_MIN_DIFF[t] !== undefined && diff < BOSS_MIN_DIFF[t]) continue;
-        const w = t === 11 || t === 15 || t === 16 || t === 17 ? 1  // Harbinger/Sovereign/Phantom/Wraith: rare
+        const w = t === 11 || t === 15 || t === 16 || t === 17 || t === 18 ? 1  // Harbinger/Sovereign/Phantom/Wraith/Commander: rare
+            : t === 13 && diff > 0.75 ? 1                      // Laser Pulse: falls off in late game
             : t >= maxTier - 1 ? 3                             // Top-tier: frequent
                 : 2;                                               // Mid-tier: normal
         for (let i = 0; i < w; i++) pool.push(t);
@@ -361,7 +364,11 @@ function placeEnemies(g, rooms, diff) {
     // Elites: Titan(10), Cloak(8), Guardian(9), Intelligence(12), Laser-Pulse(13), Cannoneer(14), + bosses
     let guaranteedTier = -1;
     if (diff >= 0.45 && maxTier >= 8) {
-        const elites = [10, 8, 9, 12, 13, 14, 15, 16, 17].filter(t => t <= maxTier && (BOSS_MIN_DIFF[t] === undefined || diff >= BOSS_MIN_DIFF[t]));
+        const elites = [10, 8, 9, 12, 13, 14, 15, 16, 17, 18].filter(t =>
+            t <= maxTier
+            && (BOSS_MIN_DIFF[t] === undefined || diff >= BOSS_MIN_DIFF[t])
+            && !(t === 13 && diff > 0.80) // Laser Pulse: no longer a guaranteed spawn in late game
+        );
         if (elites.length) guaranteedTier = elites[rng(0, elites.length - 1)];
     }
 
@@ -378,7 +385,7 @@ function placeEnemies(g, rooms, diff) {
     });
     if (!enemyRooms.length) enemyRooms.push(rooms[0]);
 
-    const BOSS_TIERS = new Set([11, 15, 16, 17]);
+    const BOSS_TIERS = new Set([11, 15, 16, 17, 18]);
 
     // Place the guaranteed elite first, in the farthest room
     if (guaranteedTier >= 0 && enemyRooms.length) {
@@ -503,7 +510,7 @@ function generateLevel(levelIndex, totalLevels, endless) {
     const g = makeGrid(w, h);
     const rooms = [], pairs = [];
 
-    const depth = w < 24 ? 2 : w < 30 ? 3 : 4;
+    const depth = w < 24 ? 3 : w < 30 ? 4 : 5; // bumped up to guarantee more rooms
     bsp({ x: 1, y: 1, w: w - 2, h: h - 2 }, depth, rooms, pairs);
 
     if (!rooms.length) {
@@ -531,13 +538,20 @@ function generateLevel(levelIndex, totalLevels, endless) {
     // Flood-fill from room 0's center; any open tile not reached becomes a wall.
     {
         let sx = Math.floor(rooms[0].cx), sy = Math.floor(rooms[0].cy);
-        // Ensure start tile is actually open (detail may have landed on center)
+        // Ensure start tile is actually open; search widening rings then full grid as fallback
         if (g[sy][sx] !== 0) {
-            outer: for (let dy = -2; dy <= 2; dy++)
-                for (let dx = -2; dx <= 2; dx++)
+            let found = false;
+            outer: for (let dy = -3; dy <= 3; dy++)
+                for (let dx = -3; dx <= 3; dx++)
                     if (inBounds(g, sx + dx, sy + dy) && g[sy + dy][sx + dx] === 0) {
-                        sx += dx; sy += dy; break outer;
+                        sx += dx; sy += dy; found = true; break outer;
                     }
+            // Full-grid fallback — prevents catastrophic all-tile-sealed case
+            if (!found) {
+                outer2: for (let ry = 1; ry < g.length - 1; ry++)
+                    for (let rx = 1; rx < g[ry].length - 1; rx++)
+                        if (g[ry][rx] === 0) { sx = rx; sy = ry; break outer2; }
+            }
         }
         const reachable = floodFillReachable(g, sx, sy);
         for (let ry = 0; ry < g.length; ry++)
@@ -550,11 +564,15 @@ function generateLevel(levelIndex, totalLevels, endless) {
     for (let c = 0; c < w; c++) { g[0][c] = 1; g[h - 1][c] = 1; }
     for (let r = 0; r < h; r++) { g[r][0] = 1; g[r][w - 1] = 1; }
 
-    // Place map chests for endless mode (scale: 1 chest for first ~10 levels, grows gradually)
-    if (endless) {
-        const chestBase = Math.floor(1 + levelIndex / 5);
-        const chestCount = chestBase + rng(0, Math.max(1, Math.floor(chestBase * 0.5)));
-        placeChests(g, rooms, chestCount);
+    // Place map chests for endless mode — none until level 4, slow ramp through level 10.
+    // Ramp dials back in L14-22 (boss introduction zone) to slow loot pace during the danger window.
+    if (endless && levelIndex >= 3) {
+        const chestBase = Math.floor((levelIndex - 2) / 5); // 0 until L5, 1 at L7, 2 at L12...
+        if (chestBase > 0) {
+            const lootBrake = (levelIndex >= 13 && levelIndex <= 21) ? 1 : 0;
+            const chestCount = Math.max(1, chestBase - lootBrake + rng(0, Math.max(0, Math.floor(chestBase * 0.5) - lootBrake)));
+            placeChests(g, rooms, chestCount);
+        }
     }
 
     // Place enemies first so we can find a spawn with no line-of-sight to them
@@ -583,33 +601,58 @@ function generateLevel(levelIndex, totalLevels, endless) {
     return g;
 }
 
-function generateLootLevel(numPlayers) {
-    const W = 14, H = 10;
-    const g = [];
-    for (let r = 0; r < H; r++) {
-        g.push([]);
-        for (let c = 0; c < W; c++) {
-            g[r].push((r === 0 || r === H-1 || c === 0 || c === W-1) ? 1 : 0);
+function generateLootLevel(numPlayers, levelNumber = 1) {
+    const W = 18, H = 12;
+
+    // Border walls, open interior
+    const g = Array.from({ length: H }, (_, r) =>
+        Array.from({ length: W }, (_, c) =>
+            (r === 0 || r === H - 1 || c === 0 || c === W - 1) ? 1 : 0
+        )
+    );
+
+    // 2×2 pillars — fully symmetric: 2 rows from top/bottom interior, 3 cols from side walls.
+    // Top centers at row 2.5, bottom centers at row 8.5 → both 3.5 from map center row 5.5.
+    [[2, 3], [2, W - 5], [H - 4, 3], [H - 4, W - 5]].forEach(([pr, pc]) => {
+        g[pr][pc] = g[pr][pc + 1] = g[pr + 1][pc] = g[pr + 1][pc + 1] = 1;
+    });
+
+    // Hollow 3×3 altar dead-center
+    const ar = Math.floor(H / 2) - 1, ac = Math.floor(W / 2) - 1;
+    for (let dr = 0; dr <= 2; dr++) {
+        for (let dc = 0; dc <= 2; dc++) {
+            if (dr === 0 || dr === 2 || dc === 0 || dc === 2) g[ar + dr][ac + dc] = 1;
         }
     }
-    // Spawn at top-left area
-    g[2][2] = SPAWN_VAL;
 
-    // Place chests: 3 base + 1 per player, random open cells
-    const chestCount = 3 + Math.min(numPlayers, 6);
+    // Spawn top-left
+    g[1][1] = SPAWN_VAL;
+
+    // Continue zone: centered directly below the altar — symmetric left-right,
+    // clear of all pillars (nearest pillar edge is 3+ tiles away), 1.5 tiles from bottom border.
+    const continueCol = Math.floor(W / 2);  // col 9 = altar center column
+    const continueRow = H - 3;              // row 9
+
+    // Chest positions — altar flanks, pillar inner faces, perimeter alcoves
+    const chestSlots = [
+        [ar + 1, ac - 2], [ar + 1, ac + 4],   // altar left/right flanks
+        [ar - 1, ac + 1], [ar + 3, ac + 1],   // altar top/bottom flanks
+        [2,      6],      [2,      W - 7],     // inner face of top pillars
+        [H - 4,  6],      [H - 4,  W - 7],    // inner face of bottom pillars
+        [1,      Math.floor(W / 2)],           // top-center
+        [Math.floor(H / 2), 1],                // left-center
+        [H - 2,  3],      [H - 2,  W - 4],    // bottom corners (clear of zone)
+    ];
+
+    const targetChests = 4 + Math.min(numPlayers, 4) + Math.floor(Math.min(levelNumber / 5, 4));
     let placed = 0;
-    for (let tries = 0; tries < 200 && placed < chestCount; tries++) {
-        const cr = 1 + Math.floor(Math.random() * (H - 2));
-        const cc = 1 + Math.floor(Math.random() * (W - 2));
-        if (g[cr][cc] === 0) {
+    for (const [cr, cc] of chestSlots) {
+        if (placed >= targetChests) break;
+        if (cr > 0 && cr < H - 1 && cc > 0 && cc < W - 1 && g[cr][cc] === 0) {
             g[cr][cc] = CHEST_TILE;
             placed++;
         }
     }
-
-    // Continue zone position (bottom-right area) — just an open cell, zone tracked separately
-    const continueCol = W - 3;
-    const continueRow = H - 3;
 
     return { grid: g, continueCol, continueRow };
 }

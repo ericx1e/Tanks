@@ -169,7 +169,7 @@ let engineerRallyTimer = 0;
 
 // Manual key state — clears on blur so keys never get stuck
 const keysHeld = {};
-const isLobbyPanelOpen = () => !document.getElementById('lobby-controls')?.classList.contains('is-hidden');
+const isLobbyPanelOpen = () => !window.tankGameActive;
 window.addEventListener('keydown', e => { if (!isLobbyPanelOpen()) keysHeld[e.code] = true; });
 window.addEventListener('keyup', e => { delete keysHeld[e.code]; });
 function clearAllInput() {
@@ -188,7 +188,8 @@ window.addEventListener('mouseup', e => {
     }
 });
 const playerInterpBuf = {}; // id -> [{x, y, angle, turretAngle, t}, ...]
-const INTERP_DELAY_MS = 50;
+const _smoothPos = {};      // id -> {x, y} — persists across tick resets, drives exponential smoothing
+const INTERP_DELAY_MS = 80;
 let bulletState = {}; // id -> {x, y, angle, speed, receivedAt}
 let predictedBullets = []; // client-side predicted bullets fired by local player (before server echo)
 
@@ -272,8 +273,18 @@ socket.on('tick', (data) => {
             _lastLocalTickMs = now;
         } else {
             if (!playerInterpBuf[id]) playerInterpBuf[id] = [];
-            playerInterpBuf[id].push({ x: p.x, y: p.y, angle: p.angle, turretAngle: p.turretAngle || 0, t: now });
-            if (playerInterpBuf[id].length > 20) playerInterpBuf[id].shift();
+            const buf = playerInterpBuf[id];
+            // If position jumped >2.5 tiles since last snapshot (wall push, spawn, correction),
+            // clear the buffer so we snap immediately instead of sliding across the gap.
+            if (buf.length > 0) {
+                const last = buf[buf.length - 1];
+                if (Math.hypot(p.x - last.x, p.y - last.y) > TILE_SIZE * 2.5) {
+                    buf.length = 0;
+                    delete _smoothPos[id]; // snap immediately on teleport/respawn
+                }
+            }
+            buf.push({ x: p.x, y: p.y, angle: p.angle, turretAngle: p.turretAngle || 0, t: now });
+            if (buf.length > 20) buf.shift();
         }
     }
     for (const id of Object.keys(playerInterpBuf)) {
@@ -292,7 +303,7 @@ socket.on('tick', (data) => {
         skipKillDetection = false;
 
         const buffNames = {
-            speed: 'SPEED', maxBullets: 'FIRE RATE', bulletSpeed: 'BULLET SPD',
+            speed: 'SPEED', maxBullets: 'MAX BULLETS', bulletSpeed: 'BULLET SPD',
             bulletBounces: 'BOUNCES', shield: 'SHIELD', multiShot: 'MULTISHOT',
             visionRange: 'VISION', piercing: 'PIERCE', autoTurret: 'TURRET',
             explosive: 'EXPLODE', homing: 'HOMING', regen: 'REGEN',
@@ -350,8 +361,14 @@ socket.on('updateLevel', (data) => {
 
 socket.on('explosion', (data) => {
     createExplosion(data.x, data.y, data.z, data.size, data.color, data.effect)
-    if (data.size > BULLET_SIZE + 1) {
-        triggerScreenShake(data.size / 12, Math.min(8, Math.round(data.size / 7)));
+    if (data.size > BULLET_SIZE + 1 && myTank) {
+        const dist = Math.hypot(data.x - myTank.x, data.y - myTank.y);
+        const falloff = Math.max(0, 1 - dist / (TILE_SIZE * 12));
+        const rawIntensity = (data.size / 12) * falloff;
+        // Only apply shake if stronger than what's already running (prevents constant churn)
+        if (rawIntensity > shakeIntensity) {
+            triggerScreenShake(rawIntensity, Math.min(6, Math.round(data.size / 9)));
+        }
     }
     // explosions.push({
     //     x: data.x,
@@ -481,6 +498,7 @@ async function setup() {
     cnv.elt.addEventListener('contextmenu', e => e.preventDefault());
 
     pixelDensity(1);
+    window.setGamePixelDensity = (d) => pixelDensity(d);
 
     try {
         font = await loadFont('assets/Roboto-Regular.ttf');
@@ -500,6 +518,37 @@ async function setup() {
 }
 
 let menuAngle = 0; // start screen animation phase
+let startBullets = null; // lazy-initialized bouncing bullets for start screen
+let startMazeWalls = null; // pre-built wall list for start screen 3D bg
+
+function buildStartMaze() {
+    // A compact tank-game-style maze, 15×11 tiles
+    const pattern = [
+        "###############",
+        "#   #     #   #",
+        "# # ## ## # # #",
+        "#   # # # #   #",
+        "### # # # ### #",
+        "#     # #     #",
+        "# ### # ### # #",
+        "#   # # # #   #",
+        "# # ## ## # # #",
+        "#   #     #   #",
+        "###############",
+    ];
+    const rows = pattern.length, cols = pattern[0].length;
+    const offX = (cols - 1) / 2 * TILE_SIZE;
+    const offY = (rows - 1) / 2 * TILE_SIZE;
+    const walls = [];
+    for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+            if (pattern[r][c] === '#') {
+                walls.push({ x: c * TILE_SIZE - offX, y: r * TILE_SIZE - offY });
+            }
+        }
+    }
+    startMazeWalls = walls;
+}
 
 
 function draw() {
@@ -522,125 +571,244 @@ function draw() {
         return;
     }
 
-    // Start screen// Start screen
+    // Start screen
     if (!level || !level[0] || !lobbyCode) {
-        // Camera + bg
-        // camera(0, 0, 700, 0, 0, 0);
-        background(10, 12, 18);
+        background(8, 10, 16);
 
-        // --- 2D overlay (we won't worry about depth) ---
-        push();
-        resetMatrix();                 // switch to screen space
-        translate(0, height / 16);
+        // ── 3D maze background ──────────────────────────────────────────
+        if (!startMazeWalls) buildStartMaze();
 
-        // Subtle grid backdrop
+        // High overhead camera, slight slow orbit — maze stays small in bg
+        const ct = frameCount * 0.003;
+        const orbR = TILE_SIZE * 2;
+        const camH = TILE_SIZE * 22;
+        camera(
+            sin(ct) * orbR, -cos(ct) * orbR * 0.4,
+            camH,
+            0, 0, 0,
+            0, 1, 0
+        );
+
+        // Floor plane — matches bg color exactly, oversized so edges never show
         push();
-        const gridAlpha = 22;
-        stroke(30, 120, 255, gridAlpha);
-        strokeWeight(1);
+        translate(0, 0, -2);
+        fill(8, 10, 16);
+        noStroke();
+        plane(TILE_SIZE * 120, TILE_SIZE * 120);
+        pop();
+
+        // Floor grid lines — very faint, extended far so no visible cutoff
+        push();
+        translate(0, 0, -1);
+        stroke(18, 26, 42);
+        strokeWeight(0.5);
         noFill();
-        const gs = 28;                      // grid spacing
-        const cols = ceil(width / gs);
-        const rows = ceil(height / gs);
-        translate(-width / 2, -height / 2 - 2 * gs);
-        for (let i = 0; i <= cols; i++) {
-            line(i * gs, 0, i * gs, height);
-        }
-        for (let j = 0; j <= rows; j++) {
-            line(0, j * gs, width, j * gs);
+        const gn = 40, gs = TILE_SIZE;
+        for (let i = -gn; i <= gn; i++) {
+            line(i * gs, -gn * gs, 0, i * gs, gn * gs, 0);
+            line(-gn * gs, i * gs, 0, gn * gs, i * gs, 0);
         }
         pop();
 
-        // Radar center position (slightly above center)
-        translate(0, -40);
-
-        // Concentric pulsing rings
-        noFill();
-        for (let i = 1; i <= 4; i++) {
-            const r = 70 * i;
-            const a = 120 + 60 * sin(frameCount * 0.03 + i * 0.7);
-            stroke(110, 168, 255, a);
-            strokeWeight(2);
-            ellipse(0, 0, r * 2, r * 2, 50);
-
-        }
-
-        // Rotating sweep (soft pie slice)
-        push();
-        const sweepA = menuAngle;
-        const sweepW = PI / 6; // width of the sweep
+        // Walls — blue-grey steel to match site palette
         noStroke();
-        const sweepAlpha = 36;
-        fill(110, 168, 255, sweepAlpha);
-        beginShape();
-        vertex(0, 0);
-        // edge 1
-        for (let t = 0; t <= 1; t += 0.2) {
-            const a = sweepA - sweepW / 2 + t * sweepW;
-            const rr = 280;
-            vertex(rr * cos(a), rr * sin(a));
-        }
-        endShape(CLOSE);
-        pop();
-
-        // Orbiting dots
-        noStroke();
-        for (let i = 0; i < 6; i++) {
-            const a = 2.5 * menuAngle + (TWO_PI * i / 6);
-            const rr = 140 + 26 * sqrt(i) * sin(frameCount * 0.02 + i);
-            const x = rr * cos(a);
-            const y = rr * sin(a);
-            // glow
-            fill(255, 240, 180, 80);
-            circle(x, y, 16);
-            // core
-            fill(255, 240, 180, 200);
-            circle(x, y, 6);
-        }
-
-        // Title & UI chips
-        textFont(font);
-        textAlign(CENTER, CENTER);
-
-        // Title
-        fill(240);
-        noStroke();
-        textSize(width / 14);
-        text("TANK ARENA", 0, -height / 2 + 90);
-
-        // Chips
-        const chips = ["W / A / S / D — Move", "Mouse — Aim", "Click — Fire"];
-        const chipW = width * 0.45;
-        const chipH = height / 16;
-        const spacing = chipH * 1.2;
-        const startY = height / 2 - chipH * chips.length * 1.4;
-
-        textSize(width / 45);
-        for (let i = 0; i < chips.length; i++) {
-            const y = startY + i * spacing;
-            // chip bg
-            fill(20, 24, 32);
-            rectMode(CENTER);
-            rect(0, y, chipW, chipH, 12);
-            // border pulse
-            noFill();
-            stroke(110, 168, 255, 80 + 40 * sin(frameCount * 0.05 + i));
-            strokeWeight(2);
-            rect(0, y, chipW, chipH, 12);
-            // label
+        for (const w of startMazeWalls) {
             push();
-            translate(0, 0, 1);
+            translate(w.x, w.y, WALL_HEIGHT / 2 - 25);
+            fill(42, 62, 98);
+            box(TILE_SIZE, TILE_SIZE, WALL_HEIGHT);
+            pop();
+        }
+        // ── End 3D bg ───────────────────────────────────────────────────
+
+        // Clear depth buffer so 2D overlay always renders in front of 3D walls
+        drawingContext.clear(drawingContext.DEPTH_BUFFER_BIT);
+        const _hudZ = (height / 2) / Math.tan(Math.PI / 6);
+        camera(0, 0, _hudZ, 0, 0, 0, 0, 1, 0);
+
+        push();
+        resetMatrix(); // screen space — origin at canvas center
+
+        const bx = width / 2, by = height / 2; // half-extents
+
+        // === Lazy-init bouncing bullets ===
+        if (!startBullets) {
+            startBullets = [];
+            const specs = [
+                { a: 0.38, s: 4.8, c: [110, 168, 255] },
+                { a: 1.15, s: 3.4, c: [255, 215, 100] },
+                { a: 2.05, s: 5.2, c: [110, 168, 255] },
+                { a: 3.30, s: 4.1, c: [255, 215, 100] },
+                { a: 4.70, s: 3.8, c: [80, 220, 190] },
+                { a: 5.50, s: 4.5, c: [110, 168, 255] },
+            ];
+            for (const sp of specs) {
+                startBullets.push({
+                    x: random(-bx * 0.5, bx * 0.5),
+                    y: random(-by * 0.5, by * 0.5),
+                    vx: cos(sp.a) * sp.s,
+                    vy: sin(sp.a) * sp.s,
+                    c: sp.c,
+                    trail: [],
+                    flashes: [], // [{x,y,age}] bounce flash sparks
+                });
+            }
+        }
+
+        // === Update + draw bullets ===
+        const margin = 18;
+        const lx = bx - margin, ly = by - margin;
+
+        for (const b of startBullets) {
+            b.x += b.vx;
+            b.y += b.vy;
+
+            // Bounce off edges, spawn flash sparks
+            let bounced = false;
+            if (b.x > lx) { b.vx = -abs(b.vx); b.x = lx; bounced = true; }
+            if (b.x < -lx) { b.vx = abs(b.vx); b.x = -lx; bounced = true; }
+            if (b.y > ly) { b.vy = -abs(b.vy); b.y = ly; bounced = true; }
+            if (b.y < -ly) { b.vy = abs(b.vy); b.y = -ly; bounced = true; }
+
+            if (bounced) {
+                for (let s = 0; s < 5; s++) {
+                    const sa = random(TWO_PI);
+                    b.flashes.push({ x: b.x, y: b.y, vx: cos(sa) * random(1, 3), vy: sin(sa) * random(1, 3), age: 0 });
+                }
+            }
+
+            // Store trail point
+            b.trail.push({ x: b.x, y: b.y });
+            if (b.trail.length > 48) b.trail.shift();
+
+            // Draw trail — fading, tapered line
+            noFill();
+            for (let j = 1; j < b.trail.length; j++) {
+                const t = j / b.trail.length;
+                stroke(b.c[0], b.c[1], b.c[2], t * 180);
+                strokeWeight(t * 2.5);
+                line(b.trail[j - 1].x, b.trail[j - 1].y, b.trail[j].x, b.trail[j].y);
+            }
+
+            // Draw bullet glow + core
             noStroke();
-            fill(220);
-            text(chips[i], 0, y);
+            fill(b.c[0], b.c[1], b.c[2], 50);
+            circle(b.x, b.y, 18);
+            fill(b.c[0], b.c[1], b.c[2], 230);
+            circle(b.x, b.y, 6);
+
+            // Update + draw bounce sparks
+            b.flashes = b.flashes.filter(s => s.age < 14);
+            for (const s of b.flashes) {
+                s.x += s.vx; s.y += s.vy; s.age++;
+                const fa = map(s.age, 0, 14, 200, 0);
+                fill(b.c[0], b.c[1], b.c[2], fa);
+                circle(s.x, s.y, map(s.age, 0, 14, 5, 1));
+            }
+        }
+
+        // === Targeting reticle, center ===
+        push();
+        translate(0, 8); // slight vertical nudge to visual center
+        const rc = 44; // reticle circle radius
+        const gap = 12; // gap in crosshair lines
+        const crossLen = 22;
+        const ra = 160 + 40 * sin(frameCount * 0.05);
+
+        noFill();
+        stroke(110, 168, 255, ra);
+        strokeWeight(1.5);
+        ellipse(0, 0, rc * 2, rc * 2, 64);
+
+        // Inner tick circle
+        stroke(110, 168, 255, ra * 0.5);
+        strokeWeight(1);
+        ellipse(0, 0, rc * 0.55 * 2, rc * 0.55 * 2, 32);
+
+        // Crosshair lines (4 directions, with gap)
+        stroke(110, 168, 255, ra);
+        strokeWeight(1.5);
+        line(gap, 0, gap + crossLen, 0);
+        line(-gap, 0, -gap - crossLen, 0);
+        line(0, gap, 0, gap + crossLen);
+        line(0, -gap, 0, -gap - crossLen);
+
+        // Corner brackets on reticle circle at 45°
+        strokeWeight(2);
+        const bkR = rc + 8;
+        for (let q = 0; q < 4; q++) {
+            const a = HALF_PI * q + PI / 4;
+            push();
+            rotate(a);
+            stroke(120, 180, 255, ra * 0.7);
+            line(bkR, -7, bkR, 0);
+            line(bkR, 0, bkR + 7, 0);
+            pop();
+        }
+        pop();
+
+        // === Title ===
+        if (font) textFont(font);
+        textAlign(CENTER, CENTER);
+        noStroke();
+
+        const titleSize = Math.min(width / 14, height * 0.11);
+        const titleY = -height * 0.30;
+        // Main title
+        textSize(titleSize);
+        fill(232, 240, 255);
+        text("TANK GAME", 0, titleY);
+
+        // Underline accent
+        const tw = textWidth("TANK GAME");
+        stroke(110, 168, 255, 180);
+        strokeWeight(2);
+        line(-tw / 2, titleY + titleSize * 0.55, tw / 2, titleY + titleSize * 0.55);
+        noStroke();
+
+        // Subtitle
+        textSize(width / 60);
+        fill(110, 145, 190, 145);
+        text("MULTIPLAYER  ·  RICOCHET  ·  FOG OF WAR", 0, titleY + titleSize * 0.55 + 20);
+
+        // === Control chips — bottom ===
+        const chips = [
+            { label: "WASD", sub: "Move" },
+            { label: "Mouse", sub: "Aim" },
+            { label: "Click", sub: "Fire" },
+        ];
+        const chipW = 120, chipH = 46, chipGap = 14;
+        const totalW = chips.length * chipW + (chips.length - 1) * chipGap;
+        const chipY = height * 0.32;
+
+        for (let i = 0; i < chips.length; i++) {
+            const cx = -totalW / 2 + i * (chipW + chipGap) + chipW / 2;
+            // bg
+            fill(12, 16, 26, 210);
+            noStroke();
+            rectMode(CENTER);
+            rect(cx, chipY, chipW, chipH, 9);
+            // border
+            noFill();
+            stroke(110, 168, 255, 55 + 25 * sin(frameCount * 0.04 + i));
+            strokeWeight(1.5);
+            rect(cx, chipY, chipW, chipH, 9);
+            // text
+            push();
+            translate(cx, chipY - 7, 1);
+            noStroke();
+            fill(210, 225, 255, 240);
+            textSize(width / 54);
+            text(chips[i].label, 0, 0);
+            fill(100, 130, 175, 190);
+            textSize(width / 80);
+            text(chips[i].sub, 0, 15);
             pop();
         }
 
-        pop(); // end overlay
+        pop(); // end screen space
 
-        // animate
-        menuAngle += 0.02;
-
+        menuAngle += 0.018;
         return;
     }
 
@@ -864,7 +1032,7 @@ function draw() {
     if (frameCount < 300 || frameCount % 600 < 120) {
         const VH = 630 * Math.tan(Math.PI / 6);
         const VW = VH * (width / height);
-        drawHintText("F: fog toggle | V: vision quality", -VW + 20, -VH + 20);
+        drawHintText("F: fullscreen | V: vision quality", -VW + 20, -VH + 20);
     }
 
     // camera(camX, camY, camZ, targetX, targetY, targetZ, 0, 1, 0);
@@ -969,6 +1137,7 @@ function draw() {
         drawKDABoard();
     } else if (gameMode === 'lobby') {
         drawClassInfoPanel();
+        drawBuffHUD();
     }
 
     // Spectate overlay
@@ -1689,8 +1858,9 @@ function keyPressed() {
         showFps = !showFps;
     }
     if (key === 'F' || key === 'f') {
-        // toggleFogOfWar();
-        isFogOfWar = !isFogOfWar;
+        const mount = document.getElementById('game-mount');
+        if (!document.fullscreenElement) mount?.requestFullscreen().catch(() => { });
+        else document.exitFullscreen();
     }
     if (key === 'V' || key === 'v') {
         // alternate between fine and coarse ray resolution
@@ -1767,17 +1937,50 @@ function getBulletDisplayPos(index) {
     };
 }
 
-// Apply dead-reckoning (local player) and entity interpolation (remote players)
+// Catmull-Rom spline interpolation — smooth curve through control points with no lag.
+// Eliminates direction-change kinks that linear interpolation produces at each snapshot boundary.
+function catmullRom(p0, p1, p2, p3, t) {
+    const t2 = t * t, t3 = t2 * t;
+    return 0.5 * (2*p1 + (-p0+p2)*t + (2*p0-5*p1+4*p2-p3)*t2 + (-p0+3*p1-3*p2+p3)*t3);
+}
+
+// Apply client-side physics prediction (local player) and entity interpolation (remote players)
 function applySmoothing() {
-    // Local player: extrapolate from last server tick using server velocity.
-    // This eliminates prediction/reconcile drift — tank always tracks server authority,
-    // smoothed by physics velocity between 30fps ticks.
+    // Local player: client-side physics prediction (CSP).
+    // Simulate the exact same physics the server runs, stepping forward from the last
+    // authoritative server snapshot using current key state. This gives zero perceived
+    // input lag and correct deceleration on key release — no overshoot snapback.
     if (_lastLocalTickMs > 0 && players[socket.id] && !players[socket.id].isDead) {
         const sp = players[socket.id];
-        const msSince = Math.min(performance.now() - _lastLocalTickMs, 80); // cap extrapolation at 80ms
-        const steps = msSince / (1000 / 60);
-        sp.x = _serverTickX + _serverTickVx * steps;
-        sp.y = _serverTickY + _serverTickVy * steps;
+        const msSince = Math.min(performance.now() - _lastLocalTickMs, 83); // cap at ~5 ticks
+        const intSteps = Math.min(Math.round(msSince / (1000 / 60)), 6);
+
+        let px = _serverTickX, py = _serverTickY;
+        let pvx = _serverTickVx, pvy = _serverTickVy;
+        const maxSpd = sp.max_speed || MAX_SPEED;
+        const panelOpen = isLobbyPanelOpen();
+        const kw = !panelOpen && !!keysHeld['KeyW'];
+        const ks = !panelOpen && !!keysHeld['KeyS'];
+        const ka = !panelOpen && !!keysHeld['KeyA'];
+        const kd = !panelOpen && !!keysHeld['KeyD'];
+
+        for (let i = 0; i < intSteps; i++) {
+            if (kw) pvy -= ACCELERATION;
+            if (ks) pvy += ACCELERATION;
+            if (ka) pvx -= ACCELERATION;
+            if (kd) pvx += ACCELERATION;
+            const spd = Math.sqrt(pvx * pvx + pvy * pvy);
+            if (spd > maxSpd) { pvx = pvx / spd * maxSpd; pvy = pvy / spd * maxSpd; }
+            pvx *= (1 - FRICTION);
+            pvy *= (1 - FRICTION);
+            // Wall-aware step (mirrors server's x/y independence)
+            const nx = px + pvx, ny = py + pvy;
+            if (!clientCollidesWithWall(nx, py)) px = nx; else pvx = 0;
+            if (!clientCollidesWithWall(px, ny)) py = ny; else pvy = 0;
+        }
+
+        sp.x = px;
+        sp.y = py;
         if (laserChanneling && sp.selectedClass === 'laser') {
             // Maintain angle client-side so server tick snaps don't override it
             if (localLaserTurretAngle === null) localLaserTurretAngle = sp.turretAngle;
@@ -1790,7 +1993,9 @@ function applySmoothing() {
         }
     }
 
-    // Remote players/bots: interpolate between buffered snapshots, extrapolate when ahead
+    // Remote players/bots: Catmull-Rom interpolation through buffered snapshots.
+    // Produces smooth curves through control points — no kinks at direction changes,
+    // no added lag (unlike exponential smoothing).
     const renderTime = performance.now() - INTERP_DELAY_MS;
     for (const [id, buf] of Object.entries(playerInterpBuf)) {
         if (!players[id] || buf.length < 2) continue;
@@ -1798,33 +2003,48 @@ function applySmoothing() {
         while (i > 0 && buf[i].t > renderTime) i--;
         const before = buf[i], after = buf[i + 1];
 
+        let targetX, targetY, targetAngle, targetTurret;
         if (renderTime > after.t) {
             // Buffer exhausted (server spike) — dead-reckoning from last two snapshots
             const dt = after.t - before.t;
-            const elapsed = Math.min(renderTime - after.t, 200); // cap at 200ms
+            const elapsed = Math.min(renderTime - after.t, 80);
             if (dt > 0) {
                 const vx = (after.x - before.x) / dt;
                 const vy = (after.y - before.y) / dt;
-                players[id].x = after.x + vx * elapsed;
-                players[id].y = after.y + vy * elapsed;
+                const dx = vx * elapsed, dy = vy * elapsed;
+                const maxDisp = TILE_SIZE * 1.5;
+                const disp = Math.hypot(dx, dy);
+                const scale = disp > maxDisp ? maxDisp / disp : 1;
+                targetX = after.x + dx * scale;
+                targetY = after.y + dy * scale;
                 const va = clientLerpAngle(before.angle, after.angle, 1) - before.angle;
-                players[id].angle = after.angle + (va / dt) * elapsed;
+                targetAngle = after.angle + (va / dt) * elapsed;
                 const vta = clientLerpAngle(before.turretAngle, after.turretAngle, 1) - before.turretAngle;
-                players[id].turretAngle = after.turretAngle + (vta / dt) * elapsed;
+                targetTurret = after.turretAngle + (vta / dt) * elapsed;
             } else {
-                players[id].x = after.x;
-                players[id].y = after.y;
-                players[id].angle = after.angle;
-                players[id].turretAngle = after.turretAngle;
+                targetX = after.x; targetY = after.y;
+                targetAngle = after.angle; targetTurret = after.turretAngle;
             }
         } else {
             const span = after.t - before.t;
             const t = span > 0 ? Math.max(0, Math.min(1, (renderTime - before.t) / span)) : 1;
-            players[id].x = before.x + (after.x - before.x) * t;
-            players[id].y = before.y + (after.y - before.y) * t;
-            players[id].angle = clientLerpAngle(before.angle, after.angle, t);
-            players[id].turretAngle = clientLerpAngle(before.turretAngle, after.turretAngle, t);
+            // Catmull-Rom when surrounding control points exist, else linear fallback
+            if (i > 0 && i + 2 < buf.length) {
+                const p0 = buf[i - 1], p3 = buf[i + 2];
+                targetX = catmullRom(p0.x, before.x, after.x, p3.x, t);
+                targetY = catmullRom(p0.y, before.y, after.y, p3.y, t);
+            } else {
+                targetX = before.x + (after.x - before.x) * t;
+                targetY = before.y + (after.y - before.y) * t;
+            }
+            targetAngle = clientLerpAngle(before.angle, after.angle, t);
+            targetTurret = clientLerpAngle(before.turretAngle, after.turretAngle, t);
         }
+
+        players[id].x = targetX;
+        players[id].y = targetY;
+        players[id].angle = targetAngle;
+        players[id].turretAngle = targetTurret;
 
         // Rate-limit turret angle for tier 13 (tracking laser) — cap at server lerp speed
         const p = players[id];
@@ -1930,7 +2150,7 @@ function drawTracks() {
 function drawTank(tank, isSelf) {
     const size = PLAYER_SIZE;
     const _isAlly = !tank.isAI && tank.id !== socket.id && gameMode !== 'arena';
-    const cloakAlpha = (tank.tier === 8 && tank.cloaked) ? 10 : (tank.tier === 17 && tank.wraithStealthed) ? 15 : (tank.ghostCloaked && tank.id !== socket.id && !_isAlly) ? 0 : (tank.ghostCloaked) ? 40 : 255;
+    const cloakAlpha = ((tank.tier === 8 || tank.tier === 16) && tank.cloaked) ? 10 : (tank.tier === 17 && tank.wraithStealthed) ? 15 : (tank.ghostCloaked && tank.id !== socket.id && !_isAlly) ? 0 : (tank.ghostCloaked) ? 40 : 255;
     // Grace period ring: draw a pulsing aura in world space
     if (tank.spawnGrace > 0) {
         const pulse = 0.7 + 0.3 * Math.sin(frameCount * 0.25);
@@ -1940,6 +2160,23 @@ function drawTank(tank, isSelf) {
         fill(255, 240, 80, Math.round(pulse * 140));
         torus(size * 1.6, size * 0.25);
         pop();
+    }
+    // Commander buff indicator — 3 gold spheres orbiting buffed allies
+    if (tank.isAI && !tank.isDead && (tank.coordBuff || 0) > 0) {
+        const buffFade = Math.min(1, tank.coordBuff / 60);
+        const pulse = 0.55 + 0.45 * Math.sin(frameCount * 0.2);
+        const ringR = size * 2.0;
+        const spinA = frameCount * 0.05;
+        noStroke();
+        for (let s = 0; s < 3; s++) {
+            const a = spinA + s * (TWO_PI / 3);
+            push();
+            translate(tank.x + Math.cos(a) * ringR, tank.y + Math.sin(a) * ringR, size * 1.5);
+            noStroke();
+            fill(255, 210, 40, Math.round(240 * pulse * buffFade));
+            sphere(size * 0.35);
+            pop();
+        }
     }
     push();
     // Tank base (lower box)
@@ -1967,6 +2204,9 @@ function drawTank(tank, isSelf) {
             } else if (tank.tier === 17) {
                 box(3.0 * size, 2.0 * size, size * 1.1);  // Wraith hull
                 box(2.8 * size, 2.4 * size, size * 0.7);  // Wide treads
+            } else if (tank.tier === 18) {
+                box(2.8 * size, 2.8 * size, size * 1.0);  // Commander — compact boxy hull
+                box(2.6 * size, 3.1 * size, size * 0.7);  // Wide support treads
             } else {
                 box(2 * size, 1.5 * size, size); // Tank base dimensions
                 box(1.8 * size, 1.7 * size, size * 0.8); // Treads
@@ -1983,6 +2223,8 @@ function drawTank(tank, isSelf) {
                 box(1.3 * size, 1.3 * size, size * 1.1); // Phantom turret
             } else if (tank.tier === 17) {
                 box(1.4 * size, 1.4 * size, size * 1.0); // Wraith turret
+            } else if (tank.tier === 18) {
+                box(1.6 * size, 1.6 * size, size * 0.9); // Commander — wide low turret
             } else {
                 box(size, 1.15 * size, size); // Slightly smaller box
             }
@@ -2039,6 +2281,10 @@ function drawTank(tank, isSelf) {
                 case 16: // Phantom Sniper — extra-long barrel
                     drawBarrel(0, 2.0, 0.8);
                     break;
+                case 18: // Commander — short twin barrels
+                    drawBarrel(size / 3.5);
+                    drawBarrel(-size / 3.5);
+                    break;
                 case 5:
                 case 13: // Laser tanks — wide emitter barrel
                     drawLaserBarrel(0);
@@ -2094,24 +2340,48 @@ function drawTank(tank, isSelf) {
     }
     pop();
 
-    // Phantom Sniper charging — laser sight warning line
-    if (tank.isAI && !tank.isDead && tank.tier === 16 && tank.sniperCharging) {
-        const chargeProgress = 1 - (tank.sniperChargeTimer || 0) / 70;
-        const pulse = 0.5 + 0.5 * Math.sin(frameCount * 0.4);
-        const sightLen = TILE_SIZE * 20;
-        const tx = tank.x + Math.cos(tank.turretAngle) * sightLen;
-        const ty = tank.y + Math.sin(tank.turretAngle) * sightLen;
+    // Phantom Sniper — charging laser sight (tracks player, slows to a lock before firing)
+    if (tank.isAI && !tank.isDead && tank.tier === 16 && tank.sniperPhase === 'charge') {
+        const CHARGE_FRAMES = 90;
+        const chargeTimer = tank.sniperChargeTimer ?? CHARGE_FRAMES;
+        const chargeProgress = 1 - chargeTimer / CHARGE_FRAMES; // 0=just started, 1=about to fire
+        const pulse = 0.5 + 0.5 * Math.sin(frameCount * 0.35);
+        const sightLen = TILE_SIZE * 35;
+
+        // Laser brightens and thickens as charge completes
+        const alpha = (80 + chargeProgress * 160) * (0.75 + 0.25 * pulse);
+        const thickness = 0.5 + chargeProgress * 3.0;
+
+        const a = tank.turretAngle;
+        const tx = tank.x + Math.cos(a) * sightLen;
+        const ty = tank.y + Math.sin(a) * sightLen;
         push();
-        strokeWeight(2 + chargeProgress * 3);
-        stroke(255, 30, 30, 120 + 120 * pulse);
-        noFill();
-        line(tank.x, tank.y, PLAYER_SIZE * 2, tx, ty, PLAYER_SIZE * 2);
-        // Charging glow circle at tank
         noStroke();
-        fill(255, 50, 50, 60 + 80 * pulse);
-        translate(tank.x, tank.y, PLAYER_SIZE * 2);
-        sphere(PLAYER_SIZE * (0.8 + chargeProgress * 1.2));
+        translate((tank.x + tx) / 2, (tank.y + ty) / 2, PLAYER_SIZE * 1.5);
+        rotateZ(a + HALF_PI);
+        fill(255, 30 + chargeProgress * 20, 30, alpha);
+        cylinder(thickness, sightLen);
+        // Endpoint glow dot grows with charge
+        translate(0, sightLen / 2, 0);
+        fill(255, 80, 80, alpha * pulse);
+        sphere(PLAYER_SIZE * (0.15 + chargeProgress * 0.55));
         pop();
+
+        // Remaining shot pips — small red orbs near barrel tip
+        const shotsLeft = tank.sniperShotsLeft ?? 3;
+        const tipX = tank.x + Math.cos(a) * PLAYER_SIZE * 3.5;
+        const tipY = tank.y + Math.sin(a) * PLAYER_SIZE * 3.5;
+        for (let i = 0; i < shotsLeft; i++) {
+            const offset = (i - (shotsLeft - 1) / 2) * PLAYER_SIZE * 1.2;
+            const perpX = Math.cos(a + HALF_PI) * offset;
+            const perpY = Math.sin(a + HALF_PI) * offset;
+            push();
+            noStroke();
+            translate(tipX + perpX, tipY + perpY, PLAYER_SIZE * 2.5);
+            fill(255, 60, 60, 200);
+            sphere(PLAYER_SIZE * 0.22);
+            pop();
+        }
     }
 
     // Sovereign orbiting shield walls
@@ -2135,6 +2405,68 @@ function drawTank(tank, isSelf) {
             stroke(140, 200, 255, 240);
             strokeWeight(2);
             box(PLAYER_SIZE * 2.8, PLAYER_SIZE * 0.2, PLAYER_SIZE * 2.2);
+            pop();
+        }
+    }
+
+    // Commander nullfield — 6 spinning golden panels
+    if (tank.isAI && !tank.isDead && tank.tier === 18) {
+        const nullRadius = TILE_SIZE * 2;
+        const nullAngle = tank.nullAngle || 0;
+        const auraGlow = tank.auraActive ? (0.5 + 0.5 * Math.sin(frameCount * 0.15)) : 0;
+        for (let r = 0; r < 6; r++) {
+            const a = nullAngle + r * Math.PI / 3;
+            const ox = Math.cos(a) * nullRadius;
+            const oy = Math.sin(a) * nullRadius;
+            push();
+            translate(tank.x + ox, tank.y + oy, PLAYER_SIZE * 1.4);
+            rotateZ(a + HALF_PI);
+            // Glow backing
+            fill(220, 175, 50, 50 + 35 * auraGlow);
+            noStroke();
+            box(PLAYER_SIZE * 3.5, PLAYER_SIZE * 0.4, PLAYER_SIZE * 2.4);
+            // Bright face
+            fill(255, 215, 80, 200 + 55 * auraGlow);
+            stroke(255, 235, 120, 230);
+            strokeWeight(1.5);
+            box(PLAYER_SIZE * 3.5, PLAYER_SIZE * 0.2, PLAYER_SIZE * 2.0);
+            pop();
+        }
+        // Slow field — concentric rings shrinking inward, showing bullet drag zone
+        {
+            const slowR = TILE_SIZE * 4;
+            const numRings = 4;
+            push();
+            translate(tank.x, tank.y, 2);
+            noFill();
+            for (let ri = 0; ri < numRings; ri++) {
+                // Each ring starts at the edge and travels inward on a staggered phase
+                const phase = ((frameCount * 0.012 + ri / numRings) % 1);
+                const r = slowR * (1 - phase);          // shrinks from edge → center
+                const alpha = phase < 0.15 ? phase / 0.15   // fade in
+                    : phase > 0.75 ? (1 - phase) / 0.25  // fade out
+                        : 1;
+                stroke(220, 175, 50, Math.round(110 * alpha));
+                strokeWeight(1.5 + (1 - phase) * 1.5);  // thicker at edge
+                ellipse(0, 0, r * 2, r * 2, 48);
+            }
+            // Solid outer boundary ring
+            stroke(220, 175, 50, 55);
+            strokeWeight(1);
+            ellipse(0, 0, slowR * 2, slowR * 2, 48);
+            pop();
+        }
+        // Aura pulse ring when active
+        if (tank.auraActive) {
+            push();
+            translate(tank.x, tank.y, PLAYER_SIZE * 0.5);
+            noFill();
+            stroke(255, 220, 80, 60 + 50 * auraGlow);
+            strokeWeight(3);
+            ellipse(0, 0, TILE_SIZE * 18, TILE_SIZE * 18, 48);
+            stroke(255, 200, 50, 30 + 25 * auraGlow);
+            strokeWeight(1.5);
+            ellipse(0, 0, TILE_SIZE * 14, TILE_SIZE * 14, 36);
             pop();
         }
     }
@@ -2426,40 +2758,63 @@ function drawTank(tank, isSelf) {
 
 function drawChest(tank) {
     const size = TILE_SIZE / 2;
-    stroke(0);
-    strokeWeight(3);
-    fill(120, 50, 0);
-    box(1.5 * size + 2, size + 2, size + 1);
+    const bob = Math.sin(frameCount * 0.06 + tank.x * 0.01) * 2;
 
     push();
-    translate(0, 0, size / 2)
-    rotateZ(PI / 2);
+    translate(0, 0, bob);
 
+    // Glow ring on floor
     push();
-    const angle = tank.angle + PI / 2;
-    const cameraPos = new p5.Vector(camX, camY, camZ); // Camera position
-    const barrelX = tank.x;
-    const barrelY = tank.y;
-    const barrelZ = tank.z + size / 2; // Height of the barrel
-    const barrelPos = new p5.Vector(barrelX, barrelY, barrelZ);
-    let viewDirection = p5.Vector.sub(cameraPos, barrelPos).normalize(); // Direction from bullet to camera
-    // Offset the outline behind the bullet
-    let offset = viewDirection.mult(-4);
-    rotateZ(-angle);
-    translate(offset.x, offset.y, offset.z); // Apply the offset
-    rotateZ(angle);
-
-    fill(0); // Semi-transparent black for the outline
-    cylinder(size / 2 + 1, 1.5 * size);
-
-    pop();
+    translate(0, 0, -size * 0.48 - bob);
     noStroke();
-    fill(130, 50, 10);
-    cylinder(size / 2, 1.5 * size);
+    const glowPulse = 0.5 + 0.5 * Math.sin(frameCount * 0.08);
+    fill(255, 200, 60, 40 + 30 * glowPulse);
+    circle(0, 0, size * 3.0);
+    fill(255, 220, 80, 20 + 15 * glowPulse);
+    circle(0, 0, size * 4.2);
     pop();
-    translate(0, 0.5 * size, size / 2);
-    fill(160, 100, 50);
-    box(size / 5, size / 5, size / 3);
+
+    // Chest body
+    noStroke();
+    fill(110, 65, 20);
+    box(1.5 * size, size, size * 0.7);
+
+    // Gold straps (horizontal bands)
+    fill(200, 160, 30);
+    push(); translate(0, 0, 0); box(1.52 * size, size * 0.12, size * 0.72); pop();
+    push(); translate(size * 0.48, 0, 0); box(size * 0.12, size * 1.02, size * 0.72); pop();
+    push(); translate(-size * 0.48, 0, 0); box(size * 0.12, size * 1.02, size * 0.72); pop();
+
+    // Chest lid (slightly tilted open, darker wood)
+    push();
+    translate(0, 0, size * 0.35);
+    fill(85, 48, 14);
+    box(1.5 * size, size, size * 0.32);
+    // Gold vertical straps on lid (matching body sides)
+    fill(200, 160, 30);
+    push(); translate(size * 0.48, 0, 0); box(size * 0.12, size * 1.02, size * 0.34); pop();
+    push(); translate(-size * 0.48, 0, 0); box(size * 0.12, size * 1.02, size * 0.34); pop();
+    pop();
+
+    // Gold clasp / lock in center
+    push();
+    translate(0, -size * 0.52, size * 0.05);
+    fill(220, 180, 40);
+    stroke(160, 120, 20);
+    strokeWeight(1);
+    box(size * 0.22, size * 0.06, size * 0.3);
+    pop();
+
+    // Shimmer gem on lock
+    push();
+    translate(0, -size * 0.53, size * 0.22);
+    noStroke();
+    const shimmer = 0.5 + 0.5 * Math.pow(Math.abs(Math.sin(frameCount * 0.04 + tank.y * 0.02)), 3);
+    fill(255, 200 + 55 * shimmer, 20 + 60 * shimmer, 200 + 55 * shimmer);
+    sphere(size * 0.1);
+    pop();
+
+    pop();
 }
 
 function drawLobbyZones() {
@@ -2659,6 +3014,72 @@ function drawExplosions() {
                 strokeWeight(1.5);
                 line(0, 0, cos(a) * ringR * 0.55, sin(a) * ringR * 0.55);
             }
+            pop();
+            continue;
+        }
+
+        if (explosion.effect === 'commander_ring') {
+            if (!explosion._hInit) {
+                explosion._hInit = true;
+                explosion._life = 50;
+                explosion._maxLife = 50;
+                explosion._ringR = explosion.size * 0.2;
+                explosion._maxRingR = explosion.size * 3.8;
+            }
+            explosion._life--;
+            if (explosion._life <= 0) { explosions.splice(i, 1); continue; }
+            const t = 1 - explosion._life / explosion._maxLife;
+            const alpha = explosion._life / explosion._maxLife;
+            const ringR = explosion._ringR + (explosion._maxRingR - explosion._ringR) * t;
+            push();
+            translate(explosion.x, explosion.y, explosion.z);
+            noStroke();
+            // Core flash
+            fill(255, 215, 80, 220 * (1 - t));
+            sphere(explosion.size * 0.6 * (1 - t));
+            // Primary expanding ring
+            noFill();
+            stroke(255, 200, 50, 255 * alpha);
+            strokeWeight(5 * alpha);
+            beginShape();
+            for (let a = 0; a <= TWO_PI; a += 0.15) vertex(cos(a) * ringR, sin(a) * ringR);
+            endShape(CLOSE);
+            // Secondary softer ring
+            stroke(255, 240, 140, 160 * alpha);
+            strokeWeight(2.5 * alpha);
+            beginShape();
+            for (let a = 0; a <= TWO_PI; a += 0.15) vertex(cos(a) * ringR * 0.6, sin(a) * ringR * 0.6);
+            endShape(CLOSE);
+            // 8 radial spokes
+            for (let r = 0; r < 8; r++) {
+                const a = (r / 8) * TWO_PI;
+                stroke(255, 220, 80, 200 * alpha);
+                strokeWeight(1.5);
+                line(0, 0, cos(a) * ringR * 0.52, sin(a) * ringR * 0.52);
+            }
+            pop();
+            continue;
+        }
+
+        if (explosion.effect === 'commander_buff') {
+            if (!explosion._hInit) {
+                explosion._hInit = true;
+                explosion._life = 30;
+                explosion._maxLife = 30;
+            }
+            explosion._life--;
+            if (explosion._life <= 0) { explosions.splice(i, 1); continue; }
+            const t = 1 - explosion._life / explosion._maxLife;
+            const alpha = explosion._life / explosion._maxLife;
+            push();
+            translate(explosion.x, explosion.y, explosion.z + PLAYER_SIZE * 2 * t);
+            noStroke();
+            fill(255, 215, 60, 200 * alpha);
+            sphere(PLAYER_SIZE * (0.5 + t * 1.2));
+            noFill();
+            stroke(255, 220, 80, 180 * alpha);
+            strokeWeight(2);
+            ellipse(0, 0, PLAYER_SIZE * (2 + t * 4), PLAYER_SIZE * (2 + t * 4), 24);
             pop();
             continue;
         }
@@ -3255,8 +3676,8 @@ function handleTankMovement() {
 function mousePressed() {
     if (!lobbyCode) return;
     if (mouseX < 0 || mouseX > width || mouseY < 0 || mouseY > height) return;
-    const panel = document.getElementById('lobby-controls');
-    if (panel && !panel.classList.contains('is-hidden')) return;
+    if (!window.tankGameActive) return;
+    if (window._fsButtonDown) { window._fsButtonDown = false; return; }
 
     if (mouseButton === RIGHT) {
         if (myTank && myTank.selectedClass === 'guardian') guardianShielding = true;
@@ -3431,6 +3852,29 @@ function drawBullets() {
             noStroke();
             fill(100, 180, 255, 50 + 40 * pulse);
             sphere(BULLET_SIZE * 1.1);
+        }
+
+        // Commander-slowed bullet: amber drag swirl
+        if (bullet._commanderSlowed) {
+            const pulse = 0.5 + 0.5 * Math.sin(frameCount * 0.15);
+            const spinA = (frameCount * 0.08) % TWO_PI;
+            noStroke();
+            // Amber halo
+            fill(220, 155, 30, 80 + 50 * pulse);
+            sphere(BULLET_SIZE * (1.6 + 0.4 * pulse));
+            // Two counter-rotating arcs suggesting drag resistance
+            noFill();
+            for (let arc = 0; arc < 2; arc++) {
+                const aOff = arc * PI + spinA * (arc === 0 ? 1 : -1);
+                stroke(255, 190, 50, 160 + 80 * pulse);
+                strokeWeight(1.8);
+                beginShape();
+                for (let a = 0; a < PI; a += 0.2) {
+                    const r = BULLET_SIZE * (2.0 + 0.5 * pulse);
+                    vertex(cos(a + aOff) * r, sin(a + aOff) * r * 0.4);
+                }
+                endShape();
+            }
         }
 
         // Chain bullet: yellow-green electric arcs

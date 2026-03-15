@@ -6,6 +6,8 @@ const socket = io.connect(
 
 // Dev console command: giveBuff('speed', 3)
 window.giveBuff = (buff, count = 1) => socket.emit('devGiveBuff', { buff, count });
+// Dev console command: gotoLevel(15)  — endless mode only
+window.gotoLevel = (n) => socket.emit('devGotoLevel', n);
 
 const el = (id) => document.getElementById(id);
 const toast = (msg) => {
@@ -22,10 +24,9 @@ const emitNameIfAny = () => { const n = getSavedName(); if (n) socket.emit('setN
 
 function normalizeCode(raw) { return raw.trim().toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8); }
 
-function setButtonsEnabled(hasName) {
-    el('create-lobby').disabled = !hasName;
-    const joinFilled = normalizeCode(el('join-lobby-code').value).length >= 2;
-    el('join-lobby').disabled = !(hasName && joinFilled);
+function setButtonsEnabled() {
+    el('create-lobby').disabled = false;
+    el('join-lobby').disabled = normalizeCode(el('join-lobby-code').value).length < 2;
 }
 
 // === Name flow ===
@@ -36,8 +37,19 @@ function applySavedNameUI(name) {
     el('set-name').style.display = has ? 'none' : '';
     el('edit-name').style.display = has ? '' : 'none';
     el('random-name').disabled = has;
-    el('name-status').textContent = has ? `Saved as “${name}”` : 'Pick a name to continue';
-    setButtonsEnabled(has);
+    el('name-status').textContent = has ? `Saved as “${name}”` : '';
+    setButtonsEnabled();
+}
+
+// Returns a resolved name: saved → field value → auto-generated random
+function getOrMakeName() {
+    const saved = getSavedName();
+    if (saved) return saved;
+    const fromField = (el('player-name').value || '').trim().slice(0, 16);
+    if (fromField) { saveName(fromField); return fromField; }
+    const auto = randomName();
+    saveName(auto);
+    return auto;
 }
 
 function randomName() {
@@ -74,44 +86,37 @@ el('edit-name').addEventListener('click', () => {
     el('random-name').disabled = false; el('name-status').textContent = 'Editing name…';
 });
 
-el('player-name').addEventListener('input', () => setButtonsEnabled(!!el('player-name').value.trim()));
+el('player-name').addEventListener('input', setButtonsEnabled);
 el('join-lobby-code').addEventListener('input', () => {
     const v = normalizeCode(el('join-lobby-code').value);
     if (el('join-lobby-code').value !== v) el('join-lobby-code').value = v;
-    setButtonsEnabled(!!localStorage.getItem(NAME_KEY));
+    setButtonsEnabled();
 });
 
 // Enter submits
 document.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter') return;
-    const hasNameSaved = !!getSavedName();
-    const code = normalizeCode(el('join-lobby-code').value);
-
     if (document.activeElement === el('player-name')) {
         saveName(el('player-name').value);
-    } else if ((hasNameSaved || el('player-name').value.trim()) && code.length >= 2) {
-        if (!hasNameSaved) saveName(el('player-name').value);
-        socket.emit('joinLobby', { code, name: getSavedName() });
-    } else if (hasNameSaved || el('player-name').value.trim()) {
-        if (!hasNameSaved) saveName(el('player-name').value);
-        socket.emit('createLobby');
+        return;
+    }
+    const code = normalizeCode(el('join-lobby-code').value);
+    const name = getOrMakeName();
+    if (code.length >= 2) {
+        socket.emit('joinLobby', { code, name });
     } else {
-        toast('Save a name first');
+        socket.emit('createLobby', { name });
     }
 });
 
 el('create-lobby').addEventListener('click', () => {
-    if (!getSavedName() && el('player-name').value.trim()) { saveName(el('player-name').value); }
-    if (!localStorage.getItem(NAME_KEY)) return toast('Save a name first');
-    socket.emit('createLobby', { name: getSavedName() });
+    socket.emit('createLobby', { name: getOrMakeName() });
 });
 
 el('join-lobby').addEventListener('click', () => {
-    if (!getSavedName() && el('player-name').value.trim()) { saveName(el('player-name').value); }
-    if (!localStorage.getItem(NAME_KEY)) return toast('Save a name first');
     const code = normalizeCode(el('join-lobby-code').value);
     if (!code) return toast('Enter a lobby code');
-    socket.emit('joinLobby', { code, name: getSavedName() });
+    socket.emit('joinLobby', { code, name: getOrMakeName() });
 });
 
 el('copy-code').addEventListener('click', async () => {
@@ -121,42 +126,67 @@ el('copy-code').addEventListener('click', async () => {
     catch (e) { toast('Copy failed'); }
 });
 
-// Close/open lobby panel
-const panel = el('lobby-controls');
-const fab = el('lobby-fab');
-const fabCode = el('lobby-fab-code');
-
-function showLobbyPanel() { panel.classList.remove('is-hidden'); fab.classList.remove('show'); panel.setAttribute('aria-hidden', 'false'); if (typeof clearAllInput === 'function') clearAllInput(); }
-function hideLobbyPanel() { panel.classList.add('is-hidden'); fab.classList.add('show'); panel.setAttribute('aria-hidden', 'true'); }
-function updateFabCode(code) { if (!code) return; fabCode.textContent = code; }
-fab.addEventListener('click', showLobbyPanel);
-
-document.addEventListener('click', (e) => {
-    if (panel.contains(e.target) || fab.contains(e.target)) return;
-    if (!panel.classList.contains('is-hidden')) { hideLobbyPanel(); }
+// Fullscreen toggle
+el('fullscreen-btn').addEventListener('mousedown', () => { window._fsButtonDown = true; });
+el('fullscreen-btn').addEventListener('click', () => {
+    const mount = el('game-mount');
+    if (!document.fullscreenElement) {
+        mount.requestFullscreen().catch(() => {});
+    } else {
+        document.exitFullscreen();
+    }
 });
+
+document.addEventListener('fullscreenchange', () => {
+    const isFs = !!document.fullscreenElement;
+    el('fs-expand').style.display = isFs ? 'none' : '';
+    el('fs-compress').style.display = isFs ? '' : 'none';
+    if (window.setGamePixelDensity) window.setGamePixelDensity(isFs ? 2 : 1);
+});
+
+// True once a lobby is active — gates WASD focus-steal
+window.tankGameActive = false;
+
+function releaseInputFocus() {
+    if (document.activeElement instanceof HTMLInputElement) document.activeElement.blur();
+}
+
+function showLobbyPanel() { if (typeof clearAllInput === 'function') clearAllInput(); }
+function hideLobbyPanel() { /* no-op: controls bar is always visible */ }
+function updateFabCode() { /* no-op: no FAB */ }
+
+// Only steal focus from inputs when the game is actually running
+document.addEventListener('keydown', (e) => {
+    if (!window.tankGameActive) return;
+    const gameKeys = ['w','a','s','d','ArrowUp','ArrowLeft','ArrowDown','ArrowRight',' '];
+    if (gameKeys.includes(e.key) && document.activeElement instanceof HTMLInputElement) {
+        document.activeElement.blur();
+    }
+}, true);
 
 // Socket events
 socket.on('lobbyCreated', (data) => {
+    window.tankGameActive = true;
     showLobbyCode(data.lobbyCode);
     updateFabCode(data.lobbyCode);
     el('join-lobby-code').value = data.lobbyCode;
-    hideLobbyPanel();
-    setButtonsEnabled(true);
+    setButtonsEnabled();
     emitNameIfAny();
+    releaseInputFocus();
     toast('Lobby created');
 });
 
 socket.on('lobbyJoined', (data) => {
+    window.tankGameActive = true;
     showLobbyCode(data.lobbyCode);
     updateFabCode(data.lobbyCode);
-    setButtonsEnabled(true);
-    hideLobbyPanel();
+    setButtonsEnabled();
     emitNameIfAny();
+    releaseInputFocus();
     toast('Joined lobby');
 });
 
-socket.on('disconnect', () => { showLobbyPanel(); });
+socket.on('disconnect', () => { window.tankGameActive = false; showLobbyPanel(); });
 socket.on('error', (err) => { toast(err?.message || 'Something went wrong'); });
 
 // ===== Event Log =====

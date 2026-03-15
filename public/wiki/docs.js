@@ -1,22 +1,30 @@
-// Tank Game Wiki — Player Edition
+// Tank Game Wiki
 
 const DOCS = {
     updatedAt: Date.now(),
     pages: {
         "overview": {
             title: "Overview",
-            meta: "Game modes · Progression · Strategy",
+            meta: "Game modes · Buffs · Combat basics",
             body: `
-# Welcome
-**Tank Game** is a fast-paced multiplayer battler. Open **🎁 chests** for upgrades, outmaneuver enemies, and control the map.
+# Overview
+**Tank Game** is a top-down multiplayer battler built around ricochets, fog of war, and fast-paced teamwork. You pilot a tank across maze-like arenas, fight waves of AI or other players, and collect buff chests to grow stronger over the course of a run.
 
-Four main experiences:
-- **Campaign** — Cooperate against waves of increasingly tough **AI tanks**.
-- **Arena** — PvP showdowns that reward aim, movement, and smart chest timing.
-- **Survival** — Endless bot waves with escalating difficulty; see how long you can last.
-- **Endless** — Campaign levels that loop indefinitely.
+## Game Modes
 
-Win by combining awareness, quick pickups, and clean engagements.
+**Campaign** — Team up to clear waves of increasingly difficult AI tanks. Players share vision, buffs carry between waves, and fallen teammates respawn at the start of the next wave. Coordination matters.
+
+**Arena** — PvP. Everyone starts equal; the last player or team standing wins. Chests spawn during the match — controlling them is often the deciding factor.
+
+**Survival** — Hold out against endlessly spawning AI waves on a fixed map. Enemies get tougher every ten cycles. The game ends when all players are eliminated; there is no final wave.
+
+**Endless** — Procedurally generated maps that loop forever. Like Campaign, but the maps are unique every level and scale in size. Buffs accumulate across the entire run. The goal is simply to go as far as possible.
+
+## Core Loop
+Move with **WASD**, aim with the mouse, and click to fire. Eliminate enemies. Collect buff chests from fallen foes. Survive the next wave. Repeat.
+
+## What Makes It Interesting
+Bullets ricochet off walls. Your shots can destroy incoming enemy bullets (parrying). Fog of war means you rarely have full information. Buffs compound — a few well-chosen upgrades reshape how you play.
 `
         },
 
@@ -25,61 +33,70 @@ Win by combining awareness, quick pickups, and clean engagements.
             meta: "Waves · AI Enemies · Team Progression",
             body: `
 # Campaign Mode
-Team up to clear **increasingly difficult waves** of enemy tanks.
+Clear each wave of enemy tanks as a team. Difficulty climbs steadily — early waves are manageable with basic play; later waves demand coordination, buff choices, and good positioning.
 
 ## Objective
-Defeat all enemies in each wave and survive through the full set of levels.
+Eliminate all enemies on the map. When the wave is clear, a brief transition gives the team time to collect any remaining chests before the next wave loads.
 
-## Flow
-- Start together, fight a wave, then brace for the next.
-- Enemies scale in difficulty as you advance.
-- If your squad survives, fallen players respawn for the next wave.
+## Respawns
+Players who die during a wave are out until the wave ends. If at least one teammate survives, dead players respawn for the next wave. If everyone dies, the run ends.
 
-## 🎁 Chests & Upgrades
-After fights, glowing **chests** appear. Open one to gain a random upgrade:
+## Chests and Buffs
+Killing an enemy has a chance to drop a chest. Walk over it to collect a random upgrade — see **Buffs and Upgrades** for the full list. Chests expire after a short time and are single-use, so coordinate with teammates.
 
-- ⚡ **Speed Boost** — move faster.
-- 🔫 **Fire Rate** — shoot more frequently.
-- 🚀 **Bullet Speed** — shots travel faster and farther.
-- 🔁 **Multi-Shot** — fire multiple projectiles at once.
-- 🔄 **Bouncing Bullets** — shells ricochet off walls.
-- 🛡️ **Shield** — temporary barrier that absorbs one hit.
-- 👁️ **Vision Range** — expands your fog-of-war sight radius.
-- 🎯 **Piercing** — bullets pass through multiple enemies before stopping.
-- 🤖 **Auto-Turret** — a secondary mini-turret that independently tracks and fires at nearby enemies.
-
-Upgrades **stack** with diminishing returns — a few stacks of the right upgrade can define your playstyle.
-Chests **expire** and are **one-use** — coordinate with teammates so everyone powers up.
-
-## Team Tips
-- Spread out to reveal more of the map under fog.
-- Use cover, peek to shoot, and rotate for chests between skirmishes.
-- Balance upgrades so the team stays strong across waves.
+## Tips
+- Spread out to uncover more of the map under fog of war.
+- Call out high-threat enemy tiers (Intelligence, Titan, Rusher) and prioritize them together.
+- Balance buff picks across the team — stacking all max bullets on one player is usually weaker than spreading useful upgrades.
+- Peek from corners and retreat — avoid standing in the open while multiple enemies have line of sight.
 `
         },
 
         "arena": {
             title: "Arena Mode",
-            meta: "PvP · Fog of War · Power Chests",
+            meta: "PvP · Fog of War · Chest Control",
             body: `
 # Arena Mode
-Face off against other players until one side — or one survivor — remains.
+Straight PvP. Every player starts with the same stats; the difference is aim, movement, and chest timing.
 
 ## Objective
-Outlast opponents using positioning, aim, and timely **🎁 chest** pickups.
+Be the last player (or team) alive. No respawns — when you die, you spectate.
 
 ## Environment
-- Compact arenas with walls and cover.
-- **Fog of war** limits visibility — you only see nearby areas (and allied vision in team Arena).
+Arenas are compact compared to Campaign maps, with walls and corridors that reward corner-peeking and limit long sightlines. Fog of war is personal in solo Arena; in team variants, allies share vision.
 
-## Chest Strategy
-Chests spawn during the match and grant the same upgrades as Campaign.
-Control space to claim them safely — denying upgrades is as strong as taking them.
+## Chests
+Chests spawn at fixed intervals during the match. They grant the same upgrades as Campaign. Controlling central or contested chest spawns is often more valuable than individual kills — a player who denies upgrades while farming their own is building a compounding advantage.
 
-## PvP Tips
-- **Lead shots** and use walls to break line of sight.
-- **Rotate for chests** when it is safe; don't overextend.
-- Choose upgrades that fit your plan: ⚡ speed for flanks, 🛡️ shield for duels, 🔁 multi-shot for burst.
+## Playing Well
+- Avoid predictable straight-line movement; strafe and change direction frequently.
+- Use walls to break line of sight after firing — don't give enemies a stationary target.
+- Speed and Shield are strong early picks. Multi-Shot and Bouncing Bullets become threatening mid-game when you can force engagements at close range.
+- Learn chest spawn timing so you can contest them without overextending.
+`
+        },
+
+        "survival": {
+            title: "Survival Mode",
+            meta: "Endless waves · Escalating tiers · Score",
+            body: `
+# Survival Mode
+Hold a fixed map against continuously spawning AI. Waves arrive every few seconds; every ten cycles the enemy tier cap increases, introducing progressively tougher enemies.
+
+## How It Works
+Three enemies spawn roughly every five seconds. The game never stops — your objective is to survive as long as possible and push the tier cap as high as you can.
+
+## Key Differences from Campaign
+- The map does not change between waves.
+- There is no transition period between groups — enemies keep coming.
+- No respawns. If all players die, the run ends.
+- Buffs accumulate across the entire session.
+
+## Tips
+- Mobility is the most reliable survival tool. Speed and Bullet Speed help you kite enemies who would otherwise surround you.
+- Vision Range lets you spot threats earlier and gives Auto-Turret more time to lock on.
+- Auto-Turret and Piercing are strong late-game picks when enemy density becomes unmanageable.
+- Do not cluster — if bots converge on one point, multiple players take damage simultaneously.
 `
         },
 
@@ -88,45 +105,19 @@ Control space to claim them safely — denying upgrades is as strong as taking t
             meta: "Procedural maps · Infinite levels · Buff stacking",
             body: `
 # Endless Mode
-A never-ending gauntlet of **procedurally generated maps** that keeps going as long as you survive.
+A never-ending gauntlet of procedurally generated maps. No final level — the goal is to go as far as possible and see how powerful a buff loadout you can build.
 
 ## How It Works
-- Each level is a unique **BSP-generated maze** — no two levels are the same.
-- Levels get **larger and more complex** as the number climbs.
-- Clear all enemies to advance to the next level. There is no final level.
-- **Buffs carry over** between levels — your upgrades accumulate the entire run.
-- Dead players **revive** at the start of each new level.
+Each level is a unique BSP-generated maze. Maps grow larger and more complex as the level number climbs. Clear all enemies to advance. Dead players revive at the start of each new level. Buffs carry over indefinitely.
 
-## Why Play Endless
-- The only mode where stacking many buffs pays off across dozens of levels.
-- Great for pushing upgrade combinations to their limit (e.g. max Auto-Turret + Piercing + Speed).
-- Cooperative runs reward coordinated buff choices — split roles across the team.
+## Why Endless Is Different
+Endless is the only mode where long-term buff compounding matters. By level 20+, a well-built team with stacked upgrades handles enemy density that would be overwhelming at level 1. Choosing buffs with a long-run strategy — rather than what helps the current wave — is what separates good Endless runs from great ones.
 
-## Tips
-- ⚡ **Speed** and 🛡️ **Shield** are safe early picks to stay alive long enough to stack.
-- 🤖 **Auto-Turret** becomes increasingly powerful as levels fill with enemies.
-- 🔄 **Bouncing Bullets** combined with 🔁 **Multi-Shot** can clear tight corridors quickly.
-- Prioritize staying alive over chest-hunting — your buffs reset on death.
-`
-        },
-
-        "survival": {
-            title: "Survival Mode",
-            meta: "Endless waves · Escalating tiers · Score chase",
-            body: `
-# Survival Mode
-Hold out as long as possible against **continuously spawning AI waves**.
-
-## How It Works
-- Bots spawn every **5 seconds** in groups of 3.
-- Every 10 spawn cycles the **enemy tier cap increases**, bringing tougher enemies into the mix.
-- The game never ends — the goal is to stay alive and push the tier cap as high as you can.
-
-## Tips
-- **Prioritize mobility upgrades** early (⚡ Speed, 🚀 Bullet Speed) — you will need to kite.
-- 👁️ **Vision Range** helps spot enemies before they close in.
-- 🤖 **Auto-Turret** and 🎯 **Piercing** shine when you are surrounded.
-- Don't cluster — spread out so bots don't converge on a single point.
+## Recommended Approach
+- Speed and Shield are safe early picks that keep you alive long enough to stack further.
+- Auto-Turret compounds over time — the more enemies there are, the more effective it becomes.
+- Bouncing Bullets combined with Multi-Shot is particularly effective in the narrow BSP corridors Endless generates.
+- Coordinate buff picks across the team. One player focusing on survivability while others build damage is often stronger than everyone taking the same upgrades.
 `
         },
 
@@ -135,228 +126,233 @@ Hold out as long as possible against **continuously spawning AI waves**.
             meta: "All 9 upgrades · Stack effects · Strategy",
             body: `
 # Buffs & Upgrades
-Buffs drop from defeated enemies as glowing **🎁 chests**. Walk over a chest to collect it. Each buff can be stacked — effects scale with **diminishing returns** (roughly square-root based), so a few stacks matter a lot, many stacks matter less.
+Buffs drop as glowing chests when enemies are killed. Walk over a chest to collect it. Each buff can be stacked — effects scale with diminishing returns (roughly square-root based), so the first few stacks of a buff matter significantly more than later ones.
 
 ---
 
-## ⚡ Speed Boost
-**Increases your maximum movement speed.**
+## Speed Boost
+Increases your maximum movement speed.
 
-Each stack adds ~12% speed (sqrt-scaled). Great in every mode — faster tanks are harder to hit and better at chasing chests.
-
-*Best modes: All. Best combos: anything that benefits from chasing or escaping.*
+Each stack adds roughly 12% speed (sqrt-scaled). Faster tanks are harder to hit, better at chasing chests, and more capable of disengaging from bad positions. Useful in every mode and synergizes with almost everything.
 
 ---
 
-## 🔫 Fire Rate
-**Reduces the cooldown between shots and increases your bullet cap.**
+## Max Bullets
+Reduces the cooldown between shots and increases your maximum bullet count.
 
-Each stack cuts cooldown and raises how many bullets you can have in the air at once. Eventually your shots become near-continuous.
-
-*Best modes: Survival, Endless. Best combos: Multi-Shot, Bullet Speed.*
+Each stack cuts cooldown and raises how many bullets you can have active simultaneously. Eventually your fire becomes near-continuous. Best paired with Multi-Shot or Bullet Speed for maximum pressure.
 
 ---
 
-## 🚀 Bullet Speed
-**Shots travel faster and farther before expiring.**
+## Bullet Speed
+Shots travel faster and farther before expiring.
 
-Makes leading targets easier and extends effective range. Especially strong against fast-moving enemies or players.
-
-*Best modes: Arena (PvP), Campaign. Best combos: Piercing, Multi-Shot.*
+Makes leading moving targets easier and extends effective range. Particularly strong in PvP where opponents can dodge slow projectiles, and in Survival where enemies approach from long range.
 
 ---
 
-## 🔁 Multi-Shot
-**Fires additional projectiles per shot in a spread pattern.**
+## Multi-Shot
+Fires additional projectiles per shot in a spread pattern.
 
-Each stack adds more simultaneous bullets (sqrt-scaled). Devastating up close; in tight corridors it is nearly unavoidable.
-
-*Best modes: Endless, Survival. Best combos: Bouncing Bullets, Fire Rate.*
+Each stack adds more simultaneous bullets. Devastating at close range; in tight corridors the spread is nearly unavoidable. Pairs lethally with Bouncing Bullets — ricocheting spread shots can fill a room.
 
 ---
 
-## 🔄 Bouncing Bullets
-**Your shots ricochet off walls.**
+## Bouncing Bullets
+Your shots ricochet off walls.
 
-Each stack adds more bounces. Opens up geometry-based shots around corners, making bullets effective even when enemies have cover. Combines lethally with Multi-Shot in enclosed maps.
-
-*Best modes: Campaign, Endless (tight BSP corridors). Best combos: Multi-Shot, Bullet Speed.*
+Each stack adds more bounces per bullet. Opens up geometry-based plays around corners and lets you threaten enemies who believe they have cover. Most effective in Campaign and Endless where BSP corridors create natural ricochet lanes.
 
 ---
 
-## 🛡️ Shield
-**Grants one shield charge that absorbs the next hit.**
+## Shield
+Grants one shield charge that absorbs the next hit.
 
-Collecting a shield buff immediately activates a shield. Multiple stacks queue up as charges — the count displays above your tank. Shields do NOT stack to mitigate a single hit; they absorb hits one at a time.
-
-*Best modes: All. Essential for: surviving Titan and Phantom encounters.*
+Collecting a shield buff immediately activates a charge. Multiple stacks queue additional charges, displayed above your tank. Shields absorb hits one at a time — they do not reduce damage from a single hit. Essential for surviving encounters with Titan and Phantom tier enemies.
 
 ---
 
-## 👁️ Vision Range
-**Expands your fog-of-war sight radius.**
+## Vision Range
+Expands your fog-of-war sight radius.
 
-Each stack multiplies vision distance by ~1 + 0.3 * sqrt(stacks). Useful for spotting threats early and coordinating in co-op where shared vision already covers a lot.
-
-*Best modes: Survival (large maps), Endless. Best combos: Auto-Turret (turret needs visible targets).*
+Each stack multiplies vision distance by roughly 1 + 0.3 × sqrt(stacks). Useful for spotting threats before they close in and for supporting Auto-Turret, which needs visible targets to fire at. Especially valuable in Survival on large maps.
 
 ---
 
-## 🎯 Piercing
-**Bullets pass through multiple enemies before stopping.**
+## Piercing
+Bullets pass through multiple enemies before stopping.
 
-Piercing count scales with sqrt(stacks). A single shot can damage a whole column of enemies — transformative when fighting dense groups.
-
-*Best modes: Survival, Endless. Best combos: Multi-Shot, Fire Rate, Bullet Speed.*
+Piercing count scales with sqrt(stacks). A single shot can damage an entire column of enemies — transformative when fighting dense groups in Survival or late Endless. Pairs well with Max Bullets and Multi-Shot.
 
 ---
 
-## 🤖 Auto-Turret
-**Adds a secondary mini-turret on top of your tank that independently targets and fires at nearby enemies.**
+## Auto-Turret
+Adds a secondary mini-turret on top of your tank that independently targets and fires at nearby enemies.
 
-The turret rotates toward the nearest enemy, fires on its own cooldown, and gets faster and more accurate with more stacks. You focus on movement; the turret handles aim.
-
-*Best modes: Endless, Survival. Best combos: Vision Range (more targets visible), Fire Rate (turret benefits too), Piercing.*
+The turret rotates toward the nearest visible enemy and fires on its own cooldown. More stacks increase turret speed and fire rate. You focus on movement and positioning; the turret handles aim. Becomes increasingly powerful in later Endless and Survival levels as enemy count rises.
 `
         },
 
         "bots": {
-            title: "Bot Behavior",
-            meta: "Campaign & Survival · Tiers · How to counter",
+            title: "Enemy Types",
+            meta: "All tiers · Behavior · Counters",
             body: `
-# Bot Behavior
-Enemy tanks appear in **Campaign**, **Survival**, and **Endless** modes. They have **distinct colors**, dodge incoming shots, reposition around walls, and pressure you when exposed.
+# Enemy Types
+Enemy tanks appear in Campaign, Survival, and Endless modes. Each tier has distinct movement speed, fire behavior, and special traits. Higher tiers are introduced as difficulty scales.
 
-## Bot Tiers — Know Your Foes
+---
 
-- **Tier 0 — Rookie**
-  🟦 **Style:** Slow movement, sluggish turret, long pauses between shots.<br>
-  🎯 **Threat:** Low — ideal warm-up targets.<br>
-  🧠 **Counter:** Push confidently; punish their hesitation.
+## Tier 0 — Rookie
+Slow movement, sluggish turret rotation, long pauses between shots. The easiest enemy type and the one you will see earliest. Push aggressively and exploit their hesitation.
 
-- **Tier 1 — Grunt**
-  🟩 **Style:** Standard speed, aim, and fire rate.<br>
-  🎯 **Threat:** Moderate, dangerous in numbers.<br>
-  🧠 **Counter:** Don't get cornered; isolate one at a time.
+## Tier 1 — Grunt
+Standard speed, aim, and fire rate. Dangerous primarily in numbers — isolate them one at a time and avoid getting cornered.
 
-- **Tier 2 — Marksman**
-  🟨 **Style:** Long-range accuracy and **fast bullets**, slower fire rate.<br>
-  🎯 **Threat:** High at distance — punishes straight movement.<br>
-  🧠 **Counter:** Strafe unpredictably; break line of sight often.
+## Tier 2 — Marksman
+Long-range accuracy with fast bullets but a slower fire rate. Punishes predictable straight movement. Strafe unpredictably and break line of sight frequently.
 
-- **Tier 3 — Burster**
-  🟧 **Style:** Fast-moving tank that fires in **short bursts**.<br>
-  🎯 **Threat:** Heavy burst if caught off-guard.<br>
-  🧠 **Counter:** Bait the burst, then push while it resets.
+## Tier 3 — Burster
+Fast-moving tank that fires in short, rapid bursts followed by a reload pause. Bait the burst from cover, then push while it resets.
 
-- **Tier 4 — Enforcer**
-  🟪 **Style:** **Quick**, **rapid-fire**, starts with a 🛡️ shield.<br>
-  🎯 **Threat:** High sustained damage at close-mid range.<br>
-  🧠 **Counter:** Strip the shield from cover, then rush together.
+## Tier 4 — Enforcer
+Quick and rapid-fire, starts with one shield charge. Strip the shield from cover before committing, then rush together with teammates.
 
-- **Tier 5 — Beamer**
-  🔵 **Style:** **Slow mover** with **long-range laser** that deals periodic damage.<br>
-  🎯 **Threat:** Zone control and area denial.<br>
-  🧠 **Counter:** Break line of sight; rotate behind cover during beam uptime.
+## Tier 5 — Beamer
+Slow mover with a long-range laser that deals periodic damage. Zoning enemy — it denies corridors effectively. Break line of sight and rotate behind cover during beam uptime.
 
-- **Tier 6 — Trishot**
-  🟠 **Style:** **Fast**, **triple-shot spread**, starts with a 🛡️ shield.<br>
-  🎯 **Threat:** Deadly up close.<br>
-  🧠 **Counter:** Keep range and fight diagonally to dodge the spread.
+## Tier 6 — Trishot
+Fast movement with a triple-shot spread, starts with one shield. Deadly at close range. Keep distance and approach diagonally to avoid the full spread pattern.
 
-- **Tier 7 — Spammer**
-  🟥 **Style:** **Slower movement** but **very high fire rate**, floods bullets across lanes.<br>
-  🎯 **Threat:** Constant suppression.<br>
-  🧠 **Counter:** Swing wide, then punish when it pauses to reset aim.
+## Tier 7 — Spammer
+Slower movement but very high fire rate, flooding bullets across open lanes. Swing wide around it, then punish when it pauses to reset aim.
 
-- **Tier 8 — Phantom**
-  🌑 **Style:** **Fast** mover that **periodically cloaks** — becoming nearly invisible for several seconds before reappearing. Starts with a 🛡️ shield.<br>
-  🎯 **Threat:** Hard to track; can vanish mid-fight and reposition.<br>
-  🧠 **Counter:** Watch for bullet trails and listen for movement; fire where you last saw it.
+## Tier 8 — Phantom
+Fast mover that periodically cloaks — becoming nearly invisible for several seconds before reappearing. Starts with one shield. Watch for bullet trails and movement audio; fire where you last saw it.
 
-- **Tier 9 — Shield Tank**
-  🟦 **Style:** **Deploys a front-facing bullet wall** that physically blocks incoming shots. Rotates the shield toward the nearest player.<br>
-  🎯 **Threat:** Nearly immune from the front; forces flanking.<br>
-  🧠 **Counter:** Circle wide to hit from the side or rear; coordinated flanks from multiple angles are best.
+## Tier 9 — Shield Tank
+Deploys a front-facing bullet wall that physically blocks incoming shots and rotates toward the nearest player. Nearly immune from the front. Circle wide to hit from the side or rear; coordinated flanking from multiple angles works best.
 
-- **Tier 10 — Titan**
-  ⬛ **Style:** **Slow**, massive tank with **triple-shot spread** and the **fastest fire rate** of any enemy. Starts with **3 shields**.<br>
-  🎯 **Threat:** Extreme burst potential — three shields means it takes punishment.<br>
-  🧠 **Counter:** Stay mobile, whittle shields from distance, and avoid its kill zone at close range.
+## Tier 10 — Titan
+Slow and massive, fires a triple-shot spread at the highest fire rate of any enemy. Starts with three shields. Stay mobile, whittle shields from distance, and avoid its close-range kill zone.
 
-- **Tier 11 — Rusher**
-  🔴 **Style:** **Very fast**, single-minded hunter that **charges directly at the nearest player** at all times.<br>
-  🎯 **Threat:** Closes gaps instantly; punishes any slow reaction.<br>
-  🧠 **Counter:** Keep walls between you and it; kite in open space and shoot as it charges.
+## Tier 11 — Rusher
+Very fast, single-minded hunter that charges directly at the nearest player. Closes gaps instantly and punishes slow reactions. Keep walls between you and it; kite in open space and shoot as it charges.
 
-- **Tier 12 — Intelligence**
-  🤍 **Style:** The fastest enemy in the game. **Omniscient** — detects your position without line of sight. **Flanks**, **leads shots** precisely, and starts with a 🛡️ shield.<br>
-  🎯 **Threat:** Extreme — it always knows where you are and predicts your path.<br>
-  🧠 **Counter:** Move unpredictably; use corners to break its shot leads. Prioritize as soon as it appears.
+## Tier 12 — Intelligence
+The fastest enemy in the game. Omniscient — detects your position without line of sight, flanks effectively, and leads shots with precision. Starts with one shield. Move unpredictably, use corners to break its shot leads, and prioritize it as soon as it appears.
 
-- **Tier 13 — Laser Pulse**
-  🔷 **Style:** **Medium speed** with a **short-range repeating laser**. Starts with a 🛡️ shield.<br>
-  🎯 **Threat:** Dangerous at close quarters; laser bypasses bullet-to-bullet parrying.<br>
-  🧠 **Counter:** Keep distance — the laser has short range; play outside it and punish between pulses.
+## Tier 13 — Laser Pulse
+Medium speed with a short-range repeating laser. Starts with one shield. The laser bypasses bullet-to-bullet parrying. Play outside its effective range and punish between pulse cycles.
+
+---
 
 ## General Advice
-- **Strafe and stutter-step** to break their aim rhythm.<br>
-- **Peek diagonally** from corners; avoid straight lines.<br>
-- **Prioritize high-pressure tiers** first (Intelligence, Titan, Rusher).<br>
-- **Grab 🛡️ and ⚡ chests** before engaging large groups.
+- Strafe and stutter-step to break enemy aim rhythm.
+- Peek diagonally from corners; avoid standing straight in a doorway.
+- Prioritize high-pressure tiers first: Intelligence, Titan, and Rusher demand immediate attention.
+- Grab Speed and Shield chests before committing to large group fights.
 `
         },
 
         "mechanics": {
             title: "Core Mechanics",
-            meta: "Movement · Vision · Minimap · Combat basics",
+            meta: "Movement · Vision · Minimap · Combat",
             body: `
 # Core Mechanics
 
 ## Movement
-Tanks have momentum — accelerate into fights and **slide out** of danger.
-Short bursts and clean turns keep you alive.
+Tanks have momentum — you accelerate into movement and slide slightly when changing direction. Short, deliberate movements are more controllable than holding a direction and hoping. Use momentum to dodge, not just to travel.
 
-## Vision & Fog of War
-**Fog of war** hides areas outside your view radius.
-- In Campaign and Survival, **teammates share vision**.
-- In Arena, fog is personal — use it to set up ambushes.
-- Press **F** to toggle fog on/off (useful for spectating or level design).
-- Press **V** to switch between normal and high-quality raycast resolution.
+## Vision and Fog of War
+Fog of war hides areas outside your sight radius. You only see what your tank can directly observe.
+
+- In Campaign and Survival, teammates share vision — spread out to uncover more of the map.
+- In Arena, fog is personal — use it to set up ambushes and deny enemy information.
+- Press **F** to toggle fog on and off (useful for spectating or testing).
+- Press **V** to switch between standard and high-quality raycast resolution.
 
 ## Minimap
-A small **minimap** appears in the bottom-left corner during play.
-- Tiles you have explored are shown; unexplored areas remain dark.
-- Resets each new level so exploration stays meaningful.
+A minimap appears in the bottom-left corner during play. Tiles you have explored are shown; unexplored areas remain dark. It resets each new level so exploration remains meaningful.
 
-## Combat
-- Projectiles collide with walls and tanks; with 🔄 **Bouncing Bullets** they ricochet off walls.
-- 🛡️ **Shield** absorbs one hit, then breaks.
-- 🎯 **Piercing** bullets punch through multiple targets.
-- Lasers deal damage on contact and ignore bullet-to-bullet parrying.
-- Explosions and trails help track ongoing battles.
+## Bullets and Collision
+- Bullets travel in a straight line until they hit a wall or tank.
+- With Bouncing Bullets, shots ricochet off walls for additional bounces.
+- Enemy bullets can be destroyed by your own bullets — this is called a parry. Timing a shot to intercept an incoming projectile is a core defensive skill.
+- Piercing bullets pass through multiple tanks before stopping.
+- Lasers deal damage on contact and cannot be parried by bullets.
+
+## Shields
+A shield absorbs one hit and then breaks. Shield charges queue up if you collect multiple shield buffs. The count is displayed above your tank. Shields do not reduce damage; they block it entirely, one hit at a time.
 
 ## Respawns
-- **Campaign / Endless:** Revive between waves if the squad survives.
-- **Arena:** No respawns — spectate until the match ends.
-- **Survival:** No respawns — the game ends when all players are eliminated.
+- **Campaign and Endless:** Players revive at the start of the next wave or level if at least one teammate survived.
+- **Arena:** No respawns. Eliminated players spectate until the match ends.
+- **Survival:** No respawns. The run ends when all players are eliminated.
+`
+        },
+
+        "classes": {
+            title: "Tank Classes",
+            meta: "7 classes · Stat differences · Abilities",
+            body: `
+# Tank Classes
+Choose a class before the game begins by shooting the corresponding dummy tank in the lobby. Your class determines your base stats and, for some classes, grants a special ability.
+
+Classes are selected per-lobby and persist until you change them. Your last selection is remembered between sessions.
+
+---
+
+## Assault
+The baseline class. Balanced speed, fire rate, and bullet speed. No special ability. Good for players learning the game or who prefer straightforward play.
+
+## Scout
+Faster movement and a wider vision radius than Assault, but reduced bullet damage. Best for players who want to gather information, reach chests first, and dictate positioning.
+
+## Sniper
+Slower movement and fire rate, but significantly higher bullet speed and damage per shot. Excels at long corridors where it can pick off enemies before they close the gap. Less effective in tight BSP mazes.
+
+## Guardian
+Reduced speed, but starts with extra shield charges and takes reduced damage per hit. Designed to absorb punishment during chaotic fights. Pairs well with Piercing or Auto-Turret buffs so the turret works while you tank hits.
+
+## Engineer
+Moderate stats across the board with improved buff drop rates from kills. Engineer players collect upgrades faster over the course of a run, making them stronger in later waves. Less impactful in short sessions like Arena.
+
+## Laser
+Has access to a laser ability on a cooldown (roughly 5 seconds). Trigger it by holding the fire button while moving. The laser deals rapid contact damage and bypasses bullet parrying. Standard bullet stats are slightly reduced to compensate.
+
+## Gunner
+Higher fire rate and bullet cap than Assault, but slower movement and reduced bullet speed. Designed for mid-range suppression and multi-shot builds. Struggles against fast enemies that close distance quickly.
 `
         },
 
         "tips": {
             title: "Tips & Tricks",
-            meta: "Advice for mastering all modes",
+            meta: "Practical advice for all modes",
             body: `
 # Tips & Tricks
-- **Keep moving** — micro-adjust your path to dodge shots.
-- **Peek wisely** — fire from corners, then duck back.
-- **Chest timing** — take upgrades before key fights; don't let 🎁 expire.
-- **Matchups:** ⚡ speed beats slow aimers, 🛡️ shield blunts burst, 🔁 multi-shot rules mid-range.
-- **Auto-Turret** is best when you are kiting — it fires independently while you focus on movement.
-- **Piercing** multiplies in value against tight groups; stack it in Survival for crowd control.
-- **Campaign / Endless:** Call out tiers; focus Intelligence and Titan first.
-- **Arena:** Deny center chests and punish distracted players from the fog.
-- **Survival:** Prioritize ⚡ Speed and 👁️ Vision early — mobility and awareness outlast raw firepower.
+
+## Movement
+- Micro-adjust your path constantly — even small deviations make you significantly harder to hit.
+- Use momentum when dodging: anticipate where you need to be, not just where you are.
+- Stutter-step (tap movement keys briefly) to throw off enemy aim without sacrificing position.
+
+## Combat
+- Peek from corners diagonally, not straight through doorways. Fire, then immediately retreat.
+- Use bullets to parry incoming shots — intercepting a fast projectile with your own is often safer than dodging.
+- Fire slightly ahead of moving targets, especially at range. Slow bullets are easy to dodge; pair Bullet Speed with Max Bullets if you want reliable hits.
+
+## Chests and Buffs
+- Collect chests before committing to a fight, not after — a shield or speed upgrade might decide the engagement.
+- In team modes, coordinate buff picks. Three players all taking Multi-Shot is usually weaker than distributing Speed, Multi-Shot, and Shield across the team.
+- In Arena, denying an opponent a chest is nearly as valuable as taking it yourself.
+
+## Mode-Specific
+- **Campaign and Endless:** Call out and focus high-threat enemies immediately — Intelligence, Titan, and Rusher left alive too long will collapse your team.
+- **Arena:** Learn chest spawn timing. Rotating for chests while maintaining map awareness separates consistent Arena players from streaky ones.
+- **Survival:** Prioritize Speed and Vision Range early. Mobility and awareness compound in value as enemy density increases; raw damage buffs are weaker until you have enough survivability to actually use them.
+
+## Auto-Turret
+Auto-Turret fires independently while you focus on movement. Stack it alongside Vision Range (so it has visible targets) and Piercing (so each turret shot damages multiple enemies). In late Endless, a well-built Auto-Turret setup essentially handles dense rooms on its own.
 `
         }
     },
@@ -365,21 +361,22 @@ A small **minimap** appears in the bottom-left corner during play.
         {
             label: "Start Here", items: [
                 { label: "Overview", slug: "overview" },
+                { label: "Core Mechanics", slug: "mechanics" },
             ]
         },
         {
             label: "Game Modes", items: [
-                { label: "Campaign Mode", slug: "campaign" },
-                { label: "Arena Mode", slug: "arena" },
-                { label: "Survival Mode", slug: "survival" },
-                { label: "Endless Mode", slug: "endless" },
+                { label: "Campaign", slug: "campaign" },
+                { label: "Arena", slug: "arena" },
+                { label: "Survival", slug: "survival" },
+                { label: "Endless", slug: "endless" },
             ]
         },
         {
             label: "Gameplay", items: [
+                { label: "Tank Classes", slug: "classes" },
                 { label: "Buffs & Upgrades", slug: "buffs" },
-                { label: "Bot Behavior", slug: "bots" },
-                { label: "Core Mechanics", slug: "mechanics" },
+                { label: "Enemy Types", slug: "bots" },
                 { label: "Tips & Tricks", slug: "tips" },
             ]
         }

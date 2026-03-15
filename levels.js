@@ -1,4 +1,5 @@
 // levels.js
+const SPAWN_CELL = -100; // sentinel for lowercase 's' in level files
 const fs = require('fs');
 const { initializeAITank } = require('./bots.js');
 const { TILE_SIZE } = require('./public/constants.js');
@@ -20,6 +21,7 @@ function readLevels(path) {
     }
     const row = [];
     for (const ch of line) {
+      if (ch === 's') { row.push(SPAWN_CELL); continue; } // lowercase s = player spawn
       const n = parseInt(ch, 10);
       row.push(Number.isNaN(n) ? ('A'.charCodeAt(0) - ch.charCodeAt(0) - 1) : n);
     }
@@ -49,9 +51,9 @@ function loadLevel(lobby, levelNumber) {
       level = allCampaignLevels[levelNumber] || [[]];
       break;
     case 'endless':
-      if ((levelNumber + 1) % 5 === 0) {
+      if ((levelNumber + 1) % 5 === 0 && levelNumber >= 9) { // first loot room at level 10, not 5
         // Loot round
-        const result = generateLootLevel(numPlayers);
+        const result = generateLootLevel(numPlayers, levelNumber);
         level = result.grid;
         lootContinueZone = { col: result.continueCol, row: result.continueRow };
       } else {
@@ -87,12 +89,12 @@ function loadLevel(lobby, levelNumber) {
       const x = c * TILE_SIZE + TILE_SIZE / 2;
       const y = r * TILE_SIZE + TILE_SIZE / 2;
 
-      if (elem < 0) {
+      if (elem === SPAWN_CELL) {
+        spawn.x = x;
+        spawn.y = y;
+      } else if (elem < 0) {
         const tier = -elem - 1;
-        if (tier === 18) {               // 'S' -> spawn marker
-          spawn.x = x;
-          spawn.y = y;
-        } else if (tier === 24) {        // 'Y' -> chest
+        if (tier === 24) {               // 'Y' -> chest
           const id = `AI_c${tankCount++}`;
           players[id] = initializeAITank(id, x, y, 'chest');
         } else {
